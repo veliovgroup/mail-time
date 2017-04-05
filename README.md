@@ -104,7 +104,9 @@ const MailTime    = require('mail-time');
 MongoClient.connect(process.env.MONGO_URL, (error, db) => {
   const MailQueue = new MailTime({
     db,
-    type: 'client'
+    type: 'client',
+    strategy: 'balancer', // Transports will be used in round robin chain
+    concatEmails: true // Concatenate emails to the same address
   });
 });
 ```

@@ -145,7 +145,7 @@ module.exports = (function () {
         zombieTime: 8192
       });
 
-      this.scheduler.setInterval(this.___send.bind(this), 512, 'mailTimeQueue' + this.prefix);
+      this.scheduler.setInterval(this.___send.bind(this), 256, 'mailTimeQueue' + this.prefix);
     }
   }
 
@@ -186,7 +186,8 @@ module.exports = (function () {
         tries: 1
       }
     }, {
-      fields: {
+      returnOriginal: false,
+      projection: {
         _id: 1,
         tries: 1,
         template: 1,
@@ -210,7 +211,6 @@ module.exports = (function () {
       }
 
       process.nextTick(function () {
-        console.log("task.tries", task.tries);
         var transport;
         if (self.strategy === 'balancer') {
           self.transport = self.transport + 1;
@@ -231,12 +231,17 @@ module.exports = (function () {
             _mailOpts = task.mailOptions[0];
             for (var i = 1; i < task.mailOptions.length; i++) {
               if (task.mailOptions[i].html) {
-                _mailOpts.html += self.concatDelimiter + task.mailOptions[i].html;
+                task.mailOptions[i].html = self.___render(task.mailOptions[i].html, task.mailOptions[i]);
+                if (task.template || self.template) {
+                  _mailOpts.html += self.concatDelimiter + self.___render((task.template || self.template), task.mailOptions[i]);
+                } else {
+                  _mailOpts.html += self.concatDelimiter + task.mailOptions[i].html;
+                }
                 delete task.mailOptions[i].html;
               }
 
               if (task.mailOptions[i].text) {
-                _mailOpts.text += '\r\n' + task.mailOptions[i].text;
+                _mailOpts.text += '\r\n' + self.___render(task.mailOptions[i].text, task.mailOptions[i]);
                 delete task.mailOptions[i].text;
               }
 
@@ -244,14 +249,6 @@ module.exports = (function () {
             }
 
             _mailOpts.subject = task.concatSubject || self.concatSubject || _mailOpts.subject;
-          }
-
-          if (_mailOpts.text) {
-            _mailOpts.text = self.___render(_mailOpts.text, _mailOpts);
-          }
-
-          if (_mailOpts.html) {
-            _mailOpts.html = self.___render(_mailOpts.html, _mailOpts);
           }
 
           if (_mailOpts.html && (task.template || self.template)) {
