@@ -212,13 +212,16 @@ module.exports = (function () {
 
       process.nextTick(function () {
         var transport;
+        var transportIndex;
         if (self.strategy === 'balancer') {
           self.transport = self.transport + 1;
           if (self.transport >= self.transports.length) {
             self.transport = 0;
           }
+          transportIndex = self.transport;
           transport = self.transports[self.transport];
         } else {
+          transportIndex = task.transport;
           transport = self.transports[task.transport];
         }
 
@@ -228,15 +231,15 @@ module.exports = (function () {
           if (task.mailOptions.length === 1) {
             _mailOpts = task.mailOptions[0];
           } else {
-            _mailOpts = task.mailOptions[0];
-            for (var i = 1; i < task.mailOptions.length; i++) {
+            _mailOpts = {
+              html: '',
+              text: '',
+              subject: ''
+            };
+
+            for (var i = 0; i < task.mailOptions.length; i++) {
               if (task.mailOptions[i].html) {
-                task.mailOptions[i].html = self.___render(task.mailOptions[i].html, task.mailOptions[i]);
-                if (task.template || self.template) {
-                  _mailOpts.html += self.concatDelimiter + self.___render((task.template || self.template), task.mailOptions[i]);
-                } else {
-                  _mailOpts.html += self.concatDelimiter + task.mailOptions[i].html;
-                }
+                _mailOpts.html += self.___render(self.concatDelimiter, task.mailOptions[i]) + self.___render(task.mailOptions[i].html, task.mailOptions[i]);
                 delete task.mailOptions[i].html;
               }
 
@@ -260,7 +263,7 @@ module.exports = (function () {
           }
 
           if (self.debug === true) {
-            console.info('[mail-time] Send attempt #' + (task.tries) + ', transport #' + task.transport + '/' + self.transport + ', to: ', task.mailOptions[0].to, 'from: ', _mailOpts.from);
+            console.info('[mail-time] Send attempt #' + (task.tries) + ', transport #' + transportIndex + ', to: ', task.mailOptions[0].to, 'from: ', _mailOpts.from);
           }
 
           transport.sendMail(_mailOpts, function (error, info) {
@@ -273,7 +276,7 @@ module.exports = (function () {
               _id: task._id
             }, function () {
               if (self.debug === true) {
-                console.info('[mail-time] email successfully sent, attempts: #' + (task.tries) + ', transport #' + task.transport + '/' + self.transport + ' to: ', _mailOpts.to);
+                console.info('[mail-time] email successfully sent, attempts: #' + (task.tries) + ', transport #' + transportIndex + ' to: ', _mailOpts.to);
               }
 
               var _id = task._id.toHexString();
@@ -323,8 +326,6 @@ module.exports = (function () {
     var self = this;
     var opts = {};
     var callback = NoOp;
-
-    console.log(_opts.to, _opts.text);
 
     if (_opts && typeof _opts === 'object') {
       opts = _opts;
@@ -457,12 +458,12 @@ module.exports = (function () {
         delete self.callbacks[_id];
       });
     } else {
-      var transport = task.transport;
+      var transportIndex = task.transport;
 
       if (this.strategy === 'backup' && (task.tries % this.failsToNext) === 0) {
-        ++transport;
-        if (transport > this.transports.length - 1) {
-          transport = 0;
+        ++transportIndex;
+        if (transportIndex > this.transports.length - 1) {
+          transportIndex = 0;
         }
       }
 
@@ -471,12 +472,12 @@ module.exports = (function () {
       }, {
         $set: {
           isSent: false,
-          transport: transport
+          transport: transportIndex
         }
       }, NoOp);
 
       if (this.debug === true) {
-        console.warn('[mail-time] Re-send Attempt #' + (task.tries) + ', transport #' + transport + '/' + this.transport + ' to: ', task.mailOptions[0].to, error);
+        console.warn('[mail-time] Re-send Attempt #' + (task.tries) + ', transport #' + transportIndex + ' to: ', task.mailOptions[0].to, error);
       }
     }
   };
