@@ -13,7 +13,7 @@ While *Client* is only puts email into queue.
  - Queue - Managed via MongoDB, and will survive server reboots and failures
  - Support for multiple server setup - "Cluster", Phusion Passenger instances, Load Balanced solutions, etc.
  - Emails concatenation by addressee email - Reduce amount of sent email to single user with concatenation, and avoid mistakenly doubled emails
- - When concatenation is enabled - Same emails wouldn't be sent, if for any reason, due to bad logic or application failure emails is sent twice or more times - here is solution to solve this annoying behavior
+ - When concatenation is enabled - Same emails wouldn't be sent twice, if for any reason, due to bad logic or application failure emails is sent twice or more times - here is solution to solve this annoying behavior
  - Balancing for multiple nodemailer's transports, two modes - `backup` and `balancing`. Most useful feature - allows to reduce cost for SMTP services and add durability. So, if any of used transports is fails to send an email it will switch to next one
  - Sending retries for network and other failures
  - Template support with Mustache-like placeholders
@@ -90,14 +90,14 @@ MongoClient.connect(process.env.MONGO_URL, (error, db) => {
       // for each transport, check `transport` object for more options
       return '"Awesome App" <' + transport._options.from + '>';
     },
-    concatEmails: true, // Concatenate emails to the same address
+    concatEmails: true, // Concatenate emails to the same addressee
     concatDelimiter: '<h1>{{{subject}}}</h1>', // Start each concatenated email with it's own subject
     template: MailTime.Template // Use default template
   });
 });
 ```
 
-Create client to add email to queue from other application units, like UI unit:
+Create client to add emails to queue from other application units, like UI unit:
 ```jsx
 const MongoClient = require('mongodb').MongoClient;
 const MailTime    = require('mail-time');
