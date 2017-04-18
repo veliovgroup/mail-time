@@ -9,6 +9,34 @@ Every `MailTime` instance can be configured to be a *Server* or *Client*.
 Main difference of *Server* from *Client* - *Server* handles queue and actually sends email. 
 While *Client* is only puts email into queue.
 
+## How it works?:
+Issue - classic solution with single point of failure:
+```ascii
+|----------------|         |------|         |------------------|
+|  Other mailer  | ------> | SMTP | ------> |  ^_^ Happy user  |
+|----------------|         |------|         |------------------|
+
+Schema above will work as long as SMTP service is available
+or connection between your server and SMPT is up. Once network
+failure occurs or SMTP service is down - users won't be happy
+
+|----------------|  \ /    |------|         |------------------|
+|  Other mailer  | --X---> | SMTP | ------> | 0_o Disappointed |
+|----------------|  / \    |------|         |------------------|
+                     ^- email lost in vain
+
+Single SMTP solution may work in case of network or other failures
+As long as MailTime has not received confirmation what email is sent
+it will keep letter in queue and retry to send it again
+
+|----------------|    /    |------|         |------------------|
+|   Mail Time    | --X---> | SMTP | ------> |  ^_^ Happy user  |
+|---^------------|  /      |------|         |------^-----------|
+     \-------------/  ^- We will try later        /
+      \- put it back into queue                  /
+       \----------Once connection is back ------/
+```
+
 ## Features
  - Queue - Managed via MongoDB, and will survive server reboots and failures
  - Support for multiple server setup - "Cluster", Phusion Passenger instances, Load Balanced solutions, etc.
@@ -174,8 +202,8 @@ MailQueue.sendMail({
   to: 'user@gmail.com',
   userName: 'Mike',
   subject: 'Sign up confirmation',
-  text: 'Hello {{username}}, \r\n Thank you for registration \r\n Your login: {{to}}',
-  html: '<div style="text-align: center"><h1>Hello {{username}}</h1><p><ul><li>Thank you for registration</li><li>Your login: {{to}}</li></ul></p></div>'
+  text: 'Hello {{userName}}, \r\n Thank you for registration \r\n Your login: {{to}}',
+  html: '<div style="text-align: center"><h1>Hello {{userName}}</h1><p><ul><li>Thank you for registration</li><li>Your login: {{to}}</li></ul></p></div>'
   template: '<body>{{{html}}}</body>'
 });
 ```
