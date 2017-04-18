@@ -32,10 +32,26 @@ it will keep letter in queue and retry to send it again
 |----------------|    /    |------|         |------------------|
 |   Mail Time    | --X---> | SMTP | ------> |  ^_^ Happy user  |
 |---^------------|  /      |------|         |------^-----------|
-     \-------------/  ^- We will try later        /
+     \-------------/ ^- We will try later         /
       \- put it back into queue                  /
        \----------Once connection is back ------/
 ```
+
+Back up scheme with multiple SMTP providers
+```ascii
+                           |--------|
+                     /--X--| SMTP 1 |
+                    /   ^  |--------|
+                   /    \--- Retry with next provider
+|----------------|/        |--------|         |------------------|
+|   Mail Time    | ---X--> | SMTP 2 |      /->|  ^_^ Happy user  |
+|----------------|\   ^    |--------|     /   |------------------|
+                   \  \--- Retry         /
+                    \      |--------|   /
+                     \---->| SMTP 3 |--/
+                           |--------|
+```
+
 
 ## Features
  - Queue - Managed via MongoDB, and will survive server reboots and failures
