@@ -10,6 +10,8 @@ Main difference of *Server* from *Client* - *Server* handles queue and actually 
 While *Client* is only puts email into queue.
 
 ## How it works?:
+
+#### Single point of failure
 Issue - classic solution with single point of failure:
 ```ascii
 |----------------|         |------|         |------------------|
@@ -37,6 +39,7 @@ it will keep letter in queue and retry to send it again
        \----------Once connection is back ------/
 ```
 
+#### Multiple SMTP providers
 Back up scheme with multiple SMTP providers
 ```ascii
                            |--------|
@@ -50,6 +53,28 @@ Back up scheme with multiple SMTP providers
                     \      |--------|   /
                      \---->| SMTP 3 |--/
                            |--------|
+```
+
+#### Cluster issue
+Let's say you have an app which is growing fast. At the some point you've decided to create a "Cluster" of servers to balance the load and add durability layer.
+
+Also your application has scheduled emails, for example once a day with recent news. While you have had a single server emails was sent by some daily interval. So, after you made a "Cluster" of servers - each server has it's own timer and going to send daily email to our user. In such case - users will receive 3 emails, sounds not okay.
+
+Here is how we solve this issue:
+```ascii
+|===================THE=CLUSTER==================| |=QUEUE=| |===Mail=Time===|
+| |----------|     |----------|     |----------| | |       | |=Micro-service=|   |--------|
+| |   App    |     |   App    |     |   App    | | |       | |               |-->| SMTP 1 |------\
+| | Server 1 |     | Server 2 |     | Server 3 | | |    <--------            |   |--------|       \
+| |-----\----|     |----\-----|     |----\-----| | |    -------->            |                |-------------|
+|        \---------------\----------------\--------->      | |               |   |--------|   |     ^_^     |
+| Each of the "App Server" or "Cluster Node"     | |       | |               |-->| SMTP 2 |-->| Happy users |
+| Runs Mail Time as a Client which only puts     | |       | |               |   |--------|   |-------------|
+| emails into queue. Aside to "App Servers"      | |       | |               |                    /
+| We suggest to run Mail Time as a Micro-service | |       | |               |   |--------|      /
+| which will be responsible to make sure queue   | |       | |               |-->| SMTP 3 |-----/
+| has no duplicates and to actually send emails  | |       | |               |   |--------|
+|================================================| |=======| |===============|
 ```
 
 
