@@ -12,9 +12,9 @@ While *Client* is only puts email into queue.
 ToC
 ======
  - [How it works?](https://github.com/VeliovGroup/Mail-Time#how-it-works)
-    * [With single SMTP](https://github.com/VeliovGroup/Mail-Time#single-point-of-failure)
-    * [With multiple SMTP](https://github.com/VeliovGroup/Mail-Time#multiple-smtp-providers)
-    * [As Micro-Service](https://github.com/VeliovGroup/Mail-Time#cluster-issue)
+   * [With single SMTP](https://github.com/VeliovGroup/Mail-Time#single-point-of-failure)
+   * [With multiple SMTP](https://github.com/VeliovGroup/Mail-Time#multiple-smtp-providers)
+   * [As Micro-Service](https://github.com/VeliovGroup/Mail-Time#cluster-issue)
  - [Features](https://github.com/VeliovGroup/Mail-Time#features)
  - [Installation](https://github.com/VeliovGroup/Mail-Time#installation)
  - [Usage example](https://github.com/VeliovGroup/Mail-Time#basic-usage)
