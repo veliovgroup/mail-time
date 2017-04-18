@@ -16,7 +16,7 @@ Issue - classic solution with single point of failure:
 |  Other mailer  | ------> | SMTP | ------> |  ^_^ Happy user  |
 |----------------|         |------|         |------------------|
 
-Schema above will work as long as SMTP service is available
+Scheme above will work as long as SMTP service is available
 or connection between your server and SMPT is up. Once network
 failure occurs or SMTP service is down - users won't be happy
 
