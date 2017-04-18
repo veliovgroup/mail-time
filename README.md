@@ -9,6 +9,21 @@ Every `MailTime` instance can be configured to be a *Server* or *Client*.
 Main difference of *Server* from *Client* - *Server* handles queue and actually sends email. 
 While *Client* is only puts email into queue.
 
+ToC
+======
+ - [How it works?](https://github.com/VeliovGroup/Mail-Time#how-it-works)
+    * [With single SMTP](https://github.com/VeliovGroup/Mail-Time#single-point-of-failure)
+    * [With multiple SMTP](https://github.com/VeliovGroup/Mail-Time#multiple-smtp-providers)
+    * [As Micro-Service](https://github.com/VeliovGroup/Mail-Time#cluster-issue)
+ - [Features](https://github.com/VeliovGroup/Mail-Time#features)
+ - [Installation](https://github.com/VeliovGroup/Mail-Time#installation)
+ - [Usage example](https://github.com/VeliovGroup/Mail-Time#basic-usage)
+ - [API](https://github.com/VeliovGroup/Mail-Time#api)
+   * [*Constructor*](https://github.com/VeliovGroup/Mail-Time#new-mailtimeopts-constructor)
+   * [`.send()`](https://github.com/VeliovGroup/Mail-Time#sendmailopts--callback)
+   * [Default Template](https://github.com/VeliovGroup/Mail-Time#static-mailtimetemplate)
+ - [Custom Templates](https://github.com/VeliovGroup/Mail-Time#template-example)
+
 ## How it works?:
 
 #### Single point of failure
