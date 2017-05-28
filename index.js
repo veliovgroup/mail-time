@@ -226,16 +226,19 @@ module.exports = (function () {
         }
 
         try {
-          var _mailOpts;
+          var _mailOpts = {};
+          if (transport._options.mailOptions) {
+            _mailOpts = merge(_mailOpts, transport._options.mailOptions);
+          }
 
           if (task.mailOptions.length === 1) {
-            _mailOpts = task.mailOptions[0];
+            _mailOpts = merge(_mailOpts, task.mailOptions[0]);
           } else {
-            _mailOpts = {
+            _mailOpts = merge(_mailOpts, {
               html: '',
               text: '',
               subject: ''
-            };
+            });
 
             for (var i = 0; i < task.mailOptions.length; i++) {
               if (task.mailOptions[i].html) {
@@ -329,6 +332,10 @@ module.exports = (function () {
 
     if (_opts && typeof _opts === 'object') {
       opts = _opts;
+    }
+
+    if (!opts.html && !opts.text) {
+      throw new Error('`html` nor `text` field is presented, at least one of those fields is required');
     }
 
     if (_callback && _callback.call && _callback.apply) {
