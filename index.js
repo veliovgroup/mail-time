@@ -1,6 +1,8 @@
-var JoSk  = require('josk');
-var NoOp  = function noop() {};
-var merge = require('deepmerge');
+var JoSk   = require('josk');
+var NoOp   = function noop() {};
+var merge  = require('deepmerge');
+var _debug = console.info;
+var _log   = console.error;
 
 var equals;
 equals = function (a, b) {
@@ -92,9 +94,14 @@ module.exports = (function () {
     this.maxTries    = ((opts.maxTries && !isNaN(opts.maxTries)) ? parseInt(opts.maxTries) : 60) + 1;
     this.interval    = ((opts.interval && !isNaN(opts.interval)) ? parseInt(opts.interval) : 60) * 1000;
     this.template    = (typeof opts.template === 'string') ? opts.template : '{{{html}}}';
+    this.zombieTime  = opts.zombieTime || 32786;
 
-    if (this.interval < 2048) {
-      this.interval  = 3072;
+    if (this.interval < 2048 || isNaN(this.interval)) {
+      this.interval = 3072;
+    }
+
+    if (this.zombieTime < 8192 || isNaN(this.zombieTime)) {
+      this.zombieTime = 8192;
     }
 
     this.strategy    = (opts.strategy === 'backup' || opts.strategy === 'balancer') ? opts.strategy : 'backup';
@@ -142,7 +149,7 @@ module.exports = (function () {
         db: opts.db,
         prefix: 'mailTimeQueue' + this.prefix,
         resetOnInit: false,
-        zombieTime: 8192
+        zombieTime: this.zombieTime
       });
 
       this.scheduler.setInterval(this.___send.bind(this), 256, 'mailTimeQueue' + this.prefix);
@@ -266,7 +273,7 @@ module.exports = (function () {
           }
 
           if (self.debug === true) {
-            console.info('[mail-time] Send attempt #' + (task.tries) + ', transport #' + transportIndex + ', to: ', task.mailOptions[0].to, 'from: ', _mailOpts.from);
+            _debug('[mail-time] Send attempt #' + (task.tries) + ', transport #' + transportIndex + ', to: ', task.mailOptions[0].to, 'from: ', _mailOpts.from);
           }
 
           transport.sendMail(_mailOpts, function (error, info) {
@@ -279,7 +286,7 @@ module.exports = (function () {
               _id: task._id
             }, function () {
               if (self.debug === true) {
-                console.info('[mail-time] email successfully sent, attempts: #' + (task.tries) + ', transport #' + transportIndex + ' to: ', _mailOpts.to);
+                _debug('[mail-time] email successfully sent, attempts: #' + (task.tries) + ', transport #' + transportIndex + ' to: ', _mailOpts.to);
               }
 
               var _id = task._id.toHexString();
@@ -295,7 +302,7 @@ module.exports = (function () {
           });
         } catch (e) {
           if (self.debug === true) {
-            console.error('[mail-time] Exception during runtime:', e);
+            _log('[mail-time] Exception during runtime:', e);
           }
           self.___handleError(task, e);
         }
@@ -377,7 +384,7 @@ module.exports = (function () {
       }, function (findError, task) {
         if (findError) {
           if (self.debug === true) {
-            console.error('[mail-time] something went wrong, can\'t send email to: ', opts.mailOptions[0].to, findError);
+            _log('[mail-time] something went wrong, can\'t send email to: ', opts.mailOptions[0].to, findError);
           }
           callback(findError, void 0, task);
           return;
@@ -403,7 +410,7 @@ module.exports = (function () {
           }, function (updateError) {
             if (updateError) {
               if (self.debug === true) {
-                console.error('[mail-time] something went wrong, can\'t send email to: ', task.mailOptions[0].to, updateError);
+                _log('[mail-time] something went wrong, can\'t send email to: ', task.mailOptions[0].to, updateError);
               }
               callback(updateError, void 0, task);
             }
@@ -453,7 +460,7 @@ module.exports = (function () {
         _id: task._id
       }, function () {
         if (self.debug === true) {
-          console.error('[mail-time] Giving up trying send email after ' + (task.tries) + ' attempts to: ', task.mailOptions[0].to, error);
+          _log('[mail-time] Giving up trying send email after ' + (task.tries) + ' attempts to: ', task.mailOptions[0].to, error);
         }
 
         var _id = task._id.toHexString();
@@ -484,7 +491,7 @@ module.exports = (function () {
       }, NoOp);
 
       if (this.debug === true) {
-        console.warn('[mail-time] Re-send Attempt #' + (task.tries) + ', transport #' + transportIndex + ' to: ', task.mailOptions[0].to, error);
+        _debug('[mail-time] Re-send Attempt #' + (task.tries) + ', transport #' + transportIndex + ' to: ', task.mailOptions[0].to, error);
       }
     }
   };
@@ -517,7 +524,7 @@ module.exports = (function () {
     this.collection.insertOne(task, function (insertError, r) {
       if (insertError) {
         if (self.debug === true) {
-          console.error('[mail-time] something went wrong, can\'t send email to: ', opts.mailOptions[0].to, insertError);
+          _log('[mail-time] something went wrong, can\'t send email to: ', opts.mailOptions[0].to, insertError);
         }
         callback(insertError, void 0, opts);
         return;
