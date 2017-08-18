@@ -1,6 +1,6 @@
 {
   "name": "mail-time",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Bulletproof email queue on top of NodeMailer with support of multiple clusters and servers setup",
   "main": "index.js",
   "scripts": {
@@ -26,8 +26,8 @@
   "author": "dr.dimitru (https://veliovgroup.com)",
   "license": "BSD-3-Clause",
   "dependencies": {
-    "deepmerge": "^1.4.4",
-    "josk": "^1.0.3",
-    "mongodb": "^2.2.29"
+    "deepmerge": "^1.5.1",
+    "josk": "^1.0.5",
+    "mongodb": "^2.2.31"
   }
 }
