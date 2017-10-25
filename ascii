@@ -1,0 +1,86 @@
+SINGLE SERVER USAGE:
+|----------------|         |------|         |------------------|
+|  Other mailer  | ------> | SMTP | ------> |  ^_^ Happy user  |
+|----------------|         |------|         |------------------|
+
+The scheme above will work as long as SMTP service is available
+or connection between your server and SMPT is up. Once network
+failure occurs or SMTP service is down - users won't be happy
+
+|----------------|  \ /    |------|         |------------------|
+|  Other mailer  | --X---> | SMTP | ------> | 0_o Disappointed |
+|----------------|  / \    |------|         |------------------|
+                     ^- email lost in vain
+
+Single SMTP solution may work in case of network or other failures
+As long as MailTime has not received confirmation what email is sent
+it will keep the letter in the queue and retry to send it again
+
+|----------------|    /    |------|         |------------------|
+|   Mail Time    | --X---> | SMTP | ------> |  ^_^ Happy user  |
+|---^------------|  /      |------|         |------^-----------|
+     \-------------/ ^- We will try later         /
+      \- put it back into queue                  /
+       \----------Once connection is back ------/
+
+
+
+SINGLE SERVER WITH MULTIPLE SMTPs:
+                           |--------|
+                     /--X--| SMTP 1 |
+                    /   ^  |--------|
+                   /    \--- Retry with next provider
+|----------------|/        |--------|         |------------------|
+|   Mail Time    | ---X--> | SMTP 2 |      /->|  ^_^ Happy user  |
+|----------------|\   ^    |--------|     /   |------------------|
+                   \  \--- Retry         /
+                    \      |--------|   /
+                     \---->| SMTP 3 |--/
+                           |--------|
+
+
+
+CLUSTER USAGE:
+|===================THE=CLUSTER===================| |=QUEUE=| |===Mail=Time===|
+| |----------|     |----------|     |----------|  | |       | |=Micro-service=|   |--------|
+| |   App    |     |   App    |     |   App    |  | |       | |               |-->| SMTP 1 |------\
+| | Server 1 |     | Server 2 |     | Server 3 |  | |    <--------            |   |--------|       \
+| |-----\----|     |----\-----|     |----\-----|  | |    -------->            |                |-------------|
+|        \---------------\----------------\---------->      | |               |   |--------|   |     ^_^     |
+| Each of the "App Server" or "Cluster Node"      | |       | |               |-->| SMTP 2 |-->| Happy users |
+| runs Mail Time as a Client which only puts      | |       | |               |   |--------|   |-------------|
+| emails into the queue. Aside to "App Servers"   | |       | |               |                    /
+| We suggest running Mail Time as a Micro-service | |       | |               |   |--------|      /
+| which will be responsible for making sure queue | |       | |               |-->| SMTP 3 |-----/
+| has no duplicates and to actually send emails   | |       | |               |   |--------|
+|=================================================| |=======| |===============|
+
+
+
+CLUSTER EXPLAINED (Other angle):
+|====================THE=CLUSTER===================|
+|  |----------|     |----------|     |----------|  |
+|  |   App    |     |   App    |     |   App    |  |
+|  | Server 1 |     | Server 2 |     | Server 3 |  |
+|  |-----|----|     |----|-----|     |-----/----|  |
+|        |               |                /        |
+|        |/--------------/---------------/         |
+|========|=========================================|
+         |                                          
+|========|==QUEUE==========| |======Mail=Time======|
+|        V                 | |====Micro-service====|
+|                          | |                     |
+|                       <--------                  |
+|                       -------->  |   |           |
+|==========================| |=====|===|===========|
+                                   /   \            
+          /-----------------/-----/     \           
+     |---/----|       |----/---|       |-\------|   
+     | SMTP 1 |       | SMTP 2 |       | SMTP 3 |   
+     |---\----|       |----|---|       |---/----|   
+          \                |              /         
+           \        |------V------|      /          
+            \       |             |     /           
+             \------->    ^_^    <-----/            
+                    | Happy users |                 
+                    |-------------|                 
