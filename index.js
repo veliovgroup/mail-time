@@ -234,8 +234,8 @@ module.exports = (function () {
 
         try {
           var _mailOpts = {};
-          if (transport._options.mailOptions) {
-            _mailOpts = merge(_mailOpts, transport._options.mailOptions);
+          if (transport.options.mailOptions) {
+            _mailOpts = merge(_mailOpts, transport.options.mailOptions);
           }
 
           if (task.mailOptions.length === 1) {
