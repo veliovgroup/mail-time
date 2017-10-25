@@ -263,7 +263,7 @@ MailQueue.sendMail({
   userName: 'Mike',
   subject: 'Sign up confirmation',
   text: 'Hello {{userName}}, \r\n Thank you for registration \r\n Your login: {{to}}',
-  html: '<div style="text-align: center"><h1>Hello {{userName}}</h1><p><ul><li>Thank you for registration</li><li>Your login: {{to}}</li></ul></p></div>'
+  html: '<div style="text-align: center"><h1>Hello {{userName}}</h1><p><ul><li>Thank you for registration</li><li>Your login: {{to}}</li></ul></p></div>',
   template: '<body>{{{html}}}</body>'
 });
 ```
