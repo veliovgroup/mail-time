@@ -234,7 +234,12 @@ module.exports = (function () {
 
         try {
           var _mailOpts = {};
-          if (transport.options.mailOptions) {
+
+          if (transport._options && typeof transport._options === 'object' && transport._options.mailOptions) {
+            _mailOpts = merge(_mailOpts, transport._options.mailOptions);
+          }
+
+          if (transport.options && typeof transport.options === 'object' && transport.options.mailOptions) {
             _mailOpts = merge(_mailOpts, transport.options.mailOptions);
           }
 
