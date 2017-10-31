@@ -117,12 +117,12 @@ npm install --save mail-time
 Basic usage
 ======
 Require package:
-```jsx
+```js
 const MailTime = require('mail-time');
 ```
 
 Create nodemailer's transports (see [nodemailer docs](https://github.com/nodemailer/nodemailer/tree/v2#setting-up)):
-```jsx
+```js
 const transports = [];
 
 // Private SMTP
@@ -159,7 +159,7 @@ transports.push(nodemailer.createTransport({
 
 Create `mail-time` *Server*, it is able to send and add emails to the queue. 
 We will need connect to MongoDB first:
-```jsx
+```js
 const MongoClient = require('mongodb').MongoClient;
 const MailTime    = require('mail-time');
 
@@ -184,8 +184,8 @@ MongoClient.connect(process.env.MONGO_URL, (error, db) => {
 });
 ```
 
-Create the Client to add emails to queue from other application units, like UI unit:
-```jsx
+Create the *Client* to add emails to queue from other application units, like UI unit:
+```js
 const MongoClient = require('mongodb').MongoClient;
 const MailTime    = require('mail-time');
 
@@ -200,7 +200,7 @@ MongoClient.connect(process.env.MONGO_URL, (error, db) => {
 ```
 
 Send email:
-```jsx
+```js
 MailQueue.sendMail({
   to: 'user@gmail.com',
   subject: 'You\'ve got an email!',
@@ -240,7 +240,7 @@ API
 
 ### `static MailTime.Template`
 Simple and bulletproof HTML template, see its [source](https://github.com/VeliovGroup/Mail-Time/blob/master/template.html). Usage:
-```jsx
+```js
 // Make it default
 const MailQueue = new MailTime({
   db: db, // MongoDB
@@ -257,7 +257,7 @@ MailQueue.sendMail({
 ```
 
 ### Template Example
-```jsx
+```js
 MailQueue.sendMail({
   to: 'user@gmail.com',
   userName: 'Mike',
