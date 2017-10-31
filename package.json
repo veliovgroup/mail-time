@@ -1,6 +1,6 @@
 {
   "name": "mail-time",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Bulletproof email queue on top of NodeMailer with support of multiple clusters and servers setup",
   "main": "index.js",
   "scripts": {
