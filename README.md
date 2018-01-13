@@ -128,7 +128,7 @@ const transports = [];
 // Private SMTP
 transports.push(nodemailer.createTransport({
   host: 'smtp.example.com',
-  from: 'no-reply@example.com'
+  from: 'no-reply@example.com',
   auth: {
     user: 'no-reply',
     pass: 'xxx'
@@ -138,7 +138,7 @@ transports.push(nodemailer.createTransport({
 // Google Apps SMTP
 transports.push(nodemailer.createTransport({
   host: 'smtp.gmail.com',
-  from: 'no-reply@mail.example.com'
+  from: 'no-reply@mail.example.com',
   auth: {
     user: 'no-reply@mail.example.com',
     pass: 'xxx'
@@ -149,7 +149,7 @@ transports.push(nodemailer.createTransport({
 transports.push(nodemailer.createTransport({
   host: 'smtp.sparkpostmail.com',
   port: 587,
-  from: 'no-reply@mail2.example.com'
+  from: 'no-reply@mail2.example.com',
   auth: {
     user: 'SMTP_Injection',
     pass: 'xxx'
