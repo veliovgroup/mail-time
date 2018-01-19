@@ -1,0 +1,17 @@
+### I'm having an issue:
+  - Give expressive description
+  - Version of `mail-time` you're experiencing this issue
+  - Version of `Node.js` and `NPM` you're experiencing this issue
+  - If you're getting an error (exception), please provide full error log (output in console) as file or screenshot
+
+### I have a suggestion:
+  - Describe your feature / request
+  - How you going to use it? Give a usage example(s)
+
+### Documentation is missing something or incorrect (have typos, etc.):
+  - Give a short description what you have changed/added and why
+  - Make sure you're using correct markdown markup
+  - Make sure all code blocks starts with tripple ``` (*backtick*) and have a syntax tag, for more read [this docs](https://help.github.com/articles/creating-and-highlighting-code-blocks/#syntax-highlighting)
+  - Post your addition/changes as issue ticket, we will manage it
+     
+## Thank you for contribution, and do not forget to get rid of this default message
