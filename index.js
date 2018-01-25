@@ -1,12 +1,12 @@
-var JoSk   = require('josk');
-var NoOp   = function noop() {};
-var merge  = require('deepmerge');
-var _debug = console.info;
-var _log   = console.error;
+const JoSk   = require('josk');
+const NoOp   = () =>  {};
+const merge  = require('deepmerge');
+const _debug = console.info;
+const _log   = console.error;
 
-var equals;
-equals = function (a, b) {
-  var i;
+let equals;
+equals = (a, b) => {
+  let i;
   if (a === b) {
     return true;
   }
@@ -32,11 +32,11 @@ equals = function (a, b) {
       return false;
     }
 
-    var _a = a.slice();
-    var _b = b.slice();
-    var j;
+    const _a = a.slice();
+    const _b = b.slice();
+    let j;
     for (i = _a.length - 1; i >= 0; i--) {
-      var result = false;
+      let result = false;
       for (j = _b.length - 1; j >= 0; j--) {
         if (equals(_a[i], _b[j])) {
           result = true;
@@ -55,8 +55,8 @@ equals = function (a, b) {
 
   i = 0;
   if (typeof a === 'object' && typeof b === 'object') {
-    var akeys = Object.keys(a);
-    var bkeys = Object.keys(b);
+    const akeys = Object.keys(a);
+    const bkeys = Object.keys(b);
 
     if (akeys.length !== bkeys.length) {
       return false;
@@ -77,8 +77,10 @@ equals = function (a, b) {
   return false;
 };
 
-module.exports = (function () {
-  function MailTime(opts) {
+let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml><meta content="text/html; charset=utf-8"http-equiv=Content-Type><meta content="width=device-width,initial-scale=1"name=viewport><title>{{subject}}</title><style>body{-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:none;font-family:Tiempos,Georgia,Times,serif;font-weight:400;width:100%;height:100%;background:#fff;font-size:15px;color:#000;line-height:1.5}a{text-decoration:underline;border:0;color:#000;outline:0;color:inherit}a:hover{text-decoration:none}a[href^=sms],a[href^=tel]{text-decoration:none;color:#000;cursor:default}a img{border:none;text-decoration:none}td{font-family:Tiempos,Georgia,Times,serif;font-weight:400}hr{height:1px;border:none;width:100%;margin:0;margin-top:25px;margin-bottom:25px;background-color:#ECECEC}h1,h2,h3,h4,h5,h6{font-family:HelveticaNeue,"Helvetica Neue",Helvetica,Arial,sans-serif;font-weight:300;line-height:normal;margin-top:35px;margin-bottom:4px;margin-left:0;margin-right:0}h1{margin:23px 15px;font-size:25px}h2{margin-top:15px;font-size:21px}h3{font-weight:400;font-size:19px;border-bottom:1px solid #ECECEC}h4{font-weight:400;font-size:18px}h5{font-weight:400;font-size:17px}h6{font-weight:600;font-size:16px}h1 a,h2 a,h3 a,h4 a,h5 a,h6 a{text-decoration:none}pre{font-family:Consolas,Menlo,Monaco,Lucida Console,Liberation Mono,DejaVu Sans Mono,Bitstream Vera Sans Mono,Courier New,monospace,sans-serif;display:block;font-size:13px;padding:9.5px;margin:0 0 10px;line-height:1.42;color:#333;word-break:break-all;word-wrap:break-word;background-color:#f5f5f5;border:1px solid #ccc;border-radius:4px;text-align:left!important;max-width:100%;white-space:pre-wrap;width:auto;overflow:auto}code{font-size:13px;font-family:font-family: Consolas,Menlo,Monaco,Lucida Console,Liberation Mono,DejaVu Sans Mono,Bitstream Vera Sans Mono,Courier New,monospace,sans-serif;border:1px solid rgba(0,0,0,.223);border-radius:2px;padding:1px 2px;word-break:break-all;word-wrap:break-word}pre code{padding:0;font-size:inherit;color:inherit;white-space:pre-wrap;background-color:transparent;border:none;border-radius:0;word-break:break-all;word-wrap:break-word}td{text-align:center}table{border-collapse:collapse!important}.force-full-width{width:100%!important}</style><style media=screen>@media screen{h1,h2,h3,h4,h5,h6{font-family:\'Helvetica Neue\',Arial,sans-serif!important}td{font-family:Tiempos,Georgia,Times,serif!important}code,pre{font-family:Consolas,Menlo,Monaco,\'Lucida Console\',\'Liberation Mono\',\'DejaVu Sans Mono\',\'Bitstream Vera Sans Mono\',\'Courier New\',monospace,sans-serif!important}}</style><style media="only screen and (max-width:480px)">@media only screen and (max-width:480px){table[class=w320]{width:100%!important}}</style><body bgcolor=#FFFFFF class=body style=padding:0;margin:0;display:block;background:#fff;-webkit-text-size-adjust:none><table cellpadding=0 cellspacing=0 width=100% align=center><tr><td align=center valign=top bgcolor=#FFFFFF width=100%><center><table cellpadding=0 cellspacing=0 width=600 style="margin:0 auto"class=w320><tr><td align=center valign=top><table cellpadding=0 cellspacing=0 width=100% style="margin:0 auto;border-bottom:1px solid #ddd"bgcolor=#ECECEC><tr><td><h1>{{{subject}}}</h1></table><table cellpadding=0 cellspacing=0 width=100% style="margin:0 auto"bgcolor=#F2F2F2><tr><td><center><table cellpadding=0 cellspacing=0 width=100% style="margin:0 auto"><tr><td align=left style="text-align:left;padding:30px 25px">{{{html}}}</table></center></table></table></center></table>';
+
+module.exports = class MailTime {
+  constructor (opts) {
     if (!opts || typeof opts !== 'object') {
       throw new TypeError('[mail-time] Configuration object must be passed into MailTime constructor');
     }
@@ -156,7 +158,13 @@ module.exports = (function () {
     }
   }
 
-  MailTime.Template = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml><meta content="text/html; charset=utf-8"http-equiv=Content-Type><meta content="width=device-width,initial-scale=1"name=viewport><title>{{subject}}</title><style>body{-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:none;font-family:Tiempos,Georgia,Times,serif;font-weight:400;width:100%;height:100%;background:#fff;font-size:15px;color:#000;line-height:1.5}a{text-decoration:underline;border:0;color:#000;outline:0;color:inherit}a:hover{text-decoration:none}a[href^=sms],a[href^=tel]{text-decoration:none;color:#000;cursor:default}a img{border:none;text-decoration:none}td{font-family:Tiempos,Georgia,Times,serif;font-weight:400}hr{height:1px;border:none;width:100%;margin:0;margin-top:25px;margin-bottom:25px;background-color:#ECECEC}h1,h2,h3,h4,h5,h6{font-family:HelveticaNeue,"Helvetica Neue",Helvetica,Arial,sans-serif;font-weight:300;line-height:normal;margin-top:35px;margin-bottom:4px;margin-left:0;margin-right:0}h1{margin:23px 15px;font-size:25px}h2{margin-top:15px;font-size:21px}h3{font-weight:400;font-size:19px;border-bottom:1px solid #ECECEC}h4{font-weight:400;font-size:18px}h5{font-weight:400;font-size:17px}h6{font-weight:600;font-size:16px}h1 a,h2 a,h3 a,h4 a,h5 a,h6 a{text-decoration:none}pre{font-family:Consolas,Menlo,Monaco,Lucida Console,Liberation Mono,DejaVu Sans Mono,Bitstream Vera Sans Mono,Courier New,monospace,sans-serif;display:block;font-size:13px;padding:9.5px;margin:0 0 10px;line-height:1.42;color:#333;word-break:break-all;word-wrap:break-word;background-color:#f5f5f5;border:1px solid #ccc;border-radius:4px;text-align:left!important;max-width:100%;white-space:pre-wrap;width:auto;overflow:auto}code{font-size:13px;font-family:font-family: Consolas,Menlo,Monaco,Lucida Console,Liberation Mono,DejaVu Sans Mono,Bitstream Vera Sans Mono,Courier New,monospace,sans-serif;border:1px solid rgba(0,0,0,.223);border-radius:2px;padding:1px 2px;word-break:break-all;word-wrap:break-word}pre code{padding:0;font-size:inherit;color:inherit;white-space:pre-wrap;background-color:transparent;border:none;border-radius:0;word-break:break-all;word-wrap:break-word}td{text-align:center}table{border-collapse:collapse!important}.force-full-width{width:100%!important}</style><style media=screen>@media screen{h1,h2,h3,h4,h5,h6{font-family:\'Helvetica Neue\',Arial,sans-serif!important}td{font-family:Tiempos,Georgia,Times,serif!important}code,pre{font-family:Consolas,Menlo,Monaco,\'Lucida Console\',\'Liberation Mono\',\'DejaVu Sans Mono\',\'Bitstream Vera Sans Mono\',\'Courier New\',monospace,sans-serif!important}}</style><style media="only screen and (max-width:480px)">@media only screen and (max-width:480px){table[class=w320]{width:100%!important}}</style><body bgcolor=#FFFFFF class=body style=padding:0;margin:0;display:block;background:#fff;-webkit-text-size-adjust:none><table cellpadding=0 cellspacing=0 width=100% align=center><tr><td align=center valign=top bgcolor=#FFFFFF width=100%><center><table cellpadding=0 cellspacing=0 width=600 style="margin:0 auto"class=w320><tr><td align=center valign=top><table cellpadding=0 cellspacing=0 width=100% style="margin:0 auto;border-bottom:1px solid #ddd"bgcolor=#ECECEC><tr><td><h1>{{{subject}}}</h1></table><table cellpadding=0 cellspacing=0 width=100% style="margin:0 auto"bgcolor=#F2F2F2><tr><td><center><table cellpadding=0 cellspacing=0 width=100% style="margin:0 auto"><tr><td align=left style="text-align:left;padding:30px 25px">{{{html}}}</table></center></table></table></center></table>';
+  static get Template() {
+    return DEFAULT_TEMPLATE;
+  }
+
+  static set Template(newVal) {
+    DEFAULT_TEMPLATE = newVal;
+  }
 
   /*
    @memberOf MailTime
@@ -164,8 +172,7 @@ module.exports = (function () {
    @param ready {Function} - See JoSk NPM package
    @returns {void}
    */
-  MailTime.prototype.___send = function (ready) {
-    var self = this;
+  ___send(ready) {
     this.collection.findOneAndUpdate({
       $or: [{
         isSent: false,
@@ -187,7 +194,7 @@ module.exports = (function () {
     }, {
       $set: {
         isSent: true,
-        sendAt: new Date(+new Date() + self.interval)
+        sendAt: new Date(+new Date() + this.interval)
       },
       $inc: {
         tries: 1
@@ -202,14 +209,14 @@ module.exports = (function () {
         mailOptions: 1,
         concatSubject: 1
       }
-    }, function (findUpdateError, result) {
-      process.nextTick(function () {
+    }, (findUpdateError, result) => {
+      process.nextTick(() => {
         ready();
       });
 
-      var task = (typeof result === 'object') ? result.value : null;
+      const task = (typeof result === 'object') ? result.value : null;
       if (findUpdateError) {
-        self.___handleError(task, findUpdateError);
+        this.___handleError(task, findUpdateError);
         return;
       }
 
@@ -217,23 +224,23 @@ module.exports = (function () {
         return;
       }
 
-      process.nextTick(function () {
-        var transport;
-        var transportIndex;
-        if (self.strategy === 'balancer') {
-          self.transport = self.transport + 1;
-          if (self.transport >= self.transports.length) {
-            self.transport = 0;
+      process.nextTick(() => {
+        let transport;
+        let transportIndex;
+        if (this.strategy === 'balancer') {
+          this.transport = this.transport + 1;
+          if (this.transport >= this.transports.length) {
+            this.transport = 0;
           }
-          transportIndex = self.transport;
-          transport = self.transports[self.transport];
+          transportIndex = this.transport;
+          transport = this.transports[this.transport];
         } else {
           transportIndex = task.transport;
-          transport = self.transports[task.transport];
+          transport = this.transports[task.transport];
         }
 
         try {
-          var _mailOpts = {};
+          const _mailOpts = {};
 
           if (transport._options && typeof transport._options === 'object' && transport._options.mailOptions) {
             _mailOpts = merge(_mailOpts, transport._options.mailOptions);
@@ -252,70 +259,70 @@ module.exports = (function () {
               subject: ''
             });
 
-            for (var i = 0; i < task.mailOptions.length; i++) {
+            for (let i = 0; i < task.mailOptions.length; i++) {
               if (task.mailOptions[i].html) {
-                _mailOpts.html += self.___render(self.concatDelimiter, task.mailOptions[i]) + self.___render(task.mailOptions[i].html, task.mailOptions[i]);
+                _mailOpts.html += this.___render(this.concatDelimiter, task.mailOptions[i]) + this.___render(task.mailOptions[i].html, task.mailOptions[i]);
                 delete task.mailOptions[i].html;
               }
 
               if (task.mailOptions[i].text) {
-                _mailOpts.text += '\r\n' + self.___render(task.mailOptions[i].text, task.mailOptions[i]);
+                _mailOpts.text += '\r\n' + this.___render(task.mailOptions[i].text, task.mailOptions[i]);
                 delete task.mailOptions[i].text;
               }
 
               _mailOpts = merge(_mailOpts, task.mailOptions[i]);
             }
 
-            _mailOpts.subject = task.concatSubject || self.concatSubject || _mailOpts.subject;
+            _mailOpts.subject = task.concatSubject || this.concatSubject || _mailOpts.subject;
           }
 
-          if (_mailOpts.html && (task.template || self.template)) {
-            _mailOpts.html = self.___render((task.template || self.template), _mailOpts);
+          if (_mailOpts.html && (task.template || this.template)) {
+            _mailOpts.html = this.___render((task.template || this.template), _mailOpts);
           }
 
-          if (!_mailOpts.from && self.from) {
-            _mailOpts.from = self.from(transport);
+          if (!_mailOpts.from && this.from) {
+            _mailOpts.from = this.from(transport);
           }
 
-          if (self.debug === true) {
+          if (this.debug === true) {
             _debug('[mail-time] Send attempt #' + (task.tries) + ', transport #' + transportIndex + ', to: ', task.mailOptions[0].to, 'from: ', _mailOpts.from);
           }
 
-          transport.sendMail(_mailOpts, function (error, info) {
+          transport.sendMail(_mailOpts, (error, info) => {
             if (error) {
-              self.___handleError(task, error);
+              this.___handleError(task, error);
               return;
             }
 
-            self.collection.deleteOne({
+            this.collection.deleteOne({
               _id: task._id
             }, function () {
-              if (self.debug === true) {
+              if (this.debug === true) {
                 _debug('[mail-time] email successfully sent, attempts: #' + (task.tries) + ', transport #' + transportIndex + ' to: ', _mailOpts.to);
               }
 
-              var _id = task._id.toHexString();
-              if (self.callbacks[_id] && self.callbacks[_id].length) {
-                self.callbacks[_id].forEach(function (cb, index) {
+              const _id = task._id.toHexString();
+              if (this.callbacks[_id] && this.callbacks[_id].length) {
+                this.callbacks[_id].forEach(function (cb, index) {
                   cb(void 0, info, task.mailOptions[index]);
                 });
               }
-              delete self.callbacks[_id];
+              delete this.callbacks[_id];
             });
 
             return;
           });
         } catch (e) {
-          if (self.debug === true) {
+          if (this.debug === true) {
             _log('[mail-time] Exception during runtime:', e);
           }
-          self.___handleError(task, e);
+          this.___handleError(task, e);
         }
       });
 
       return;
     });
-  };
+  }
 
   /*
    @memberOf MailTime
@@ -323,9 +330,9 @@ module.exports = (function () {
    @description alias of `sendMail`
    @returns {void}
    */
-  MailTime.prototype.send = function (opts, callback) {
+  send(opts, callback) {
     this.sendMail(opts, callback);
-  };
+  }
 
   /*
    @memberOf MailTime
@@ -337,21 +344,9 @@ module.exports = (function () {
    @param callback      {Function} - [OPTIONAL] Callback function
    @returns {void}
    */
-  MailTime.prototype.sendMail = function (_opts, _callback) {
-    var self = this;
-    var opts = {};
-    var callback = NoOp;
-
-    if (_opts && typeof _opts === 'object') {
-      opts = _opts;
-    }
-
+  sendMail(opts = {}, callback = NoOp) {
     if (!opts.html && !opts.text) {
       throw new Error('`html` nor `text` field is presented, at least one of those fields is required');
-    }
-
-    if (_callback && _callback.call && _callback.apply) {
-      callback = _callback;
     }
 
     if (!opts.sendAt || Object.prototype.toString.call(opts.sendAt) !== '[object Date]') {
@@ -366,9 +361,9 @@ module.exports = (function () {
       opts.concatSubject = false;
     }
 
-    var _sendAt        = opts.sendAt;
-    var _template      = opts.template;
-    var _concatSubject = opts.concatSubject;
+    let _sendAt          = opts.sendAt;
+    const _template      = opts.template;
+    const _concatSubject = opts.concatSubject;
     delete opts.sendAt;
     delete opts.template;
     delete opts.concatSubject;
@@ -386,9 +381,9 @@ module.exports = (function () {
           _id: 1,
           mailOptions: 1
         }
-      }, function (findError, task) {
+      }, (findError, task) => {
         if (findError) {
-          if (self.debug === true) {
+          if (this.debug === true) {
             _log('[mail-time] something went wrong, can\'t send email to: ', opts.mailOptions[0].to, findError);
           }
           callback(findError, void 0, task);
@@ -396,9 +391,9 @@ module.exports = (function () {
         }
 
         if (task) {
-          var queue = task.mailOptions || [];
+          const queue = task.mailOptions || [];
 
-          for (var i = 0; i < queue.length; i++) {
+          for (let i = 0; i < queue.length; i++) {
             if (equals(queue[i], opts)) {
               return;
             }
@@ -406,15 +401,15 @@ module.exports = (function () {
 
           queue.push(opts);
 
-          self.collection.updateOne({
+          this.collection.updateOne({
             _id: task._id
           }, {
             $set: {
               mailOptions: queue
             }
-          }, function (updateError) {
+          }, (updateError) => {
             if (updateError) {
-              if (self.debug === true) {
+              if (this.debug === true) {
                 _log('[mail-time] something went wrong, can\'t send email to: ', task.mailOptions[0].to, updateError);
               }
               callback(updateError, void 0, task);
@@ -424,8 +419,8 @@ module.exports = (function () {
           return;
         }
 
-        _sendAt = new Date(+_sendAt + self.concatThrottling);
-        self.___addToQueue({
+        _sendAt = new Date(+_sendAt + this.concatThrottling);
+        this.___addToQueue({
           sendAt: _sendAt,
           template: _template,
           mailOptions: opts,
@@ -445,7 +440,7 @@ module.exports = (function () {
     }, callback);
 
     return;
-  };
+  }
 
   /*
    @memberOf MailTime
@@ -454,30 +449,29 @@ module.exports = (function () {
    @param error {mix}    - Error String/Object/Error
    @returns {void}
    */
-  MailTime.prototype.___handleError = function (task, error) {
+  ___handleError(task, error) {
     if (!task) {
       return;
     }
 
     if (task.tries > this.maxTries) {
-      var self = this;
       this.collection.deleteOne({
         _id: task._id
-      }, function () {
-        if (self.debug === true) {
+      }, () => {
+        if (this.debug === true) {
           _log('[mail-time] Giving up trying send email after ' + (task.tries) + ' attempts to: ', task.mailOptions[0].to, error);
         }
 
-        var _id = task._id.toHexString();
-        if (self.callbacks[_id] && self.callbacks[_id].length) {
-          self.callbacks[_id].forEach(function (cb, i) {
+        const _id = task._id.toHexString();
+        if (this.callbacks[_id] && this.callbacks[_id].length) {
+          this.callbacks[_id].forEach((cb, i) => {
             cb(error, void 0, task.mailOptions[i]);
           });
         }
-        delete self.callbacks[_id];
+        delete this.callbacks[_id];
       });
     } else {
-      var transportIndex = task.transport;
+      let transportIndex = task.transport;
 
       if (this.strategy === 'backup' && (task.tries % this.failsToNext) === 0) {
         ++transportIndex;
@@ -499,7 +493,7 @@ module.exports = (function () {
         _debug('[mail-time] Re-send Attempt #' + (task.tries) + ', transport #' + transportIndex + ' to: ', task.mailOptions[0].to, error);
       }
     }
-  };
+  }
 
   /*
    @memberOf MailTime
@@ -510,9 +504,8 @@ module.exports = (function () {
    @param callback         {Function} - [OPTIONAL] Callback function
    @returns {void}
    */
-  MailTime.prototype.___addToQueue = function (opts, callback) {
-    var self = this;
-    var task = {
+  ___addToQueue(opts, callback) {
+    const task = {
       tries: 0,
       isSent: false,
       sendAt: opts.sendAt,
@@ -526,23 +519,23 @@ module.exports = (function () {
       task.to = opts.mailOptions.to;
     }
 
-    this.collection.insertOne(task, function (insertError, r) {
+    this.collection.insertOne(task, (insertError, r) => {
       if (insertError) {
-        if (self.debug === true) {
+        if (this.debug === true) {
           _log('[mail-time] something went wrong, can\'t send email to: ', opts.mailOptions[0].to, insertError);
         }
         callback(insertError, void 0, opts);
         return;
       }
 
-      var _id = r.insertedId.toHexString();
-      if (!self.callbacks[_id]) {
-        self.callbacks[_id] = [];
+      const _id = r.insertedId.toHexString();
+      if (!this.callbacks[_id]) {
+        this.callbacks[_id] = [];
       }
-      self.callbacks[_id].push(callback);
+      this.callbacks[_id].push(callback);
       return;
     });
-  };
+  }
 
   /*
    @memberOf MailTime
@@ -551,11 +544,11 @@ module.exports = (function () {
    @param replacements {Object} - Blaze/Mustache-like helpers Object
    @returns {String}
    */
-  MailTime.prototype.___render = function (_string, replacements) {
-    var i;
-    var string    = _string;
-    var matchHTML = string.match(/\{{3}\s?([a-zA-Z0-9\-\_]+)\s?\}{3}/g);
-    var matchStr  = string.match(/\{{2}\s?([a-zA-Z0-9\-\_]+)\s?\}{2}/g);
+  ___render(_string, replacements) {
+    let i;
+    let string      = _string;
+    const matchHTML = string.match(/\{{3}\s?([a-zA-Z0-9\-\_]+)\s?\}{3}/g);
+    const matchStr  = string.match(/\{{2}\s?([a-zA-Z0-9\-\_]+)\s?\}{2}/g);
 
     if (matchHTML) {
       for (i = 0; i < matchHTML.length; i++) {
@@ -573,7 +566,5 @@ module.exports = (function () {
       }
     }
     return string;
-  };
-
-  return MailTime;
-})();
+  }
+};
