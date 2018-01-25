@@ -169,7 +169,7 @@ const MailTime    = require('mail-time');
 MongoClient.connect(process.env.MONGO_URL, (error, client) => {
   const db = client.db(dbName);
 
-  const MailQueue = new MailTime({
+  const mailQueue = new MailTime({
     db, // MongoDB
     type: 'server',
     strategy: 'balancer', // Transports will be used in round robin chain
@@ -194,7 +194,7 @@ const MailTime    = require('mail-time');
 MongoClient.connect(process.env.MONGO_URL, (error, client) => {
   const db = client.db(dbName);
 
-  const MailQueue = new MailTime({
+  const mailQueue = new MailTime({
     db,
     type: 'client',
     strategy: 'balancer', // Transports will be used in round robin chain
@@ -205,7 +205,7 @@ MongoClient.connect(process.env.MONGO_URL, (error, client) => {
 
 Send email:
 ```js
-MailQueue.sendMail({
+mailQueue.sendMail({
   to: 'user@gmail.com',
   subject: 'You\'ve got an email!',
   text: 'Plain text message',
@@ -246,14 +246,14 @@ API
 Simple and bulletproof HTML template, see its [source](https://github.com/VeliovGroup/Mail-Time/blob/master/template.html). Usage:
 ```js
 // Make it default
-const MailQueue = new MailTime({
+const mailQueue = new MailTime({
   db: db, // MongoDB
   /* .. */
   template: MailTime.Template
 });
 
 // For single letter
-MailQueue.sendMail({
+mailQueue.sendMail({
   to: 'user@gmail.com',
   /* .. */
   template: MailTime.Template
@@ -262,7 +262,7 @@ MailQueue.sendMail({
 
 ### Template Example
 ```js
-MailQueue.sendMail({
+mailQueue.sendMail({
   to: 'user@gmail.com',
   userName: 'Mike',
   subject: 'Sign up confirmation',
