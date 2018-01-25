@@ -166,7 +166,9 @@ const MailTime    = require('mail-time');
 // We're using environment variable MONGO_URL
 // to store connection string to MongoDB
 // example: "MONGO_URL=mongodb://127.0.0.1:27017/myapp node mail-micro-service.js"
-MongoClient.connect(process.env.MONGO_URL, (error, db) => {
+MongoClient.connect(process.env.MONGO_URL, (error, client) => {
+  const db = client.db(dbName);
+
   const MailQueue = new MailTime({
     db, // MongoDB
     type: 'server',
@@ -189,7 +191,9 @@ Create the *Client* to add emails to queue from other application units, like UI
 const MongoClient = require('mongodb').MongoClient;
 const MailTime    = require('mail-time');
 
-MongoClient.connect(process.env.MONGO_URL, (error, db) => {
+MongoClient.connect(process.env.MONGO_URL, (error, client) => {
+  const db = client.db(dbName);
+
   const MailQueue = new MailTime({
     db,
     type: 'client',
