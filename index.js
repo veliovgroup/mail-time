@@ -296,14 +296,14 @@ module.exports = class MailTime {
 
             this.collection.deleteOne({
               _id: task._id
-            }, function () {
+            }, () => {
               if (this.debug === true) {
                 _debug('[mail-time] email successfully sent, attempts: #' + (task.tries) + ', transport #' + transportIndex + ' to: ', _mailOpts.to);
               }
 
               const _id = task._id.toHexString();
               if (this.callbacks[_id] && this.callbacks[_id].length) {
-                this.callbacks[_id].forEach(function (cb, index) {
+                this.callbacks[_id].forEach((cb, index) => {
                   cb(void 0, info, task.mailOptions[index]);
                 });
               }
