@@ -1,14 +1,10 @@
 {
   "name": "mail-time",
-  "version": "0.1.7",
+  "version": "1.0.0",
   "description": "Bulletproof email queue on top of NodeMailer with support of multiple clusters and servers setup",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git://github.com/VeliovGroup/Mail-Time.git"
+    "test": "mocha"
   },
   "keywords": [
     "mail",
@@ -23,11 +19,41 @@
     "mail-time",
     "mailtime"
   ],
+  "tags": [
+    "mail",
+    "email",
+    "queue",
+    "nodemailer",
+    "balancer",
+    "balanced",
+    "backup",
+    "bulletproof",
+    "template",
+    "mail-time",
+    "mailtime"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/VeliovGroup/Mail-Time.git"
+  },
+  "bugs": {
+    "url": "https://github.com/VeliovGroup/Mail-Time/issues"
+  },
+  "homepage": "https://github.com/VeliovGroup/Mail-Time",
   "author": "dr.dimitru (https://veliovgroup.com)",
   "license": "BSD-3-Clause",
+  "engines": {
+    "node": ">=8.9.0"
+  },
   "dependencies": {
-    "deepmerge": "^2.0.0",
-    "josk": "^1.1.0",
-    "mongodb": "^2.2.33"
+    "deepmerge": "^2.0.1",
+    "josk": "^2.0.1"
+  },
+  "devDependencies": {
+    "mocha": "^5.0.0",
+    "chai": "^4.1.2",
+    "nodemailer": "^4.4.1",
+    "mongodb": "^3.0.1",
+    "mail-time": "file://./"
   }
 }

@@ -111,7 +111,11 @@ npm install --save nodemailer
 ```
 Install *MailTime* package:
 ```shell
+# for node@>=8.9.0
 npm install --save mail-time
+
+# for node@<8.9.0
+npm install --save mail-time@=0.1.7
 ```
 
 Basic usage
@@ -270,6 +274,20 @@ mailQueue.sendMail({
   html: '<div style="text-align: center"><h1>Hello {{userName}}</h1><p><ul><li>Thank you for registration</li><li>Your login: {{to}}</li></ul></p></div>',
   template: '<body>{{{html}}}</body>'
 });
+```
+
+
+Testing
+======
+```shell
+# Before run tests make sure NODE_ENV === development
+# Install NPM dependencies
+npm install --save-dev
+
+# Before run tests you need to have running MongoDB
+MONGO_URL="mongodb://127.0.0.1:27017/testCollectionName" npm test
+
+# Be patient, tests are taking around 2 mins
 ```
 
 Support this project:
