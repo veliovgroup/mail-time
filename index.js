@@ -110,7 +110,20 @@ module.exports = class MailTime {
     this.failsToNext = (opts.failsToNext && !isNaN(opts.failsToNext)) ? parseInt(opts.failsToNext) : 4;
     this.transports  = opts.transports || [];
     this.transport   = 0;
-    this.from        = (!opts.from || !opts.from.call || !opts.from.apply) ? false : opts.from;
+
+    this.from        = (() => {
+      if (typeof opts.from === 'string') {
+        return () => {
+          return opts.from;
+        };
+      }
+
+      if (typeof opts.from === 'function') {
+        return opts.from;
+      }
+
+      return false;
+    })();
 
     this.concatEmails     = (opts.concatEmails !== true) ? false : true;
     this.concatSubject    = (opts.concatSubject && typeof opts.concatSubject === 'string') ? opts.concatSubject : 'Multiple notifications';
@@ -164,6 +177,60 @@ module.exports = class MailTime {
 
   static set Template(newVal) {
     DEFAULT_TEMPLATE = newVal;
+  }
+
+  ___compileMailOpts(transport, task) {
+    let _mailOpts = {};
+
+    if (transport._options && typeof transport._options === 'object' && transport._options.mailOptions) {
+      _mailOpts = merge(_mailOpts, transport._options.mailOptions);
+    }
+
+    if (transport.options && typeof transport.options === 'object' && transport.options.mailOptions) {
+      _mailOpts = merge(_mailOpts, transport.options.mailOptions);
+    }
+
+    _mailOpts = merge(_mailOpts, {
+      html: '',
+      text: '',
+      subject: ''
+    });
+
+    for (let i = 0; i < task.mailOptions.length; i++) {
+      if (task.mailOptions[i].html) {
+        if (task.mailOptions.length > 1) {
+          _mailOpts.html += this.___render(this.concatDelimiter, task.mailOptions[i]) + this.___render(task.mailOptions[i].html, task.mailOptions[i]);
+        } else {
+          _mailOpts.html = this.___render(task.mailOptions[i].html, task.mailOptions[i]);
+        }
+        delete task.mailOptions[i].html;
+      }
+
+      if (task.mailOptions[i].text) {
+        if (task.mailOptions.length > 1) {
+          _mailOpts.text += '\r\n' + this.___render(task.mailOptions[i].text, task.mailOptions[i]);
+        } else {
+          _mailOpts.text = this.___render(task.mailOptions[i].text, task.mailOptions[i]);
+        }
+        delete task.mailOptions[i].text;
+      }
+
+      _mailOpts = merge(_mailOpts, task.mailOptions[i]);
+    }
+
+    if (_mailOpts.html && (task.template || this.template)) {
+      _mailOpts.html = this.___render((task.template || this.template), _mailOpts);
+    }
+
+    if (task.mailOptions.length > 1) {
+      _mailOpts.subject = task.concatSubject || this.concatSubject || _mailOpts.subject;
+    }
+
+    if (!_mailOpts.from && this.from) {
+      _mailOpts.from = this.from(transport);
+    }
+
+    return _mailOpts;
   }
 
   /*
@@ -240,49 +307,7 @@ module.exports = class MailTime {
         }
 
         try {
-          const _mailOpts = {};
-
-          if (transport._options && typeof transport._options === 'object' && transport._options.mailOptions) {
-            _mailOpts = merge(_mailOpts, transport._options.mailOptions);
-          }
-
-          if (transport.options && typeof transport.options === 'object' && transport.options.mailOptions) {
-            _mailOpts = merge(_mailOpts, transport.options.mailOptions);
-          }
-
-          if (task.mailOptions.length === 1) {
-            _mailOpts = merge(_mailOpts, task.mailOptions[0]);
-          } else {
-            _mailOpts = merge(_mailOpts, {
-              html: '',
-              text: '',
-              subject: ''
-            });
-
-            for (let i = 0; i < task.mailOptions.length; i++) {
-              if (task.mailOptions[i].html) {
-                _mailOpts.html += this.___render(this.concatDelimiter, task.mailOptions[i]) + this.___render(task.mailOptions[i].html, task.mailOptions[i]);
-                delete task.mailOptions[i].html;
-              }
-
-              if (task.mailOptions[i].text) {
-                _mailOpts.text += '\r\n' + this.___render(task.mailOptions[i].text, task.mailOptions[i]);
-                delete task.mailOptions[i].text;
-              }
-
-              _mailOpts = merge(_mailOpts, task.mailOptions[i]);
-            }
-
-            _mailOpts.subject = task.concatSubject || this.concatSubject || _mailOpts.subject;
-          }
-
-          if (_mailOpts.html && (task.template || this.template)) {
-            _mailOpts.html = this.___render((task.template || this.template), _mailOpts);
-          }
-
-          if (!_mailOpts.from && this.from) {
-            _mailOpts.from = this.from(transport);
-          }
+          const _mailOpts = this.___compileMailOpts(transport, task);
 
           if (this.debug === true) {
             _debug('[mail-time] Send attempt #' + (task.tries) + ', transport #' + transportIndex + ', to: ', task.mailOptions[0].to, 'from: ', _mailOpts.from);
@@ -548,8 +573,6 @@ module.exports = class MailTime {
     let i;
     let string      = _string;
     const matchHTML = string.match(/\{{3}\s?([a-zA-Z0-9\-\_]+)\s?\}{3}/g);
-    const matchStr  = string.match(/\{{2}\s?([a-zA-Z0-9\-\_]+)\s?\}{2}/g);
-
     if (matchHTML) {
       for (i = 0; i < matchHTML.length; i++) {
         if (replacements[matchHTML[i].replace('{{{', '').replace('}}}', '').trim()]) {
@@ -558,6 +581,7 @@ module.exports = class MailTime {
       }
     }
 
+    const matchStr  = string.match(/\{{2}\s?([a-zA-Z0-9\-\_]+)\s?\}{2}/g);
     if (matchStr) {
       for (i = 0; i < matchStr.length; i++) {
         if (replacements[matchStr[i].replace('{{', '').replace('}}', '').trim()]) {
