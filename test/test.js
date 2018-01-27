@@ -13,9 +13,6 @@ const DEBUG       = false;
 const { assert }       = require('chai');
 const { it, describe } = require('mocha');
 
-
-// TODO: write more better tests
-
 describe('Has MailTime Object', () => {
   it('MailTime is Constructor', () => {
     assert.isFunction(MailTime, 'MailTime is Constructor');
