@@ -393,7 +393,7 @@ module.exports = class MailTime {
     delete opts.template;
     delete opts.concatSubject;
 
-    if (typeof opts.to !== 'string' && (opts.to !== Array || !opts.to.length)) {
+    if (typeof opts.to !== 'string' && (!(opts.to instanceof Array) || !opts.to.length)) {
       throw new Error('[mail-time] `mailOptions.to` is required and must be a string or non-empty Array');
     }
 
