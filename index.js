@@ -139,8 +139,16 @@ module.exports = class MailTime {
     }
 
     this.collection = opts.db.collection('__mailTimeQueue__' + this.prefix);
-    this.collection.ensureIndex({to: 1, isSent: 1});
-    this.collection.ensureIndex({sendAt: 1, isSent: 1, tries: 1}, {background: true});
+    this.collection.createIndex({to: 1, isSent: 1}, (indexError) => {
+      if (indexError) {
+        _log('[mail-time] [createIndex]', indexError);
+      }
+    });
+    this.collection.createIndex({sendAt: 1, isSent: 1, tries: 1}, {background: true}, (indexError) => {
+      if (indexError) {
+        _log('[mail-time] [createIndex]', indexError);
+      }
+    });
     // Schema:
     // _id
     // to          {String|[String]}
@@ -252,7 +260,7 @@ module.exports = class MailTime {
       }, {
         isSent: true,
         sendAt: {
-          $lt: new Date(+new Date() - (this.interval * 4))
+          $lt: new Date(Date.now() - (this.interval * 4))
         },
         tries: {
           $lt: this.maxTries
@@ -261,7 +269,7 @@ module.exports = class MailTime {
     }, {
       $set: {
         isSent: true,
-        sendAt: new Date(+new Date() + this.interval)
+        sendAt: new Date(Date.now() + this.interval)
       },
       $inc: {
         tries: 1
@@ -402,7 +410,7 @@ module.exports = class MailTime {
         to: opts.to,
         isSent: false
       }, {
-        fields: {
+        projection: {
           _id: 1,
           mailOptions: 1
         }

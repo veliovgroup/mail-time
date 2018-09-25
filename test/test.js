@@ -31,7 +31,7 @@ describe('MailTime Instance', function () {
   this.timeout(85000);
 
   (async function() {
-    const client = await MongoClient.connect(mongoAddr);
+    const client = await MongoClient.connect(mongoAddr, { useNewUrlParser: true });
     const db = client.db(dbName);
 
     transports.push(nodemailer.createTransport({
@@ -56,7 +56,7 @@ describe('MailTime Instance', function () {
       concatEmails: true
     });
 
-    mailQueue.collection.remove({});
+    mailQueue.collection.deleteMany({});
 
     describe('MailTime Instance', function () {
       it('Check MailTime instance properties', function () {
