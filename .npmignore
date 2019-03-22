@@ -1,4 +1,7 @@
-node_modules
 .npm
-template.html
+.github
+node_modules
+
 ascii
+cover.png
+template.html
