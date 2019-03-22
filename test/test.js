@@ -82,12 +82,12 @@ describe('MailTime Instance', function () {
     });
 
     describe('sendMail', function () {
-      this.slow(35000);
-      this.timeout(62000);
+      this.slow(10000);
+      this.timeout(20000);
 
       it('sendMail Template placeholders render', function (done) {
         mailQueue.sendMail({
-          to: 'test1@email.com',
+          to: 'mail-time-tests-1@md5hashing.net',
           subject: 'You\'ve got an email!',
           user: 'John',
           baseUrl: '<b>http://example.com</b>',
@@ -98,19 +98,19 @@ describe('MailTime Instance', function () {
 
         setTimeout(() => {
           mailQueue.collection.findOne({
-            to: 'test1@email.com'
+            to: 'mail-time-tests-1@md5hashing.net'
           }, (findError, task) => {
             const rendered = mailQueue.___compileMailOpts(transports[0], task);
             assert.equal(rendered.html, '<p>Hi John, <b>http://example.com</b></p> http://example.com', 'HTML template is properly rendered');
             assert.equal(rendered.text, 'John, http://example.com', 'Text template is properly rendered');
             done();
           });
-        }, 2500);
+        }, 768);
       });
 
       it('sendMail with no template', function (done) {
         mailQueue.sendMail({
-          to: 'test2@email.com',
+          to: 'mail-time-tests-2@md5hashing.net',
           subject: 'You\'ve got an email!',
           user: 'John',
           text: 'Plain text',
@@ -119,19 +119,19 @@ describe('MailTime Instance', function () {
 
         setTimeout(() => {
           mailQueue.collection.findOne({
-            to: 'test2@email.com'
+            to: 'mail-time-tests-2@md5hashing.net'
           }, (findError, task) => {
             const rendered = mailQueue.___compileMailOpts(transports[0], task);
             assert.equal(rendered.html, '<p>Plain text</p>', 'HTML template is properly rendered');
             assert.equal(rendered.text, 'Plain text', 'Text template is properly rendered');
             done();
           });
-        }, 2500);
+        }, 768);
       });
 
       it('sendMail with simple template', function (done) {
         mailQueue.sendMail({
-          to: 'test3@email.com',
+          to: 'mail-time-tests-3@md5hashing.net',
           userName: 'Mike',
           subject: 'Sign up confirmation',
           text: 'Hello {{userName}}, \r\n Thank you for registration \r\n Your login: {{to}}',
@@ -141,14 +141,14 @@ describe('MailTime Instance', function () {
 
         setTimeout(() => {
           mailQueue.collection.findOne({
-            to: 'test3@email.com'
+            to: 'mail-time-tests-3@md5hashing.net'
           }, (findError, task) => {
             const rendered = mailQueue.___compileMailOpts(transports[0], task);
-            assert.equal(rendered.html, '<body><div style="text-align: center"><h1>Hello Mike</h1><p><ul><li>Thank you for registration</li><li>Your login: test3@email.com</li></ul></p></div></body>', 'HTML template is properly rendered');
-            assert.equal(rendered.text, 'Hello Mike, \r\n Thank you for registration \r\n Your login: test3@email.com', 'Text template is properly rendered');
+            assert.equal(rendered.html, '<body><div style="text-align: center"><h1>Hello Mike</h1><p><ul><li>Thank you for registration</li><li>Your login: mail-time-tests-3@md5hashing.net</li></ul></p></div></body>', 'HTML template is properly rendered');
+            assert.equal(rendered.text, 'Hello Mike, \r\n Thank you for registration \r\n Your login: mail-time-tests-3@md5hashing.net', 'Text template is properly rendered');
             done();
           });
-        }, 2500);
+        }, 768);
       });
     });
   })();
