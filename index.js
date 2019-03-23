@@ -1,8 +1,15 @@
 const JoSk   = require('josk');
 const NoOp   = () =>  {};
 const merge  = require('deepmerge');
-const _debug = console.info;
-const _log   = console.error;
+const _debug = console.info.bind(console);
+const _log   = console.error.bind(console);
+
+const mongoErrorHandler = (error) => {
+  if (error) {
+    console.trace();
+    _log('[mail-time] [mongoErrorHandler]:', error);
+  }
+};
 
 let equals;
 equals = (a, b) => {
@@ -520,7 +527,7 @@ module.exports = class MailTime {
           isSent: false,
           transport: transportIndex
         }
-      }, NoOp);
+      }, mongoErrorHandler);
 
       if (this.debug === true) {
         _debug('[mail-time] Re-send Attempt #' + (task.tries) + ', transport #' + transportIndex + ' to: ', task.mailOptions[0].to, error);
