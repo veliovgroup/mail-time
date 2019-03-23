@@ -27,7 +27,7 @@ While *Client* is only put emails into the queue.
 ## Main features:
 
 - 👷‍♂️ ~85% tests coverage
-- 📦 Single dependency, written from scratch for top performance
+- 📦 Two simple dependencies, written from scratch for top performance
 - 😎 Synchronize email queue across multiple servers
 - 💪 Bulletproof design, built-in retries
 
