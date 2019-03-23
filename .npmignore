@@ -1,7 +1,11 @@
 .npm
 .github
+.DS_Store
+.eslintcache
 node_modules
+npm-debug.log*
 
 ascii
 cover.png
+cover.jpg
 template.html
