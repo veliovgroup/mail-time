@@ -307,7 +307,7 @@ module.exports = class MailTime {
 
       const task = (result !== null && typeof result === 'object') ? result.value : null;
       if (findUpdateError) {
-        this.___handleError(task, findUpdateError);
+        this.___handleError(task, findUpdateError, {});
         return;
       }
 
@@ -339,7 +339,12 @@ module.exports = class MailTime {
 
           transport.sendMail(_mailOpts, (error, info) => {
             if (error) {
-              this.___handleError(task, error);
+              this.___handleError(task, error, info);
+              return;
+            }
+
+            if (!info.accepted.length) {
+              this.___handleError(task, 'Message not accepted or Greeting never received', info);
               return;
             }
 
@@ -352,8 +357,8 @@ module.exports = class MailTime {
 
               const _id = task._id.toHexString();
               if (this.callbacks[_id] && this.callbacks[_id].length) {
-                this.callbacks[_id].forEach((cb, index) => {
-                  cb(void 0, info, task.mailOptions[index]);
+                this.callbacks[_id].forEach((cb, i) => {
+                  cb(void 0, info, task.mailOptions[i]);
                 });
               }
               delete this.callbacks[_id];
@@ -365,7 +370,7 @@ module.exports = class MailTime {
           if (this.debug === true) {
             _log('[mail-time] Exception during runtime:', e);
           }
-          this.___handleError(task, e);
+          this.___handleError(task, e, {});
         }
       });
 
@@ -389,7 +394,7 @@ module.exports = class MailTime {
    @param opts          {Object}   - Letter options with next properties:
    @param opts.sendAt   {Date}     - When email should be sent
    @param opts.template {String}   - Template string
-   @param opts[key]     {mix}      - Other MailOptions according to NodeMailer lib
+   @param opts[key]     {mix}      - Other MailOptions according to NodeMailer lib documentation
    @param callback      {Function} - [OPTIONAL] Callback function
    @returns {void}
    */
@@ -496,9 +501,10 @@ module.exports = class MailTime {
    @name ___handleError
    @param task  {Object} - Email task record form Mongo
    @param error {mix}    - Error String/Object/Error
+   @param info  {Object} - Info object returned from nodemailer
    @returns {void}
    */
-  ___handleError(task, error) {
+  ___handleError(task, error, info) {
     if (!task) {
       return;
     }
@@ -514,7 +520,7 @@ module.exports = class MailTime {
         const _id = task._id.toHexString();
         if (this.callbacks[_id] && this.callbacks[_id].length) {
           this.callbacks[_id].forEach((cb, i) => {
-            cb(error, void 0, task.mailOptions[i]);
+            cb(error, info, task.mailOptions[i]);
           });
         }
         delete this.callbacks[_id];
