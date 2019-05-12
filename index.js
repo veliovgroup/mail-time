@@ -88,7 +88,7 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
 
 module.exports = class MailTime {
   constructor (opts) {
-    if (!opts || typeof opts !== 'object') {
+    if (!opts || typeof opts !== 'object' || opts === null) {
       throw new TypeError('[mail-time] Configuration object must be passed into MailTime constructor');
     }
 
@@ -139,6 +139,15 @@ module.exports = class MailTime {
 
     if (this.concatThrottling < 2048) {
       this.concatThrottling = 3072;
+    }
+
+    if (this.debug === true) {
+      _debug('[mail-time] DEBUG ON {debug: true}');
+      _debug(`[mail-time] INITIALIZING [type: ${this.type}]`);
+      _debug(`[mail-time] INITIALIZING [strategy: ${this.strategy}]`);
+      _debug(`[mail-time] INITIALIZING [prefix: ${this.prefix}]`);
+      _debug(`[mail-time] INITIALIZING [maxTries: ${this.maxTries}]`);
+      _debug(`[mail-time] INITIALIZING [failsToNext: ${this.failsToNext}]`);
     }
 
     if (opts.type === 'server' && (this.transports.constructor !== Array || !this.transports.length)) {
@@ -197,11 +206,11 @@ module.exports = class MailTime {
   ___compileMailOpts(transport, task) {
     let _mailOpts = {};
 
-    if (transport._options && typeof transport._options === 'object' && transport._options.mailOptions) {
+    if (transport._options && typeof transport._options === 'object' && transport._options !== null && transport._options.mailOptions) {
       _mailOpts = merge(_mailOpts, transport._options.mailOptions);
     }
 
-    if (transport.options && typeof transport.options === 'object' && transport.options.mailOptions) {
+    if (transport.options && typeof transport.options === 'object' && transport.options !== null && transport.options.mailOptions) {
       _mailOpts = merge(_mailOpts, transport.options.mailOptions);
     }
 
@@ -296,7 +305,7 @@ module.exports = class MailTime {
         ready();
       });
 
-      const task = (typeof result === 'object') ? result.value : null;
+      const task = (result !== null && typeof result === 'object') ? result.value : null;
       if (findUpdateError) {
         this.___handleError(task, findUpdateError);
         return;

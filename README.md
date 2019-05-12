@@ -144,8 +144,23 @@ const MailTime = require('mail-time');
 Create nodemailer's transports (see [nodemailer docs](https://github.com/nodemailer/nodemailer/tree/v2#setting-up)):
 
 ```js
-const nodemailer = require('nodemailer');
 const transports = [];
+const nodemailer = require('nodemailer');
+
+// Use DIRECT transport
+// To enable sending email from localhost 
+// install "nodemailer-direct-transport" NPM package:
+const directTransport = require('nodemailer-direct-transport');
+const directTransportOpts = {
+  pool: false,
+  direct: true,
+  name: 'mail.example.com',
+  from: 'no-reply@example.com',
+};
+transports.push(nodemailer.createTransport(directTransport(directTransportOpts)));
+// IMPORTANT: Copy-paste passed options from directTransport() to
+// Transport's "options" property, to make sure it's available to MailTime package:
+transports.push[0].options = directTransportOpts;
 
 // Private SMTP
 transports.push(nodemailer.createTransport({
@@ -200,7 +215,7 @@ MongoClient.connect(process.env.MONGO_URL, (error, client) => {
     from(transport) {
       // To pass spam-filters `from` field should be correctly set
       // for each transport, check `transport` object for more options
-      return '"Awesome App" <' + transport._options.from + '>';
+      return '"Awesome App" <' + transport.options.from + '>';
     },
     concatEmails: true, // Concatenate emails to the same addressee
     concatDelimiter: '<h1>{{{subject}}}</h1>', // Start each concatenated email with it's own subject
