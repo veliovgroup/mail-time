@@ -343,7 +343,7 @@ module.exports = class MailTime {
               return;
             }
 
-            if (!info.accepted.length) {
+            if (info.accepted && !info.accepted.length) {
               this.___handleError(task, 'Message not accepted or Greeting never received', info);
               return;
             }
