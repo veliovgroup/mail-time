@@ -1,9 +1,14 @@
 .npm
 .github
+.meteor
 .DS_Store
+.versions
 .eslintcache
 node_modules
 npm-debug.log*
+
+package.js
+test-meteor.js
 
 ascii
 cover.png
