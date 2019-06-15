@@ -20,6 +20,8 @@ While *Client* is only put emails into the queue.
   - [As Micro-Service](https://github.com/VeliovGroup/Mail-Time#cluster-issue)
 - [Features](https://github.com/VeliovGroup/Mail-Time#features)
 - [Installation](https://github.com/VeliovGroup/Mail-Time#installation)
+- [Install](https://github.com/VeliovGroup/Meteor-Mailer#installation--import-via-npm) as [NPM Package](https://www.npmjs.com/package/mail-time)
+- [Install](https://github.com/VeliovGroup/Meteor-Mailer#installation--import-via-atmosphere) as [Atmosphere package](https://atmospherejs.com/ostrio/mailer)
 - [Usage example](https://github.com/VeliovGroup/Mail-Time#basic-usage)
 - [API](https://github.com/VeliovGroup/Mail-Time#api)
   - [*Constructor*](https://github.com/VeliovGroup/Mail-Time#new-mailtimeopts-constructor)
@@ -35,7 +37,7 @@ While *Client* is only put emails into the queue.
 - 😎 Synchronize email queue across multiple servers
 - 💪 Bulletproof design, built-in retries
 
-## How it works?:
+## How does it work?:
 
 ### Single point of failure
 
@@ -135,6 +137,34 @@ npm install --save mail-time
 
 # for node@<8.9.0
 npm install --save mail-time@=0.1.7
+```
+
+## Installation & Import (*via NPM*):
+
+Install NPM *MailTime* package:
+
+```shell
+meteor npm install --save mail-time
+```
+
+ES6 Import:
+
+```js
+import MailTime from 'mail-time';
+```
+
+## Installation & Import (*via Atmosphere*):
+
+Install Atmosphere *ostrio:mailer* package:
+
+```shell
+meteor add ostrio:mailer
+```
+
+ES6 Import:
+
+```js
+import MailTime from 'meteor/ostrio:mailer';
 ```
 
 ## Basic usage
@@ -323,13 +353,34 @@ mailQueue.sendMail({
 
 ## Testing
 
+1. Clone this package
+2. In Terminal (*Console*) go to directory where package is cloned
+3. Then run:
+
+Test NPM package:
+
 ```shell
 # Before run tests make sure NODE_ENV === development
 # Install NPM dependencies
 npm install --save-dev
 
 # Before run tests you need to have running MongoDB
-MONGO_URL="mongodb://127.0.0.1:27017/testCollectionName" npm test
+MONGO_URL="mongodb://127.0.0.1:27017/npm-mail-time-test-001" npm test
+
+# Be patient, tests are taking around 2 mins
+```
+
+Test Atmosphere (meteor.js) package:
+
+```shell
+# Default
+meteor test-packages ./ --driver-package=meteortesting:mocha
+
+# With custom port
+meteor test-packages ./ --driver-package=meteortesting:mocha --port 8888
+
+# With local MongoDB and custom port
+MONGO_URL="mongodb://127.0.0.1:27017/meteor-mail-time-test-001" meteor test-packages ./ --driver-package=meteortesting:mocha --port 8888
 
 # Be patient, tests are taking around 2 mins
 ```

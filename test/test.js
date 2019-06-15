@@ -2,13 +2,15 @@ if (!process.env.MONGO_URL) {
   throw new Error('MONGO_URL env.var is not defined! Please run test with MONGO_URL, like `MONGO_URL=mongodb://127.0.0.1:27017/dbname npm test`');
 }
 
-const MailTime    = require('mail-time');
-const nodemailer  = require('nodemailer');
-const MongoClient = require('mongodb').MongoClient;
-const mongoAddr   = (process.env.MONGO_URL || '');
-const dbName      = mongoAddr.split('/').pop().replace(/\/$/, '');
-const transports  = [];
-const DEBUG       = false;
+const MailTime        = require('mail-time');
+const nodemailer      = require('nodemailer');
+const MongoClient     = require('mongodb').MongoClient;
+const directTransport = require('nodemailer-direct-transport');
+
+const mongoAddr  = (process.env.MONGO_URL || '');
+const dbName     = mongoAddr.split('/').pop().replace(/\/$/, '');
+const transports = [];
+const DEBUG      = false;
 
 const { assert }       = require('chai');
 const { it, describe } = require('mocha');
@@ -34,7 +36,7 @@ describe('MailTime Instance', function () {
     const client = await MongoClient.connect(mongoAddr, { useNewUrlParser: true });
     const db = client.db(dbName);
 
-    transports.push(nodemailer.createTransport({
+    transports.push(nodemailer.createTransport(directTransport({
       pool: false,
       direct: true,
       name: 'example.com',
@@ -43,7 +45,7 @@ describe('MailTime Instance', function () {
       connectionTimeout: 30000,
       greetingTimeout: 15000,
       socketTimeout: 45000
-    }));
+    })));
 
     const mailQueue = new MailTime({
       db,
