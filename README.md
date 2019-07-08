@@ -182,7 +182,7 @@ const transports = [];
 const nodemailer = require('nodemailer');
 
 // Use DIRECT transport
-// To enable sending email from localhost 
+// To enable sending email from localhost
 // install "nodemailer-direct-transport" NPM package:
 const directTransport = require('nodemailer-direct-transport');
 const directTransportOpts = {
@@ -193,8 +193,8 @@ const directTransportOpts = {
 };
 transports.push(nodemailer.createTransport(directTransport(directTransportOpts)));
 // IMPORTANT: Copy-paste passed options from directTransport() to
-// Transport's "options" property, to make sure it's available to MailTime package:
-transports.push[0].options = directTransportOpts;
+// transport's "options" property, to make sure it's available to MailTime package:
+transports[0].options = directTransportOpts;
 
 // Private SMTP
 transports.push(nodemailer.createTransport({
@@ -234,6 +234,7 @@ We will need connect to MongoDB first:
 ```js
 const MongoClient = require('mongodb').MongoClient;
 const MailTime    = require('mail-time');
+const dbName      = 'DatabaseName';
 
 // We're using environment variable MONGO_URL
 // to store connection string to MongoDB
@@ -263,6 +264,7 @@ Create the *Client* to add emails to queue from other application units, like UI
 ```js
 const MongoClient = require('mongodb').MongoClient;
 const MailTime    = require('mail-time');
+const dbName      = 'DatabaseName';
 
 MongoClient.connect(process.env.MONGO_URL, (error, client) => {
   const db = client.db(dbName);
@@ -323,6 +325,7 @@ mailQueue.sendMail({
 Simple and bulletproof HTML template, see its [source](https://github.com/VeliovGroup/Mail-Time/blob/master/template.html). Usage:
 
 ```js
+const MailTime  = require('mail-time');
 // Make it default
 const mailQueue = new MailTime({
   db: db, // MongoDB
