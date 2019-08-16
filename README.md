@@ -303,7 +303,7 @@ mailQueue.sendMail({
 - `opts.prefix` {*String*} - Use unique prefixes to create multiple `MailTime` instances on same MongoDB
 - `opts.maxTries` {*Number*} - How many times resend failed emails, default - `60`
 - `opts.interval` {*Number*} - Interval in *seconds* between send re-tries, default - `60`
-- `opts.history` {*Boolean*} - clear and remove to the history collection for tracing when you are in trouble - `false`
+- `opts.history` {*Boolean*} - clear and remove to the history collection for tracing. It' helpful when you are in trouble - `false`
 - `opts.concatEmails` {*Boolean*} - Concatenate email by `to` field, default - `false`
 - `opts.concatSubject` {*String*} - Email subject used in concatenated email, default - `Multiple notifications`
 - `opts.concatDelimiter` {*String*} - HTML or plain string delimiter used between concatenated email, default - `<hr>`
