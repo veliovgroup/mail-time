@@ -509,7 +509,7 @@ module.exports = class MailTime {
       return;
     }
 
-    if (task.tries > this.maxTries) {
+    if (task.tries >= this.maxTries) {
       this.collection.deleteOne({
         _id: task._id
       }, () => {
