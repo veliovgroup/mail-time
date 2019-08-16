@@ -100,6 +100,7 @@ module.exports = class MailTime {
     this.type        = (!opts.type || (opts.type !== 'client' && opts.type !== 'server')) ? 'server' : opts.type;
     this.debug       = (opts.debug !== true) ? false : true;
     this.prefix      = opts.prefix || '';
+    this.history     = opts.history || false;
     this.maxTries    = ((opts.maxTries && !isNaN(opts.maxTries)) ? parseInt(opts.maxTries) : 60) + 1;
     this.interval    = ((opts.interval && !isNaN(opts.interval)) ? parseInt(opts.interval) : 60) * 1000;
     this.template    = (typeof opts.template === 'string') ? opts.template : '{{{html}}}';
@@ -155,6 +156,9 @@ module.exports = class MailTime {
     }
 
     this.collection = opts.db.collection('__mailTimeQueue__' + this.prefix);
+    if (this.history) {
+      this.historyCollection = opts.db.collection('__mailTimeHistory__' + this.prefix);
+    }
     this.collection.createIndex({to: 1, isSent: 1}, (indexError) => {
       if (indexError) {
         _log('[mail-time] [createIndex]', indexError);
@@ -227,7 +231,9 @@ module.exports = class MailTime {
         } else {
           _mailOpts.html = this.___render(task.mailOptions[i].html, task.mailOptions[i]);
         }
-        delete task.mailOptions[i].html;
+        if (!this.history) {
+          delete task.mailOptions[i].html;
+        }
       }
 
       if (task.mailOptions[i].text) {
@@ -236,7 +242,9 @@ module.exports = class MailTime {
         } else {
           _mailOpts.text = this.___render(task.mailOptions[i].text, task.mailOptions[i]);
         }
-        delete task.mailOptions[i].text;
+        if (!this.history) {
+          delete task.mailOptions[i].text;
+        }
       }
 
       _mailOpts = merge(_mailOpts, task.mailOptions[i]);
@@ -276,7 +284,7 @@ module.exports = class MailTime {
       }, {
         isSent: true,
         sendAt: {
-          $lt: new Date(Date.now() - (this.interval * 4))
+          $lt: new Date(Date.now() - (this.interval * this.failsToNext))
         },
         tries: {
           $lt: this.maxTries
@@ -292,7 +300,7 @@ module.exports = class MailTime {
       }
     }, {
       returnOriginal: false,
-      projection: {
+      projection: !this.history && {
         _id: 1,
         tries: 1,
         template: 1,
@@ -347,22 +355,10 @@ module.exports = class MailTime {
               this.___handleError(task, 'Message not accepted or Greeting never received', info);
               return;
             }
-
-            this.collection.deleteOne({
-              _id: task._id
-            }, () => {
-              if (this.debug === true) {
-                _debug('[mail-time] email successfully sent, attempts: #' + (task.tries) + ', transport #' + transportIndex + ' to: ', _mailOpts.to);
-              }
-
-              const _id = task._id.toHexString();
-              if (this.callbacks[_id] && this.callbacks[_id].length) {
-                this.callbacks[_id].forEach((cb, i) => {
-                  cb(void 0, info, task.mailOptions[i]);
-                });
-              }
-              delete this.callbacks[_id];
-            });
+            
+            task.msg = '[mail-time] email successfully sent, attempts: #' + (task.tries) + ', transport #' + transportIndex + ' to: ', _mailOpts.to;
+              
+            this.__clear(task, error, info);
 
             return;
           });
@@ -498,6 +494,46 @@ module.exports = class MailTime {
 
   /*
    @memberOf MailTime
+   @name __clear
+   @param task  {Object} - Email task record form Mongo
+   @param error {mix}    - Error String/Object/Error
+   @param info  {Object} - Info object returned from nodemailer
+   @returns {void}
+   */
+  __clear(task, error, info) {
+    this.collection.deleteOne({
+      _id: task._id
+    }, () => {
+      if (this.debug === true) {
+        if (task.tries > this.maxTries) {
+          task.msg && _log(task.msg, error);
+        } else {
+          task.msg && _debug(task.msg);
+        }
+        error && _log(error);
+      }
+      const _id = task._id.toHexString();
+      if (this.callbacks[_id] && this.callbacks[_id].length) {
+        this.callbacks[_id].forEach((cb, i) => {
+          cb(error, info, task.mailOptions[i]);
+        });
+      }
+      delete this.callbacks[_id];
+    });
+    
+    if (this.history && this.historyCollection) {
+      this.historyCollection.insertOne(task, (insertError, r) => {
+        if (insertError) {
+          if (this.debug === true) {
+            _log('[mail-time] something went wrong, can\'t remove task to history collection!');
+          }
+        }
+      });
+    }
+  }
+
+  /*
+   @memberOf MailTime
    @name ___handleError
    @param task  {Object} - Email task record form Mongo
    @param error {mix}    - Error String/Object/Error
@@ -510,21 +546,9 @@ module.exports = class MailTime {
     }
 
     if (task.tries >= this.maxTries) {
-      this.collection.deleteOne({
-        _id: task._id
-      }, () => {
-        if (this.debug === true) {
-          _log('[mail-time] Giving up trying send email after ' + (task.tries) + ' attempts to: ', task.mailOptions[0].to, error);
-        }
-
-        const _id = task._id.toHexString();
-        if (this.callbacks[_id] && this.callbacks[_id].length) {
-          this.callbacks[_id].forEach((cb, i) => {
-            cb(error, info, task.mailOptions[i]);
-          });
-        }
-        delete this.callbacks[_id];
-      });
+      task.isSent = false;
+      task.msg = '[mail-time] Giving up trying send email after ' + (task.tries) + ' attempts to: ' + task.mailOptions[0].to;
+      this.__clear(task, error, info);
     } else {
       let transportIndex = task.transport;
 
