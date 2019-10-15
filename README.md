@@ -294,21 +294,24 @@ mailQueue.sendMail({
 ### `new MailTime(opts)` constructor
 
 - `opts` {*Object*} - Configuration object
-- `opts.db` {*Db*} - Mongo's `Db` instance. For example returned in callback of `MongoClient.connect()`
-- `opts.type` {*String*} - `client` or `server`, default - `server`
-- `opts.from` {*Function*} - A function which returns *String* of `from` field, format: `"MyApp" <user@example.com>`
-- `opts.transports` {*Array*} - An array of `nodemailer`'s transports, returned from `nodemailer.createTransport({})`
-- `opts.strategy` {*String*} - `backup` or `balancer`, default - `backup`. If set to `backup`, first transport will be used unless failed to send `failsToNext` times. If set to `balancer` - transports will be used equally in round robin chain
-- `opts.failsToNext` {*Number*} - After how many failed "send attempts" switch to next transport, applied only for `backup` strategy, default - `4`
-- `opts.prefix` {*String*} - Use unique prefixes to create multiple `MailTime` instances on same MongoDB
-- `opts.maxTries` {*Number*} - How many times resend failed emails, default - `60`
-- `opts.interval` {*Number*} - Interval in *seconds* between send re-tries, default - `60`
-- `opts.concatEmails` {*Boolean*} - Concatenate email by `to` field, default - `false`
-- `opts.concatSubject` {*String*} - Email subject used in concatenated email, default - `Multiple notifications`
-- `opts.concatDelimiter` {*String*} - HTML or plain string delimiter used between concatenated email, default - `<hr>`
-- `opts.concatThrottling` {*Number*} - Time in *seconds* while emails waiting to be concatenated, default - `60`
-- `opts.debug` {*Boolean*} - Print queue logs, default - `false`
-- `opts.template` {*String*} - Mustache-like template, default - `{{{html}}}`, all options passed to `sendMail` is available in Template, like `to`, `subject`, `text`, `html` or any other custom option. Use `{{opt}}` for string placeholders and `{{{opt}}}` for html placeholders
+- `opts.db` {*Db*} - [Required] Mongo's `Db` instance. For example returned in callback of `MongoClient.connect()`
+- `opts.type` {*String*} - [Optional] `client` or `server`, default - `server`
+- `opts.from` {*Function*} - [Optional] A function which returns *String* of `from` field, format: `"MyApp" <user@example.com>`
+- `opts.transports` {*Array*} - [Optional] An array of `nodemailer`'s transports, returned from `nodemailer.createTransport({})`
+- `opts.strategy` {*String*} - [Optional] `backup` or `balancer`, default - `backup`. If set to `backup`, first transport will be used unless failed to send `failsToNext` times. If set to `balancer` - transports will be used equally in round robin chain
+- `opts.failsToNext` {*Number*} - [Optional] After how many failed "send attempts" switch to next transport, applied only for `backup` strategy, default - `4`
+- `opts.prefix` {*String*} - [Optional] Use unique prefixes to create multiple `MailTime` instances on same MongoDB
+- `opts.maxTries` {*Number*} - [Optional] How many times resend failed emails, default - `60`
+- `opts.interval` {*Number*} - [Optional] Interval in *seconds* between send re-tries, default - `60`
+- `opts.zombieTime` {*Number*} - [Optional] Time in *milliseconds*, after this period - pending email will be interpreted as "*zombie*". This parameter allows to rescue pending email from "*zombie* mode" in case when: server was rebooted, exception during runtime was thrown, or caused by bad logic, default - `32786`. This option is passed directly to [`JoSk` package](https://github.com/VeliovGroup/josk#api)
+- `opts.concatEmails` {*Boolean*} - [Optional] Concatenate email by `to` field, default - `false`
+- `opts.concatSubject` {*String*} - [Optional] Email subject used in concatenated email, default - `Multiple notifications`
+- `opts.concatDelimiter` {*String*} - [Optional] HTML or plain string delimiter used between concatenated email, default - `<hr>`
+- `opts.concatThrottling` {*Number*} - [Optional] Time in *seconds* while emails are waiting to be concatenated, default - `60`
+- `opts.revolvingInterval` {*Number*} - [Optional] Interval in *milliseconds* in between queue checks, default - `256`. Recommended value — between `opts.minRevolvingDelay` and `opts.maxRevolvingDelay`
+- `opts.minRevolvingDelay` {*Number*} - [Optional] Minimum revolving delay — the minimum delay between tasks executions in *milliseconds*, default - `64`. This option is passed directly to [`JoSk` package](https://github.com/VeliovGroup/josk#api)
+- `opts.maxRevolvingDelay` {*Number*} - [Optional] Maximum revolving delay — the maximum delay between tasks executions in *milliseconds*, default - `256`. This option is passed directly to [`JoSk` package](https://github.com/VeliovGroup/josk#api)
+- `opts.template` {*String*} - [Optional] Mustache-like template, default - `{{{html}}}`, all options passed to `sendMail` is available in Template, like `to`, `subject`, `text`, `html` or any other custom option. Use `{{opt}}` for string placeholders and `{{{opt}}}` for html placeholders
 
 ### `sendMail(opts [, callback])`
 
