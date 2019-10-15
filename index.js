@@ -96,14 +96,18 @@ module.exports = class MailTime {
       throw new Error('[mail-time] MongoDB database {db} option is required, like returned from `MongoClient.connect`');
     }
 
-    this.callbacks   = {};
-    this.type        = (!opts.type || (opts.type !== 'client' && opts.type !== 'server')) ? 'server' : opts.type;
-    this.debug       = (opts.debug !== true) ? false : true;
-    this.prefix      = opts.prefix || '';
-    this.maxTries    = ((opts.maxTries && !isNaN(opts.maxTries)) ? parseInt(opts.maxTries) : 60) + 1;
-    this.interval    = ((opts.interval && !isNaN(opts.interval)) ? parseInt(opts.interval) : 60) * 1000;
-    this.template    = (typeof opts.template === 'string') ? opts.template : '{{{html}}}';
-    this.zombieTime  = opts.zombieTime || 32786;
+    this.callbacks  = {};
+    this.type       = (!opts.type || (opts.type !== 'client' && opts.type !== 'server')) ? 'server' : opts.type;
+    this.debug      = (opts.debug !== true) ? false : true;
+    this.prefix     = opts.prefix || '';
+    this.maxTries   = ((opts.maxTries && !isNaN(opts.maxTries)) ? parseInt(opts.maxTries) : 59) + 1;
+    this.interval   = ((opts.interval && !isNaN(opts.interval)) ? parseInt(opts.interval) : 60) * 1000;
+    this.template   = (typeof opts.template === 'string') ? opts.template : '{{{html}}}';
+    this.zombieTime = opts.zombieTime || 32786;
+
+    this.revolvingInterval = opts.revolvingInterval || 256;
+    this.minRevolvingDelay = opts.minRevolvingDelay || 64;
+    this.maxRevolvingDelay = opts.maxRevolvingDelay || 512;
 
     if (this.interval < 2048 || isNaN(this.interval)) {
       this.interval = 3072;
@@ -117,7 +121,6 @@ module.exports = class MailTime {
     this.failsToNext = (opts.failsToNext && !isNaN(opts.failsToNext)) ? parseInt(opts.failsToNext) : 4;
     this.transports  = opts.transports || [];
     this.transport   = 0;
-
     this.from        = (() => {
       if (typeof opts.from === 'string') {
         return () => {
@@ -135,7 +138,7 @@ module.exports = class MailTime {
     this.concatEmails     = (opts.concatEmails !== true) ? false : true;
     this.concatSubject    = (opts.concatSubject && typeof opts.concatSubject === 'string') ? opts.concatSubject : 'Multiple notifications';
     this.concatDelimiter  = (opts.concatDelimiter && typeof opts.concatDelimiter === 'string') ? opts.concatDelimiter : '<hr>';
-    this.concatThrottling = ((opts.concatThrottling && !isNaN(opts.concatThrottling)) ? parseInt(opts.concatThrottling) : 60)  * 1000;
+    this.concatThrottling = ((opts.concatThrottling && !isNaN(opts.concatThrottling)) ? parseInt(opts.concatThrottling) : 60) * 1000;
 
     if (this.concatThrottling < 2048) {
       this.concatThrottling = 3072;
@@ -155,12 +158,12 @@ module.exports = class MailTime {
     }
 
     this.collection = opts.db.collection('__mailTimeQueue__' + this.prefix);
-    this.collection.createIndex({to: 1, isSent: 1}, (indexError) => {
+    this.collection.createIndex({ to: 1, isSent: 1 }, (indexError) => {
       if (indexError) {
         _log('[mail-time] [createIndex]', indexError);
       }
     });
-    this.collection.createIndex({sendAt: 1, isSent: 1, tries: 1}, {background: true}, (indexError) => {
+    this.collection.createIndex({ sendAt: 1, isSent: 1, tries: 1 }, { background: true }, (indexError) => {
       if (indexError) {
         _log('[mail-time] [createIndex]', indexError);
       }
@@ -186,12 +189,15 @@ module.exports = class MailTime {
     if (this.type === 'server') {
       this.scheduler = new JoSk({
         db: opts.db,
-        prefix: 'mailTimeQueue' + this.prefix,
+        debug: this.debug,
+        prefix: `mailTimeQueue${this.prefix}`,
         resetOnInit: false,
-        zombieTime: this.zombieTime
+        zombieTime: this.zombieTime,
+        minRevolvingDelay: this.minRevolvingDelay,
+        maxRevolvingDelay: this.maxRevolvingDelay
       });
 
-      this.scheduler.setInterval(this.___send.bind(this), 256, 'mailTimeQueue' + this.prefix);
+      this.scheduler.setInterval(this.___send.bind(this), this.revolvingInterval, `mailTimeQueue${this.prefix}`);
     }
   }
 
@@ -285,7 +291,7 @@ module.exports = class MailTime {
     }, {
       $set: {
         isSent: true,
-        sendAt: new Date(Date.now() + this.interval)
+        sendAt: new Date(Date.now() + (this.interval * 4))
       },
       $inc: {
         tries: 1
@@ -333,14 +339,14 @@ module.exports = class MailTime {
         try {
           const _mailOpts = this.___compileMailOpts(transport, task);
 
-          if (this.debug === true) {
-            _debug('[mail-time] Send attempt #' + (task.tries) + ', transport #' + transportIndex + ', to: ', task.mailOptions[0].to, 'from: ', _mailOpts.from);
-          }
-
           transport.sendMail(_mailOpts, (error, info) => {
             if (error) {
               this.___handleError(task, error, info);
               return;
+            }
+
+            if (this.debug === true) {
+              _debug('[mail-time] info.accepted isEmpty?', info.accepted, 'looks like there is no mail service for this domain or your server can\'t reach it, "main-time" NPM package will continue trying to send this important letter"');
             }
 
             if (info.accepted && !info.accepted.length) {
@@ -509,7 +515,7 @@ module.exports = class MailTime {
       return;
     }
 
-    if (task.tries > this.maxTries) {
+    if (task.tries >= this.maxTries) {
       this.collection.deleteOne({
         _id: task._id
       }, () => {
@@ -553,10 +559,12 @@ module.exports = class MailTime {
   /*
    @memberOf MailTime
    @name ___addToQueue
-   @param opts             {Object}   - Letter options with next properties:
-   @param opts.sendAt      {Date}     - When email should be sent
-   @param opts.mailOptions {Object}   - MailOptions according to NodeMailer lib
-   @param callback         {Function} - [OPTIONAL] Callback function
+   @param opts               {Object}   - Letter options with next properties:
+   @param opts.sendAt        {Date}     - When email should be sent
+   @param opts.template      {String}   - Email template
+   @param opts.mailOptions   {Object}   - MailOptions according to NodeMailer lib
+   @param opts.concatSubject {String}   - Email subject used when sending multiple concatenated emails
+   @param callback           {Function} - [OPTIONAL] Callback function
    @returns {void}
    */
   ___addToQueue(opts, callback) {
