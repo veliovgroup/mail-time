@@ -1,7 +1,9 @@
 const JoSk   = require('josk');
 const NoOp   = () =>  {};
 const merge  = require('deepmerge');
-const _debug = console.info.bind(console);
+const _debug = (...args) => {
+  console.info.call(console, '[DEBUG] [mail-time]', new Date, ...args);
+};
 const _log   = console.error.bind(console);
 
 const mongoErrorHandler = (error) => {
