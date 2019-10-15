@@ -1,15 +1,19 @@
 const JoSk   = require('josk');
 const NoOp   = () =>  {};
 const merge  = require('deepmerge');
-const _debug = (...args) => {
-  console.info.call(console, '[DEBUG] [mail-time]', new Date, ...args);
+const _debug = (isDebug, ...args) => {
+  if (isDebug) {
+    console.info.call(console, '[DEBUG] [mail-time]', new Date, ...args);
+  }
 };
-const _log   = console.error.bind(console);
+const _log   = (...args) => {
+  console.error.call(console, '[ERROR] [mail-time]', new Date, ...args);
+};
 
 const mongoErrorHandler = (error) => {
   if (error) {
     console.trace();
-    _log('[mail-time] [mongoErrorHandler]:', error);
+    _log('[mongoErrorHandler]:', error);
   }
 };
 
@@ -146,14 +150,12 @@ module.exports = class MailTime {
       this.concatThrottling = 3072;
     }
 
-    if (this.debug === true) {
-      _debug('[mail-time] DEBUG ON {debug: true}');
-      _debug(`[mail-time] INITIALIZING [type: ${this.type}]`);
-      _debug(`[mail-time] INITIALIZING [strategy: ${this.strategy}]`);
-      _debug(`[mail-time] INITIALIZING [prefix: ${this.prefix}]`);
-      _debug(`[mail-time] INITIALIZING [maxTries: ${this.maxTries}]`);
-      _debug(`[mail-time] INITIALIZING [failsToNext: ${this.failsToNext}]`);
-    }
+    _debug(this.debug, 'DEBUG ON {debug: true}');
+    _debug(this.debug, `INITIALIZING [type: ${this.type}]`);
+    _debug(this.debug, `INITIALIZING [strategy: ${this.strategy}]`);
+    _debug(this.debug, `INITIALIZING [prefix: ${this.prefix}]`);
+    _debug(this.debug, `INITIALIZING [maxTries: ${this.maxTries}]`);
+    _debug(this.debug, `INITIALIZING [failsToNext: ${this.failsToNext}]`);
 
     if (opts.type === 'server' && (this.transports.constructor !== Array || !this.transports.length)) {
       throw new Error('[mail-time] transports is required and must be an Array, like returned from `nodemailer.createTransport`');
@@ -162,12 +164,12 @@ module.exports = class MailTime {
     this.collection = opts.db.collection('__mailTimeQueue__' + this.prefix);
     this.collection.createIndex({ to: 1, isSent: 1 }, (indexError) => {
       if (indexError) {
-        _log('[mail-time] [createIndex]', indexError);
+        _log('[createIndex]', indexError);
       }
     });
     this.collection.createIndex({ sendAt: 1, isSent: 1, tries: 1 }, { background: true }, (indexError) => {
       if (indexError) {
-        _log('[mail-time] [createIndex]', indexError);
+        _log('[createIndex]', indexError);
       }
     });
     // Schema:
@@ -347,9 +349,7 @@ module.exports = class MailTime {
               return;
             }
 
-            if (this.debug === true) {
-              _debug('[mail-time] info.accepted isEmpty?', info.accepted, 'looks like there is no mail service for this domain or your server can\'t reach it, "main-time" NPM package will continue trying to send this important letter"');
-            }
+            _debug(this.debug, '[info.accepted] isEmpty?', info.accepted, 'looks like there is no mail service for this domain or your server can\'t reach it, "main-time" NPM package will continue trying to send this important letter"');
 
             if (info.accepted && !info.accepted.length) {
               this.___handleError(task, 'Message not accepted or Greeting never received', info);
@@ -359,9 +359,7 @@ module.exports = class MailTime {
             this.collection.deleteOne({
               _id: task._id
             }, () => {
-              if (this.debug === true) {
-                _debug('[mail-time] email successfully sent, attempts: #' + (task.tries) + ', transport #' + transportIndex + ' to: ', _mailOpts.to);
-              }
+              _debug(this.debug, `email successfully sent, attempts: #${task.tries}, transport #${transportIndex} to: `, _mailOpts.to);
 
               const _id = task._id.toHexString();
               if (this.callbacks[_id] && this.callbacks[_id].length) {
@@ -375,9 +373,7 @@ module.exports = class MailTime {
             return;
           });
         } catch (e) {
-          if (this.debug === true) {
-            _log('[mail-time] Exception during runtime:', e);
-          }
+          _log('Exception during runtime:', e);
           this.___handleError(task, e, {});
         }
       });
@@ -445,9 +441,7 @@ module.exports = class MailTime {
         }
       }, (findError, task) => {
         if (findError) {
-          if (this.debug === true) {
-            _log('[mail-time] something went wrong, can\'t send email to: ', opts.mailOptions[0].to, findError);
-          }
+          _debug(this.debug, 'something went wrong, can\'t send email to: ', opts.mailOptions[0].to, findError);
           callback(findError, void 0, task);
           return;
         }
@@ -471,9 +465,7 @@ module.exports = class MailTime {
             }
           }, (updateError) => {
             if (updateError) {
-              if (this.debug === true) {
-                _log('[mail-time] something went wrong, can\'t send email to: ', task.mailOptions[0].to, updateError);
-              }
+              _debug('something went wrong, can\'t send email to: ', task.mailOptions[0].to, updateError);
               callback(updateError, void 0, task);
             }
           });
@@ -521,9 +513,7 @@ module.exports = class MailTime {
       this.collection.deleteOne({
         _id: task._id
       }, () => {
-        if (this.debug === true) {
-          _log('[mail-time] Giving up trying send email after ' + (task.tries) + ' attempts to: ', task.mailOptions[0].to, error);
-        }
+        _debug(this.debug, `Giving up trying send email after ${task.tries} attempts to: `, task.mailOptions[0].to, error);
 
         const _id = task._id.toHexString();
         if (this.callbacks[_id] && this.callbacks[_id].length) {
@@ -552,9 +542,7 @@ module.exports = class MailTime {
         }
       }, mongoErrorHandler);
 
-      if (this.debug === true) {
-        _debug('[mail-time] Re-send Attempt #' + (task.tries) + ', transport #' + transportIndex + ' to: ', task.mailOptions[0].to, error);
-      }
+      _debug(this.debug, `Re-send Attempt #${task.tries}, transport #${transportIndex} to: `, task.mailOptions[0].to, error);
     }
   }
 
@@ -586,9 +574,7 @@ module.exports = class MailTime {
 
     this.collection.insertOne(task, (insertError, r) => {
       if (insertError) {
-        if (this.debug === true) {
-          _log('[mail-time] something went wrong, can\'t send email to: ', opts.mailOptions[0].to, insertError);
-        }
+        _log('something went wrong, can\'t send email to: ', opts.mailOptions[0].to, insertError);
         callback(insertError, void 0, opts);
         return;
       }
