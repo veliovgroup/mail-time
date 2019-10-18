@@ -371,7 +371,7 @@ Test NPM package:
 npm install --save-dev
 
 # Before run tests you need to have running MongoDB
-MONGO_URL="mongodb://127.0.0.1:27017/npm-mail-time-test-001" npm test
+DEBUG="true" EMAIL_DOMAIN="example.com" MONGO_URL="mongodb://127.0.0.1:27017/npm-mail-time-test-001" npm test
 
 # Be patient, tests are taking around 2 mins
 ```
@@ -380,13 +380,13 @@ Test Atmosphere (meteor.js) package:
 
 ```shell
 # Default
-meteor test-packages ./ --driver-package=meteortesting:mocha
+EMAIL_DOMAIN="example.com" meteor test-packages ./ --driver-package=meteortesting:mocha
 
 # With custom port
-meteor test-packages ./ --driver-package=meteortesting:mocha --port 8888
+DEBUG="true" EMAIL_DOMAIN="example.com" meteor test-packages ./ --driver-package=meteortesting:mocha --port 8888
 
 # With local MongoDB and custom port
-MONGO_URL="mongodb://127.0.0.1:27017/meteor-mail-time-test-001" meteor test-packages ./ --driver-package=meteortesting:mocha --port 8888
+DEBUG="true" EMAIL_DOMAIN="example.com" MONGO_URL="mongodb://127.0.0.1:27017/meteor-mail-time-test-001" meteor test-packages ./ --driver-package=meteortesting:mocha --port 8888
 
 # Be patient, tests are taking around 2 mins
 ```
