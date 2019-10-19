@@ -28,11 +28,11 @@ While *Client* is only put emails into the queue.
   - [`.send()`](https://github.com/VeliovGroup/Mail-Time#sendmailopts--callback)
   - [Default Template](https://github.com/VeliovGroup/Mail-Time#static-mailtimetemplate)
 - [Custom Templates](https://github.com/VeliovGroup/Mail-Time#template-example)
-- [~85% tests coverage](https://github.com/VeliovGroup/Mail-Time#testing)
+- [~92% tests coverage](https://github.com/VeliovGroup/Mail-Time#testing)
 
 ## Main features:
 
-- 👷‍♂️ ~85% tests coverage
+- 👷‍♂️ ~92% tests coverage
 - 📦 Two simple dependencies, written from scratch for top performance
 - 😎 Synchronize email queue across multiple servers
 - 💪 Bulletproof design, built-in retries
