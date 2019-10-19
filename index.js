@@ -538,6 +538,7 @@ module.exports = class MailTime {
       }, {
         $set: {
           isSent: false,
+          sendAt: new Date(Date.now() + this.interval),
           transport: transportIndex
         }
       }, mongoErrorHandler);
