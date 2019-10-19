@@ -3,17 +3,17 @@ const NoOp   = () =>  {};
 const merge  = require('deepmerge');
 const _debug = (isDebug, ...args) => {
   if (isDebug) {
-    console.info.call(console, '[DEBUG] [mail-time]', new Date, ...args);
+    console.info.call(console, '[DEBUG] [mail-time]', `${new Date}`, ...args);
   }
 };
-const _log   = (...args) => {
-  console.error.call(console, '[ERROR] [mail-time]', new Date, ...args);
+const _logError = (...args) => {
+  console.error.call(console, '[ERROR] [mail-time]', `${new Date}`, ...args);
 };
 
 const mongoErrorHandler = (error) => {
   if (error) {
     console.trace();
-    _log('[mongoErrorHandler]:', error);
+    _logError('[mongoErrorHandler]:', error);
   }
 };
 
@@ -164,12 +164,12 @@ module.exports = class MailTime {
     this.collection = opts.db.collection('__mailTimeQueue__' + this.prefix);
     this.collection.createIndex({ to: 1, isSent: 1 }, (indexError) => {
       if (indexError) {
-        _log('[createIndex]', indexError);
+        _logError('[createIndex]', indexError);
       }
     });
     this.collection.createIndex({ sendAt: 1, isSent: 1, tries: 1 }, { background: true }, (indexError) => {
       if (indexError) {
-        _log('[createIndex]', indexError);
+        _logError('[createIndex]', indexError);
       }
     });
     // Schema:
@@ -343,13 +343,12 @@ module.exports = class MailTime {
         try {
           const _mailOpts = this.___compileMailOpts(transport, task);
 
+          _debug(this.debug, '[sendMail] [sending] To:', _mailOpts.to);
           transport.sendMail(_mailOpts, (error, info) => {
             if (error) {
               this.___handleError(task, error, info);
               return;
             }
-
-            _debug(this.debug, '[info.accepted] isEmpty?', info.accepted, 'looks like there is no mail service for this domain or your server can\'t reach it, "main-time" NPM package will continue trying to send this important letter"');
 
             if (info.accepted && !info.accepted.length) {
               this.___handleError(task, 'Message not accepted or Greeting never received', info);
@@ -373,7 +372,7 @@ module.exports = class MailTime {
             return;
           });
         } catch (e) {
-          _log('Exception during runtime:', e);
+          _logError('Exception during runtime:', e);
           this.___handleError(task, e, {});
         }
       });
@@ -403,6 +402,7 @@ module.exports = class MailTime {
    @returns {void}
    */
   sendMail(opts = {}, callback = NoOp) {
+    _debug(this.debug, '[sendMail] [attempt] To:', opts.to);
     if (!opts.html && !opts.text) {
       throw new Error('`html` nor `text` field is presented, at least one of those fields is required');
     }
@@ -441,7 +441,7 @@ module.exports = class MailTime {
         }
       }, (findError, task) => {
         if (findError) {
-          _debug(this.debug, 'something went wrong, can\'t send email to: ', opts.mailOptions[0].to, findError);
+          _debug(this.debug, 'something went wrong, can\'t send email to: ', opts.to, findError);
           callback(findError, void 0, task);
           return;
         }
@@ -542,7 +542,7 @@ module.exports = class MailTime {
         }
       }, mongoErrorHandler);
 
-      _debug(this.debug, `Re-send Attempt #${task.tries}, transport #${transportIndex} to: `, task.mailOptions[0].to, error);
+      _debug(this.debug, `Next re-send attempt at ${new Date(Date.now() + this.interval)}: #${task.tries}/${this.maxTries}, transport #${transportIndex} to: `, task.mailOptions[0].to, error);
     }
   }
 
@@ -558,6 +558,7 @@ module.exports = class MailTime {
    @returns {void}
    */
   ___addToQueue(opts, callback) {
+    _debug(this.debug, '[sendMail] [adding to queue] To:', opts.mailOptions.to);
     const task = {
       tries: 0,
       isSent: false,
@@ -574,7 +575,7 @@ module.exports = class MailTime {
 
     this.collection.insertOne(task, (insertError, r) => {
       if (insertError) {
-        _log('something went wrong, can\'t send email to: ', opts.mailOptions[0].to, insertError);
+        _logError('something went wrong, can\'t send email to: ', opts.mailOptions[0].to, insertError);
         callback(insertError, void 0, opts);
         return;
       }
