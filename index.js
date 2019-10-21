@@ -12,8 +12,8 @@ const _logError = (...args) => {
 
 const mongoErrorHandler = (error) => {
   if (error) {
-    console.trace();
     _logError('[mongoErrorHandler]:', error);
+    console.trace();
   }
 };
 
@@ -286,7 +286,7 @@ module.exports = class MailTime {
       }, {
         isSent: true,
         sendAt: {
-          $lt: new Date(Date.now() - (this.interval * 4))
+          $lt: new Date(Date.now() - (this.zombieTime * 2))
         },
         tries: {
           $lt: this.maxTries
@@ -295,7 +295,7 @@ module.exports = class MailTime {
     }, {
       $set: {
         isSent: true,
-        sendAt: new Date(Date.now() + (this.interval * 4))
+        sendAt: new Date(Date.now() + (this.zombieTime * 2))
       },
       $inc: {
         tries: 1
