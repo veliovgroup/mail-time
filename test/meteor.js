@@ -1,8 +1,8 @@
-import { Meteor }      from 'meteor/meteor';
-import MailTime        from 'meteor/ostrio:mailer';
-import nodemailer      from 'nodemailer';
-import directTransport from 'nodemailer-direct-transport';
-import { assert }      from 'meteor/practicalmeteor:chai';
+import { MongoInternals } from 'meteor/mongo';
+import MailTime           from '../index.js';
+import nodemailer         from 'nodemailer';
+import directTransport    from 'nodemailer-direct-transport';
+import { assert }         from 'meteor/practicalmeteor:chai';
 
 if (!process.env.MONGO_URL) {
   throw new Error('MONGO_URL env.var is not defined! Please run test with MONGO_URL, like `MONGO_URL=mongodb://127.0.0.1:27017/dbname npm test`');
@@ -10,7 +10,7 @@ if (!process.env.MONGO_URL) {
 
 const transports = [];
 const DEBUG      = process.env.DEBUG === 'true' ? true : false;
-const db         = Meteor.users.rawDatabase();
+const db         = MongoInternals.defaultRemoteCollectionDriver().mongo.db;
 const domain     = process.env.EMAIL_DOMAIN || 'example.com';
 const TEST_TITLE = 'testSuiteMeteor';
 const CHECK_TIMEOUT = 2048;
@@ -79,9 +79,9 @@ const runTests = (type, concat) => {
         assert.equal(mailQueue.concatSubject, 'Multiple notifications', 'mailQueue has concatSubject');
         assert.equal(mailQueue.concatDelimiter, '<hr>', 'mailQueue has concatDelimiter');
         assert.equal(mailQueue.concatThrottling, 60000, 'mailQueue has concatThrottling');
-        assert.equal(mailQueue.revolvingInterval, 256, 'mailQueue has revolvingInterval');
-        assert.equal(mailQueue.minRevolvingDelay, 64, 'mailQueue has minRevolvingDelay');
-        assert.equal(mailQueue.maxRevolvingDelay, 512, 'mailQueue has maxRevolvingDelay');
+        assert.equal(mailQueue.revolvingInterval, 1536, 'mailQueue has revolvingInterval');
+        assert.equal(mailQueue.minRevolvingDelay, 512, 'mailQueue has minRevolvingDelay');
+        assert.equal(mailQueue.maxRevolvingDelay, 2048, 'mailQueue has maxRevolvingDelay');
       });
     });
 

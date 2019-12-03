@@ -40,17 +40,18 @@ describe('MailTime Instance', async function () {
     w: 'majority',
     wtimeout: 30000,
     poolSize: 15,
-    readConcern: {
-      level: 'majority'
-    },
+    // readConcern: {
+    //   level: 'majority'
+    // },
     readPreference: 'primary',
-    reconnectTries: 60,
+    // reconnectTries: 60,
     socketTimeoutMS: 720000,
     useNewUrlParser: true,
+    useUnifiedTopology: true,
     connectTimeoutMS: 120000,
-    reconnectInterval: 3072,
+    // reconnectInterval: 3072,
     connectWithNoPrimary: false,
-    appname: 'mail-time test suite'
+    appname: 'mail-time-test-suite'
   });
   const db = client.db(dbName);
 
@@ -103,9 +104,9 @@ describe('MailTime Instance', async function () {
           assert.equal(mailQueue.concatSubject, 'Multiple notifications', 'mailQueue has concatSubject');
           assert.equal(mailQueue.concatDelimiter, '<hr>', 'mailQueue has concatDelimiter');
           assert.equal(mailQueue.concatThrottling, 60000, 'mailQueue has concatThrottling');
-          assert.equal(mailQueue.revolvingInterval, 256, 'mailQueue has revolvingInterval');
-          assert.equal(mailQueue.minRevolvingDelay, 64, 'mailQueue has minRevolvingDelay');
-          assert.equal(mailQueue.maxRevolvingDelay, 512, 'mailQueue has maxRevolvingDelay');
+          assert.equal(mailQueue.revolvingInterval, 1536, 'mailQueue has revolvingInterval');
+          assert.equal(mailQueue.minRevolvingDelay, 512, 'mailQueue has minRevolvingDelay');
+          assert.equal(mailQueue.maxRevolvingDelay, 2048, 'mailQueue has maxRevolvingDelay');
         });
       });
 
