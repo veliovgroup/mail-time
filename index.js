@@ -17,6 +17,12 @@ const mongoErrorHandler = (error) => {
   }
 };
 
+const defaultWriteConcern = {
+  w: 1,
+  j: true,
+  wtimeout: 10240
+};
+
 let equals;
 equals = (a, b) => {
   let i;
@@ -111,9 +117,9 @@ module.exports = class MailTime {
     this.template   = (typeof opts.template === 'string') ? opts.template : '{{{html}}}';
     this.zombieTime = opts.zombieTime || 32786;
 
-    this.revolvingInterval = opts.revolvingInterval || 256;
-    this.minRevolvingDelay = opts.minRevolvingDelay || 64;
-    this.maxRevolvingDelay = opts.maxRevolvingDelay || 512;
+    this.revolvingInterval = opts.revolvingInterval || 1536;
+    this.minRevolvingDelay = opts.minRevolvingDelay || 512;
+    this.maxRevolvingDelay = opts.maxRevolvingDelay || 2048;
 
     if (this.interval < 2048 || isNaN(this.interval)) {
       this.interval = 3072;
@@ -274,7 +280,8 @@ module.exports = class MailTime {
    @returns {void}
    */
   ___send(ready) {
-    this.collection.findOneAndUpdate({
+    let finished = 0;
+    const cursor = this.collection.find({
       $or: [{
         isSent: false,
         sendAt: {
@@ -293,15 +300,6 @@ module.exports = class MailTime {
         }
       }]
     }, {
-      $set: {
-        isSent: true,
-        sendAt: new Date(Date.now() + (this.zombieTime * 2))
-      },
-      $inc: {
-        tries: 1
-      }
-    }, {
-      returnOriginal: false,
       projection: {
         _id: 1,
         tries: 1,
@@ -310,74 +308,94 @@ module.exports = class MailTime {
         mailOptions: 1,
         concatSubject: 1
       }
-    }, (findUpdateError, result) => {
-      process.nextTick(() => {
+    });
+
+    cursor.count((countError, count) => {
+      if (countError) {
         ready();
-      });
-
-      const task = (result !== null && typeof result === 'object') ? result.value : null;
-      if (findUpdateError) {
-        this.___handleError(task, findUpdateError, {});
+        _logError('[___send] [count] [countError]', countError);
         return;
       }
 
-      if (!task) {
-        return;
-      }
-
-      process.nextTick(() => {
-        let transport;
-        let transportIndex;
-        if (this.strategy === 'balancer') {
-          this.transport = this.transport + 1;
-          if (this.transport >= this.transports.length) {
-            this.transport = 0;
-          }
-          transportIndex = this.transport;
-          transport = this.transports[this.transport];
-        } else {
-          transportIndex = task.transport;
-          transport = this.transports[task.transport];
-        }
-
-        try {
-          const _mailOpts = this.___compileMailOpts(transport, task);
-
-          _debug(this.debug, '[sendMail] [sending] To:', _mailOpts.to);
-          transport.sendMail(_mailOpts, (error, info) => {
-            if (error) {
-              this.___handleError(task, error, info);
-              return;
+      if (count) {
+        cursor.forEach((task) => {
+          this.collection.updateOne({
+            _id: task._id
+          }, {
+            $set: {
+              isSent: true,
+              sendAt: new Date(Date.now() + (this.zombieTime * 2))
+            },
+            $inc: {
+              tries: 1
+            }
+          }, defaultWriteConcern, (updateError) => {
+            if (count === ++finished) {
+              ready();
             }
 
-            if (info.accepted && !info.accepted.length) {
-              this.___handleError(task, 'Message not accepted or Greeting never received', info);
-              return;
-            }
-
-            this.collection.deleteOne({
-              _id: task._id
-            }, () => {
-              _debug(this.debug, `email successfully sent, attempts: #${task.tries}, transport #${transportIndex} to: `, _mailOpts.to);
-
-              const _id = task._id.toHexString();
-              if (this.callbacks[_id] && this.callbacks[_id].length) {
-                this.callbacks[_id].forEach((cb, i) => {
-                  cb(void 0, info, task.mailOptions[i]);
-                });
+            if (updateError) {
+              this.___handleError(task, updateError, {});
+            } else {
+              let transport;
+              let transportIndex;
+              if (this.strategy === 'balancer') {
+                this.transport = this.transport + 1;
+                if (this.transport >= this.transports.length) {
+                  this.transport = 0;
+                }
+                transportIndex = this.transport;
+                transport = this.transports[this.transport];
+              } else {
+                transportIndex = task.transport;
+                transport = this.transports[task.transport];
               }
-              delete this.callbacks[_id];
-            });
 
-            return;
+              try {
+                const _mailOpts = this.___compileMailOpts(transport, task);
+
+                _debug(this.debug, '[sendMail] [sending] To:', _mailOpts.to);
+                transport.sendMail(_mailOpts, (error, info) => {
+                  if (error) {
+                    this.___handleError(task, error, info);
+                    return;
+                  }
+
+                  if (info.accepted && !info.accepted.length) {
+                    this.___handleError(task, 'Message not accepted or Greeting never received', info);
+                    return;
+                  }
+
+                  this.collection.deleteOne({
+                    _id: task._id
+                  }, defaultWriteConcern, () => {
+                    _debug(this.debug, `email successfully sent, attempts: #${task.tries}, transport #${transportIndex} to: `, _mailOpts.to);
+
+                    const _id = task._id.toHexString();
+                    if (this.callbacks[_id] && this.callbacks[_id].length) {
+                      this.callbacks[_id].forEach((cb, i) => {
+                        cb(void 0, info, task.mailOptions[i]);
+                      });
+                    }
+                    delete this.callbacks[_id];
+                  });
+
+                  return;
+                });
+              } catch (e) {
+                _logError('Exception during runtime:', e);
+                this.___handleError(task, e, {});
+              }
+            }
           });
-        } catch (e) {
-          _logError('Exception during runtime:', e);
-          this.___handleError(task, e, {});
-        }
-      });
-
-      return;
+        }, (forEachError) => {
+          if (forEachError) {
+            _logError('[___send] [forEach] [forEachError]', forEachError);
+          }
+        });
+      } else {
+        ready();
+      }
     });
   }
 
