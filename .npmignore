@@ -13,4 +13,5 @@ node_modules
 npm-debug.log*
 package.js
 template.html
-test/meteor.js
+test/
+test/*
