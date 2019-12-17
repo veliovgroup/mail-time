@@ -20,8 +20,8 @@ While *Client* is only put emails into the queue.
   - [As Micro-Service](https://github.com/VeliovGroup/Mail-Time#cluster-issue)
 - [Features](https://github.com/VeliovGroup/Mail-Time#features)
 - [Installation](https://github.com/VeliovGroup/Mail-Time#installation)
-- [Install](https://github.com/VeliovGroup/Mail-Time#installation--import-via-npm) as [NPM Package](https://www.npmjs.com/package/mail-time)
-- [Install](https://github.com/VeliovGroup/Mail-Time#installation--import-via-atmosphere) as [Atmosphere package](https://atmospherejs.com/ostrio/mailer)
+- [Meteor.js Installation](https://github.com/VeliovGroup/Mail-Time#installation--import-via-npm): as [NPM Package](https://www.npmjs.com/package/mail-time)
+- [Meteor.js Installation](https://github.com/VeliovGroup/Mail-Time#installation--import-via-atmosphere): as [Atmosphere package](https://atmospherejs.com/ostrio/mailer)
 - [Usage example](https://github.com/VeliovGroup/Mail-Time#basic-usage)
 - [API](https://github.com/VeliovGroup/Mail-Time#api)
   - [*Constructor*](https://github.com/VeliovGroup/Mail-Time#new-mailtimeopts-constructor)
@@ -137,34 +137,6 @@ npm install --save mail-time
 
 # for node@<8.9.0
 npm install --save mail-time@=0.1.7
-```
-
-## Installation & Import (*via NPM*):
-
-Install NPM *MailTime* package:
-
-```shell
-meteor npm install --save mail-time
-```
-
-ES6 Import:
-
-```js
-import MailTime from 'mail-time';
-```
-
-## Installation & Import (*via Atmosphere*):
-
-Install Atmosphere *ostrio:mailer* package:
-
-```shell
-meteor add ostrio:mailer
-```
-
-ES6 Import:
-
-```js
-import MailTime from 'meteor/ostrio:mailer';
 ```
 
 ## Basic usage
@@ -286,6 +258,77 @@ mailQueue.sendMail({
   subject: 'You\'ve got an email!',
   text: 'Plain text message',
   html: '<h1>HTML</h1><p>Styled message</p>'
+});
+```
+
+## Meteor.js usage:
+
+### Meteor.js Installation:
+
+#### Installation & Import (*via NPM*):
+
+Install NPM *MailTime* package:
+
+```shell
+meteor npm install --save mail-time
+```
+
+ES6 Import:
+
+```js
+import MailTime from 'mail-time';
+```
+
+#### Installation & Import (*via Atmosphere*):
+
+Install Atmosphere *ostrio:mailer* package:
+
+```shell
+meteor add ostrio:mailer
+```
+
+ES6 Import:
+
+```js
+import MailTime from 'meteor/ostrio:mailer';
+```
+
+### Usage:
+
+```js
+import { MongoInternals } from 'meteor/mongo';
+
+import MailTime from 'mail-time';
+import nodemailer from 'nodemailer';
+// Use DIRECT transport
+// To enable sending email from localhost
+// install "nodemailer-direct-transport" NPM package:
+import directTransport from 'nodemailer-direct-transport';
+
+const transports = [];
+const directTransportOpts = {
+  pool: false,
+  direct: true,
+  name: 'mail.example.com',
+  from: 'no-reply@example.com',
+};
+transports.push(nodemailer.createTransport(directTransport(directTransportOpts)));
+// IMPORTANT: Copy-paste passed options from directTransport() to
+// transport's "options" property, to make sure it's available to MailTime package:
+transports[0].options = directTransportOpts;
+
+////////////////////////
+// For more transport example see sections above and read nodemailer's docs
+////////////////////////
+
+const mailQueue = new MailTime({
+  db: MongoInternals.defaultRemoteCollectionDriver().mongo.db, // MongoDB
+  transports,
+  from(transport) {
+    // To pass spam-filters `from` field should be correctly set
+    // for each transport, check `transport` object for more options
+    return '"Awesome App" <' + transport.options.from + '>';
+  }
 });
 ```
 
