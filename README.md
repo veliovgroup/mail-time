@@ -32,10 +32,10 @@ While *Client* is only put emails into the queue.
 
 ## Main features:
 
-- 👷‍♂️ ~92% tests coverage
-- 📦 Two simple dependencies, written from scratch for top performance
-- 😎 Synchronize email queue across multiple servers
-- 💪 Bulletproof design, built-in retries
+- 👨‍🔬 ~92% tests coverage;
+- 📦 Two simple dependencies, written from scratch for top performance;
+- 🏢 Synchronize email queue across multiple servers;
+- 💪 Bulletproof design, built-in retries.
 
 ## How does it work?:
 

@@ -1,6 +1,6 @@
 {
   "name": "mail-time",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Bulletproof email queue on top of NodeMailer with support of multiple clusters and servers setup",
   "main": "index.js",
   "scripts": {
@@ -49,15 +49,15 @@
   },
   "dependencies": {
     "deepmerge": "^4.2.2",
-    "josk": "^2.2.2"
+    "josk": "^2.2.3"
   },
   "devDependencies": {
-    "bson": "^4.0.2",
+    "bson": "^4.0.3",
     "bson-ext": "^2.0.3",
     "chai": "^4.2.0",
-    "mocha": "^6.2.2",
-    "mongodb": "^3.3.5",
-    "nodemailer": "^6.3.1",
+    "mocha": "^7.1.0",
+    "mongodb": "^3.5.4",
+    "nodemailer": "^6.4.4",
     "nodemailer-direct-transport": "^3.3.2"
   }
 }
