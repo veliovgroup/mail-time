@@ -222,6 +222,10 @@ module.exports = class MailTime {
   ___compileMailOpts(transport, task) {
     let _mailOpts = {};
 
+    if (!transport) {
+      throw new Error('[mail-time] [sendMail] [___compileMailOpts] transport not available or misconfiguration is in place!');
+    }
+
     if (transport._options && typeof transport._options === 'object' && transport._options !== null && transport._options.mailOptions) {
       _mailOpts = merge(_mailOpts, transport._options.mailOptions);
     }
