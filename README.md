@@ -348,6 +348,7 @@ const mailQueue = new MailTime({
 - `opts.maxTries` {*Number*} - [Optional] How many times resend failed emails, default - `60`
 - `opts.interval` {*Number*} - [Optional] Interval in *seconds* between send re-tries, default - `60`
 - `opts.zombieTime` {*Number*} - [Optional] Time in *milliseconds*, after this period - pending email will be interpreted as "*zombie*". This parameter allows to rescue pending email from "*zombie* mode" in case when: server was rebooted, exception during runtime was thrown, or caused by bad logic, default - `32786`. This option is used by package itself and passed directly to [`JoSk` package](https://github.com/VeliovGroup/josk#api)
+- `opts.keepHistory` {*Boolean*} - [Optional] By default sent emails not stored in the database. Set `{ keepHistory: true }` to keep queue task as it is in the database, default - `false`
 - `opts.concatEmails` {*Boolean*} - [Optional] Concatenate email by `to` field, default - `false`
 - `opts.concatSubject` {*String*} - [Optional] Email subject used in concatenated email, default - `Multiple notifications`
 - `opts.concatDelimiter` {*String*} - [Optional] HTML or plain string delimiter used between concatenated email, default - `<hr>`

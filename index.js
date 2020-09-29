@@ -116,6 +116,7 @@ module.exports = class MailTime {
     this.interval   = ((opts.interval && !isNaN(opts.interval)) ? parseInt(opts.interval) : 60) * 1000;
     this.template   = (typeof opts.template === 'string') ? opts.template : '{{{html}}}';
     this.zombieTime = opts.zombieTime || 32786;
+    this.keepHistory = opts.keepHistory || false;
 
     this.revolvingInterval = opts.revolvingInterval || 1536;
     this.minRevolvingDelay = opts.minRevolvingDelay || 512;
@@ -359,19 +360,14 @@ module.exports = class MailTime {
                     return;
                   }
 
-                  this.collection.deleteOne({
-                    _id: task._id
-                  }, defaultWriteConcern, () => {
-                    _debug(this.debug, `email successfully sent, attempts: #${task.tries}, transport #${transportIndex} to: `, _mailOpts.to);
-
-                    const _id = task._id.toHexString();
-                    if (this.callbacks[_id] && this.callbacks[_id].length) {
-                      this.callbacks[_id].forEach((cb, i) => {
-                        cb(void 0, info, task.mailOptions[i]);
-                      });
-                    }
-                    delete this.callbacks[_id];
-                  });
+                  _debug(this.debug, `email successfully sent, attempts: #${task.tries}, transport #${transportIndex} to: `, _mailOpts.to);
+                  if (this.keepHistory) {
+                    this.___triggerCallbacks(void 0, task, info);
+                  } else {
+                    this.collection.deleteOne({ _id: task._id }, defaultWriteConcern, () => {
+                      this.___triggerCallbacks(void 0, task, info);
+                    });
+                  }
 
                   return;
                 });
@@ -523,16 +519,9 @@ module.exports = class MailTime {
     if (task.tries >= this.maxTries) {
       this.collection.deleteOne({
         _id: task._id
-      }, () => {
-        _debug(this.debug, `Giving up trying send email after ${task.tries} attempts to: `, task.mailOptions[0].to, error);
-
-        const _id = task._id.toHexString();
-        if (this.callbacks[_id] && this.callbacks[_id].length) {
-          this.callbacks[_id].forEach((cb, i) => {
-            cb(error, info, task.mailOptions[i]);
-          });
-        }
-        delete this.callbacks[_id];
+      }, (deleteError) => {
+        _debug(this.debug, `Giving up trying send email after ${task.tries} attempts to: `, task.mailOptions[0].to, error, deleteError);
+        this.___triggerCallbacks(error, task, info);
       });
     } else {
       let transportIndex = task.transport;
@@ -629,5 +618,23 @@ module.exports = class MailTime {
       }
     }
     return string;
+  }
+
+  /*
+   @memberOf MailTime
+   @name ___triggerCallbacks
+   @param error  {mix}    - Error thrown during sending email
+   @param task   {Object} - Task record from mongodb
+   @param info   {Object} - Info object returned from NodeMailer's `sendMail` method
+   @returns {void 0}
+   */
+  ___triggerCallbacks(error, task, info) {
+    const _id = task._id.toHexString();
+    if (this.callbacks[_id] && this.callbacks[_id].length) {
+      this.callbacks[_id].forEach((cb, i) => {
+        cb(error, info, task.mailOptions[i]);
+      });
+    }
+    delete this.callbacks[_id];
   }
 };
