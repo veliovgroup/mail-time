@@ -1,12 +1,9 @@
+[![support](https://img.shields.io/badge/support-PayPal-white)](https://paypal.me/veliovgroup)
+<a href="https://ostr.io/info/built-by-developers-for-developers">
+  <img src="https://ostr.io/apple-touch-icon-60x60.png" height="20">
+</a>
+
 # MailTime
-
-<a href="https://www.patreon.com/bePatron?u=20396046">
-  <img src="https://c5.patreon.com/external/logo/become_a_patron_button@2x.png" width="160">
-</a>
-
-<a href="https://ostr.io">
-  <img src="https://ostr.io/apple-touch-icon-60x60.png" height="38">
-</a>
 
 Micro-service package for mail queue, with *Server* and *Client* API.
 Build on top of [`nodemailer`](https://github.com/nodemailer/nodemailer) package.
@@ -440,5 +437,5 @@ DEBUG="true" EMAIL_DOMAIN="example.com" MONGO_URL="mongodb://127.0.0.1:27017/met
 
 ## Support this project:
 
-- [Become a patron](https://www.patreon.com/bePatron?u=20396046) — support my open source contributions with monthly donation
+- [Support via PayPal](https://paypal.me/veliovgroup) — support my open source contributions once or on regular basis
 - Use [ostr.io](https://ostr.io) — [Monitoring](https://snmp-monitoring.com), [Analytics](https://ostr.io/info/web-analytics), [WebSec](https://domain-protection.info), [Web-CRON](https://web-cron.info) and [Pre-rendering](https://prerendering.com) for a website
