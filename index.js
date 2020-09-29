@@ -286,23 +286,13 @@ module.exports = class MailTime {
   ___send(ready) {
     let finished = 0;
     const cursor = this.collection.find({
-      $or: [{
-        isSent: false,
-        sendAt: {
-          $lte: new Date()
-        },
-        tries: {
-          $lt: this.maxTries
-        }
-      }, {
-        isSent: true,
-        sendAt: {
-          $lt: new Date(Date.now() - (this.zombieTime * 2))
-        },
-        tries: {
-          $lt: this.maxTries
-        }
-      }]
+      isSent: false,
+      sendAt: {
+        $lte: new Date()
+      },
+      tries: {
+        $lt: this.maxTries
+      }
     }, {
       projection: {
         _id: 1,
@@ -327,8 +317,7 @@ module.exports = class MailTime {
             _id: task._id
           }, {
             $set: {
-              isSent: true,
-              sendAt: new Date(Date.now() + (this.zombieTime * 2))
+              isSent: true
             },
             $inc: {
               tries: 1
