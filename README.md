@@ -1,3 +1,4 @@
+[![support](https://img.shields.io/badge/support-GitHub-white)](https://github.com/sponsors/dr-dimitru)
 [![support](https://img.shields.io/badge/support-PayPal-white)](https://paypal.me/veliovgroup)
 <a href="https://ostr.io/info/built-by-developers-for-developers">
   <img src="https://ostr.io/apple-touch-icon-60x60.png" height="20">
@@ -38,7 +39,9 @@ While *Client* is only put emails into the queue.
 - 🏢 Synchronize email queue across multiple servers;
 - 💪 Bulletproof design, built-in retries.
 
-## How does it work?:
+## How does it work?
+
+Redundant solution for email transmission.
 
 ### Single point of failure
 
@@ -116,8 +119,8 @@ Here is how we solve this issue:
 
 - Queue - Managed via MongoDB, and will survive server reboots and failures
 - Support for multiple server setups - "Cluster", Phusion Passenger instances, Load Balanced solutions, etc.
-- Emails concatenation by addressee email - Reduce amount of sent email to single user with concatenation, and avoid mistakenly doubled emails
-- When concatenation is enabled - Same emails wouldn't be sent twice, if for any reason, due to bad logic or application failure emails is sent twice or more times - here is solution to solve this annoying behavior
+- Emails concatenation by addressee email - Reduce amount of sent emails to a single user with concatenation, and avoid mistakenly doubled emails
+- When concatenation is enabled - Same emails won't be sent twice, if for any reason, due to bad logic or application failure emails are sent twice or more times - this is solution to solve this annoying behavior
 - Balancing for multiple nodemailer's transports, two modes - `backup` and `balancing`. Most useful feature - allows to reduce the cost of SMTP services and add durability. So, if any of used transports are failing to send an email it will switch to next one
 - Sending retries for network and other failures
 - Template support with Mustache-like placeholders
@@ -438,5 +441,6 @@ DEBUG="true" EMAIL_DOMAIN="example.com" MONGO_URL="mongodb://127.0.0.1:27017/met
 
 ## Support this project:
 
-- [Support via PayPal](https://paypal.me/veliovgroup) — support my open source contributions once or on regular basis
+- [Sponsor via GitHub](https://github.com/sponsors/dr-dimitru) — support open source contributions on a regular basis
+- [Support via PayPal](https://paypal.me/veliovgroup) — support open source contributions once
 - Use [ostr.io](https://ostr.io) — [Monitoring](https://snmp-monitoring.com), [Analytics](https://ostr.io/info/web-analytics), [WebSec](https://domain-protection.info), [Web-CRON](https://web-cron.info) and [Pre-rendering](https://prerendering.com) for a website
