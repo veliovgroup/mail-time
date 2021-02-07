@@ -17,12 +17,6 @@ const mongoErrorHandler = (error) => {
   }
 };
 
-const defaultWriteConcern = {
-  w: 1,
-  j: true,
-  wtimeout: 10240
-};
-
 let equals;
 equals = (a, b) => {
   let i;
@@ -308,6 +302,7 @@ module.exports = class MailTime {
     cursor.count((countError, count) => {
       if (countError) {
         ready();
+        cursor.close();
         _logError('[___send] [count] [countError]', countError);
         return;
       }
@@ -323,7 +318,7 @@ module.exports = class MailTime {
             $inc: {
               tries: 1
             }
-          }, defaultWriteConcern, (updateError) => {
+          }, (updateError) => {
             if (count === ++finished) {
               ready();
             }
@@ -364,7 +359,7 @@ module.exports = class MailTime {
                   if (this.keepHistory) {
                     this.___triggerCallbacks(void 0, task, info);
                   } else {
-                    this.collection.deleteOne({ _id: task._id }, defaultWriteConcern, () => {
+                    this.collection.deleteOne({ _id: task._id }, () => {
                       this.___triggerCallbacks(void 0, task, info);
                     });
                   }
@@ -378,12 +373,14 @@ module.exports = class MailTime {
             }
           });
         }, (forEachError) => {
+          cursor.close();
           if (forEachError) {
             _logError('[___send] [forEach] [forEachError]', forEachError);
           }
         });
       } else {
         ready();
+        cursor.close();
       }
     });
   }

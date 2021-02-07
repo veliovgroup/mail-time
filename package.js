@@ -1,6 +1,6 @@
 Package.describe({
   name: 'ostrio:mailer',
-  version: '2.3.5',
+  version: '2.3.6',
   summary: 'Bulletproof email queue on top of NodeMailer with support of multiple clusters and servers setup',
   git: 'https://github.com/veliovgroup/Mail-Time',
   documentation: 'README.md'
@@ -18,6 +18,6 @@ Package.onTest((api) => {
 });
 
 Npm.depends({
-  'josk': '2.3.0',
-  'deepmerge': '4.2.2'
+  josk: '2.4.0',
+  deepmerge: '4.2.2'
 });
