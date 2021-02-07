@@ -36,12 +36,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git://github.com/VeliovGroup/Mail-Time.git"
+    "url": "git://github.com/veliovgroup/Mail-Time.git"
   },
   "bugs": {
-    "url": "https://github.com/VeliovGroup/Mail-Time/issues"
+    "url": "https://github.com/veliovgroup/Mail-Time/issues"
   },
-  "homepage": "https://github.com/VeliovGroup/Mail-Time",
+  "homepage": "https://github.com/veliovgroup/Mail-Time",
   "author": "dr.dimitru (https://veliovgroup.com)",
   "license": "BSD-3-Clause",
   "engines": {

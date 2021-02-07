@@ -2,7 +2,7 @@ Package.describe({
   name: 'ostrio:mailer',
   version: '2.3.5',
   summary: 'Bulletproof email queue on top of NodeMailer with support of multiple clusters and servers setup',
-  git: 'https://github.com/VeliovGroup/Mail-Time',
+  git: 'https://github.com/veliovgroup/Mail-Time',
   documentation: 'README.md'
 });
 

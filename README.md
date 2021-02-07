@@ -16,21 +16,21 @@ While *Client* is only put emails into the queue.
 
 ## ToC
 
-- [How it works?](https://github.com/VeliovGroup/Mail-Time#how-it-works)
-  - [With single SMTP](https://github.com/VeliovGroup/Mail-Time#single-point-of-failure)
-  - [With multiple SMTP](https://github.com/VeliovGroup/Mail-Time#multiple-smtp-providers)
-  - [As Micro-Service](https://github.com/VeliovGroup/Mail-Time#cluster-issue)
-- [Features](https://github.com/VeliovGroup/Mail-Time#features)
-- [Installation](https://github.com/VeliovGroup/Mail-Time#installation)
-- [Meteor.js Installation](https://github.com/VeliovGroup/Mail-Time#installation--import-via-npm): as [NPM Package](https://www.npmjs.com/package/mail-time)
-- [Meteor.js Installation](https://github.com/VeliovGroup/Mail-Time#installation--import-via-atmosphere): as [Atmosphere package](https://atmospherejs.com/ostrio/mailer)
-- [Usage example](https://github.com/VeliovGroup/Mail-Time#basic-usage)
-- [API](https://github.com/VeliovGroup/Mail-Time#api)
-  - [*Constructor*](https://github.com/VeliovGroup/Mail-Time#new-mailtimeopts-constructor)
-  - [`.send()`](https://github.com/VeliovGroup/Mail-Time#sendmailopts--callback)
-  - [Default Template](https://github.com/VeliovGroup/Mail-Time#static-mailtimetemplate)
-- [Custom Templates](https://github.com/VeliovGroup/Mail-Time#template-example)
-- [~92% tests coverage](https://github.com/VeliovGroup/Mail-Time#testing)
+- [How it works?](https://github.com/veliovgroup/Mail-Time#how-it-works)
+  - [With single SMTP](https://github.com/veliovgroup/Mail-Time#single-point-of-failure)
+  - [With multiple SMTP](https://github.com/veliovgroup/Mail-Time#multiple-smtp-providers)
+  - [As Micro-Service](https://github.com/veliovgroup/Mail-Time#cluster-issue)
+- [Features](https://github.com/veliovgroup/Mail-Time#features)
+- [Installation](https://github.com/veliovgroup/Mail-Time#installation)
+- [Meteor.js Installation](https://github.com/veliovgroup/Mail-Time#installation--import-via-npm): as [NPM Package](https://www.npmjs.com/package/mail-time)
+- [Meteor.js Installation](https://github.com/veliovgroup/Mail-Time#installation--import-via-atmosphere): as [Atmosphere package](https://atmospherejs.com/ostrio/mailer)
+- [Usage example](https://github.com/veliovgroup/Mail-Time#basic-usage)
+- [API](https://github.com/veliovgroup/Mail-Time#api)
+  - [*Constructor*](https://github.com/veliovgroup/Mail-Time#new-mailtimeopts-constructor)
+  - [`.send()`](https://github.com/veliovgroup/Mail-Time#sendmailopts--callback)
+  - [Default Template](https://github.com/veliovgroup/Mail-Time#static-mailtimetemplate)
+- [Custom Templates](https://github.com/veliovgroup/Mail-Time#template-example)
+- [~92% tests coverage](https://github.com/veliovgroup/Mail-Time#testing)
 
 ## Main features:
 
@@ -350,15 +350,15 @@ const mailQueue = new MailTime({
 - `opts.prefix` {*String*} - [Optional] Use unique prefixes to create multiple `MailTime` instances on same MongoDB
 - `opts.maxTries` {*Number*} - [Optional] How many times resend failed emails, default - `60`
 - `opts.interval` {*Number*} - [Optional] Interval in *seconds* between send re-tries, default - `60`
-- `opts.zombieTime` {*Number*} - [Optional] Time in *milliseconds*, after this period - pending email will be interpreted as "*zombie*". This parameter allows to rescue pending email from "*zombie* mode" in case when: server was rebooted, exception during runtime was thrown, or caused by bad logic, default - `32786`. This option is used by package itself and passed directly to [`JoSk` package](https://github.com/VeliovGroup/josk#api)
+- `opts.zombieTime` {*Number*} - [Optional] Time in *milliseconds*, after this period - pending email will be interpreted as "*zombie*". This parameter allows to rescue pending email from "*zombie* mode" in case when: server was rebooted, exception during runtime was thrown, or caused by bad logic, default - `32786`. This option is used by package itself and passed directly to [`JoSk` package](https://github.com/veliovgroup/josk#api)
 - `opts.keepHistory` {*Boolean*} - [Optional] By default sent emails not stored in the database. Set `{ keepHistory: true }` to keep queue task as it is in the database, default - `false`
 - `opts.concatEmails` {*Boolean*} - [Optional] Concatenate email by `to` field, default - `false`
 - `opts.concatSubject` {*String*} - [Optional] Email subject used in concatenated email, default - `Multiple notifications`
 - `opts.concatDelimiter` {*String*} - [Optional] HTML or plain string delimiter used between concatenated email, default - `<hr>`
 - `opts.concatThrottling` {*Number*} - [Optional] Time in *seconds* while emails are waiting to be concatenated, default - `60`
 - `opts.revolvingInterval` {*Number*} - [Optional] Interval in *milliseconds* in between queue checks, default - `256`. Recommended value — between `opts.minRevolvingDelay` and `opts.maxRevolvingDelay`
-- `opts.minRevolvingDelay` {*Number*} - [Optional] Minimum revolving delay — the minimum delay between tasks executions in *milliseconds*, default - `64`. This option is passed directly to [`JoSk` package](https://github.com/VeliovGroup/josk#api)
-- `opts.maxRevolvingDelay` {*Number*} - [Optional] Maximum revolving delay — the maximum delay between tasks executions in *milliseconds*, default - `256`. This option is passed directly to [`JoSk` package](https://github.com/VeliovGroup/josk#api)
+- `opts.minRevolvingDelay` {*Number*} - [Optional] Minimum revolving delay — the minimum delay between tasks executions in *milliseconds*, default - `64`. This option is passed directly to [`JoSk` package](https://github.com/veliovgroup/josk#api)
+- `opts.maxRevolvingDelay` {*Number*} - [Optional] Maximum revolving delay — the maximum delay between tasks executions in *milliseconds*, default - `256`. This option is passed directly to [`JoSk` package](https://github.com/veliovgroup/josk#api)
 - `opts.template` {*String*} - [Optional] Mustache-like template, default - `{{{html}}}`, all options passed to `sendMail` is available in Template, like `to`, `subject`, `text`, `html` or any other custom option. Use `{{opt}}` for string placeholders and `{{{opt}}}` for html placeholders
 
 ### `sendMail(opts [, callback])`
@@ -373,7 +373,7 @@ const mailQueue = new MailTime({
 
 ### `static MailTime.Template`
 
-Simple and bulletproof HTML template, see its [source](https://github.com/VeliovGroup/Mail-Time/blob/master/template.html). Usage:
+Simple and bulletproof HTML template, see its [source](https://github.com/veliovgroup/Mail-Time/blob/master/template.html). Usage:
 
 ```js
 const MailTime  = require('mail-time');
