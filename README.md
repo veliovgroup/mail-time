@@ -93,11 +93,11 @@ Backup scheme with multiple SMTP providers
 
 ### Cluster issue
 
-Let's say you have an app which is growing fast. At some point, you've decided to create a "Cluster" of servers to balance the load and add durability layer.
+Let's say, — to scale quickly growing application we decided to create a "Cluster" of servers to balance the load and add durability layer.
 
-Also, your application has scheduled emails, for example, once a day with recent news. While you have had single server emails was sent by some daily interval. So, after you made a "Cluster" of servers - each server has its own timer and going to send a daily email to our user. In such case - users will receive 3 emails, sounds not okay.
+Also, our application has scheduled emails, once a day — with recent news. While we have had a single server — emails were sent by daily interval. Upon "Cluster" implementation - each server would have its own timer and each server will send daily emails to users. In such case - users will receive multiple emails, sounds not okay.
 
-Here is how we solve this issue:
+Here is how we solve this issue using MailTime:
 
 ```ascii
 |===================THE=CLUSTER===================| |=QUEUE=| |===Mail=Time===|
