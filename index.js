@@ -439,7 +439,7 @@ module.exports = class MailTime {
         to: opts.to,
         isSent: false,
         sendAt: {
-          $lte: new Date(_sendAt + this.concatThrottling)
+          $lte: new Date(+_sendAt + this.concatThrottling)
         }
       }, {
         projection: {
