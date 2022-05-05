@@ -437,7 +437,10 @@ module.exports = class MailTime {
     if (this.concatEmails) {
       this.collection.findOne({
         to: opts.to,
-        isSent: false
+        isSent: false,
+        sendAt: {
+          $lte: new Date(+_sendAt + this.concatThrottling)
+        }
       }, {
         projection: {
           _id: 1,
