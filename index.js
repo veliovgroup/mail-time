@@ -272,11 +272,11 @@ module.exports = class MailTime {
     return _mailOpts;
   }
 
-  /*
-   @memberOf MailTime
-   @name ___send
-   @param ready {Function} - See JoSk NPM package
-   @returns {void}
+  /**
+   * @memberOf MailTime
+   * @name ___send
+   * @param ready {Function} - See JoSk NPM package
+   * @returns {void}
    */
   ___send(ready) {
     let finished = 0;
@@ -385,25 +385,25 @@ module.exports = class MailTime {
     });
   }
 
-  /*
-   @memberOf MailTime
-   @name send
-   @description alias of `sendMail`
-   @returns {void}
+  /**
+   * @memberOf MailTime
+   * @name send
+   * @description alias of `sendMail`
+   * @returns {void}
    */
   send(opts, callback) {
     this.sendMail(opts, callback);
   }
 
-  /*
-   @memberOf MailTime
-   @name sendMail
-   @param opts          {Object}   - Letter options with next properties:
-   @param opts.sendAt   {Date}     - When email should be sent
-   @param opts.template {String}   - Template string
-   @param opts[key]     {mix}      - Other MailOptions according to NodeMailer lib documentation
-   @param callback      {Function} - [OPTIONAL] Callback function
-   @returns {void}
+  /**
+   * @memberOf MailTime
+   * @name sendMail
+   * @param opts          {Object}   - Letter options with next properties:
+   * @param opts.sendAt   {Date}     - When email should be sent
+   * @param opts.template {String}   - Template string
+   * @param opts[key]     {mix}      - Other MailOptions according to NodeMailer lib documentation
+   * @param callback      {Function} - [OPTIONAL] Callback function
+   * @returns {void}
    */
   sendMail(opts = {}, callback = NoOp) {
     _debug(this.debug, '[sendMail] [attempt] To:', opts.to);
@@ -503,13 +503,13 @@ module.exports = class MailTime {
     return;
   }
 
-  /*
-   @memberOf MailTime
-   @name ___handleError
-   @param task  {Object} - Email task record form Mongo
-   @param error {mix}    - Error String/Object/Error
-   @param info  {Object} - Info object returned from nodemailer
-   @returns {void}
+  /**
+   * @memberOf MailTime
+   * @name ___handleError
+   * @param task  {Object} - Email task record form Mongo
+   * @param error {mix}    - Error String/Object/Error
+   * @param info  {Object} - Info object returned from nodemailer
+   * @returns {void}
    */
   ___handleError(task, error, info) {
     if (!task) {
@@ -547,16 +547,16 @@ module.exports = class MailTime {
     }
   }
 
-  /*
-   @memberOf MailTime
-   @name ___addToQueue
-   @param opts               {Object}   - Letter options with next properties:
-   @param opts.sendAt        {Date}     - When email should be sent
-   @param opts.template      {String}   - Email template
-   @param opts.mailOptions   {Object}   - MailOptions according to NodeMailer lib
-   @param opts.concatSubject {String}   - Email subject used when sending multiple concatenated emails
-   @param callback           {Function} - [OPTIONAL] Callback function
-   @returns {void}
+  /**
+   * @memberOf MailTime
+   * @name ___addToQueue
+   * @param opts               {Object}   - Letter options with next properties:
+   * @param opts.sendAt        {Date}     - When email should be sent
+   * @param opts.template      {String}   - Email template
+   * @param opts.mailOptions   {Object}   - MailOptions according to NodeMailer lib
+   * @param opts.concatSubject {String}   - Email subject used when sending multiple concatenated emails
+   * @param callback           {Function} - [OPTIONAL] Callback function
+   * @returns {void}
    */
   ___addToQueue(opts, callback) {
     _debug(this.debug, '[sendMail] [adding to queue] To:', opts.mailOptions.to);
@@ -590,12 +590,12 @@ module.exports = class MailTime {
     });
   }
 
-  /*
-   @memberOf MailTime
-   @name ___render
-   @param string       {String} - Template with Spacebars/Blaze/Mustache-like placeholders
-   @param replacements {Object} - Blaze/Mustache-like helpers Object
-   @returns {String}
+  /**
+   * @memberOf MailTime
+   * @name ___render
+   * @param string       {String} - Template with Spacebars/Blaze/Mustache-like placeholders
+   * @param replacements {Object} - Blaze/Mustache-like helpers Object
+   * @returns {String}
    */
   ___render(_string, replacements) {
     let i;
@@ -620,13 +620,13 @@ module.exports = class MailTime {
     return string;
   }
 
-  /*
-   @memberOf MailTime
-   @name ___triggerCallbacks
-   @param error  {mix}    - Error thrown during sending email
-   @param task   {Object} - Task record from mongodb
-   @param info   {Object} - Info object returned from NodeMailer's `sendMail` method
-   @returns {void 0}
+  /**
+   * @memberOf MailTime
+   * @name ___triggerCallbacks
+   * @param error  {mix}    - Error thrown during sending email
+   * @param task   {Object} - Task record from mongodb
+   * @param info   {Object} - Info object returned from NodeMailer's `sendMail` method
+   * @returns {void 0}
    */
   ___triggerCallbacks(error, task, info) {
     const _id = task._id.toHexString();
