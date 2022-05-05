@@ -1,4 +1,4 @@
-[![support](https://img.shields.io/badge/support-GitHub-white)](https://github.com/sponsors/dr-dimitru)
+[![support](https://img.shields.io/badge/support-GitHub-white)](https://github.com/sponsors/veliovgroup)
 [![support](https://img.shields.io/badge/support-PayPal-white)](https://paypal.me/veliovgroup)
 <a href="https://ostr.io/info/built-by-developers-for-developers">
   <img src="https://ostr.io/apple-touch-icon-60x60.png" height="20">
@@ -441,6 +441,10 @@ DEBUG="true" EMAIL_DOMAIN="example.com" MONGO_URL="mongodb://127.0.0.1:27017/met
 
 ## Support this project:
 
-- [Sponsor via GitHub](https://github.com/sponsors/dr-dimitru) — support open source contributions on a regular basis
-- [Support via PayPal](https://paypal.me/veliovgroup) — support open source contributions once
+- Star on [GitHub](https://github.com/veliovgroup/mail-time)
+- Star on [NPM](https://www.npmjs.com/package/mail-time)
+- Star on [Atmosphere](https://atmospherejs.com/ostrio/mailer)
+- [Sponsor maintainer via GitHub](https://github.com/sponsors/dr-dimitru) — support open source with one-time contribution or on a regular basis
+- [Sponsor veliovgroup via GitHub](https://github.com/sponsors/veliovgroup) — support company behind this package
+- [Support via PayPal](https://paypal.me/veliovgroup) — support our open source contributions
 - Use [ostr.io](https://ostr.io) — [Monitoring](https://snmp-monitoring.com), [Analytics](https://ostr.io/info/web-analytics), [WebSec](https://domain-protection.info), [Web-CRON](https://web-cron.info) and [Pre-rendering](https://prerendering.com) for a website
