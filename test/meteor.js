@@ -54,7 +54,7 @@ const runTests = (type, concat) => {
     prefix: `${TEST_TITLE}${type}`
   }, defaultQueueOptions));
 
-  mailQueue.collection.remove({});
+  mailQueue.collection.deleteMany({});
 
   describe(type, function () {
     describe('MailTime Instance', function () {
@@ -97,7 +97,8 @@ const runTests = (type, concat) => {
           baseUrl: '<b>http://example.com</b>',
           text: '{{user}}, {{ baseUrl }}',
           html: '<p>Hi {{user}}, {{{ baseUrl }}}</p>',
-          template: '{{{html}}} {{baseUrl}}'
+          template: '{{{html}}} {{baseUrl}}',
+          sendAt: new Date(Date.now() + CHECK_TIMEOUT + 512)
         });
 
         setTimeout(() => {
@@ -168,9 +169,9 @@ const runTests = (type, concat) => {
         mailQueue.sendMail({
           to: `mail-time-meteor-tests-4@${domain}`,
           userName: 'Concatenator',
-          subject: '{{Concatenator}}: testing concatenation 1',
-          text: '{{Concatenator}}: testing concatenation 1',
-          html: '<b>{{Concatenator}}: testing concatenation 1</b>',
+          subject: '{{userName}}: testing concatenation 1',
+          text: '{{userName}}: testing concatenation 1',
+          html: '<b>{{userName}}: testing concatenation 1</b>',
           template: '<body>{{{html}}}</body>'
         });
 
@@ -178,34 +179,32 @@ const runTests = (type, concat) => {
           mailQueue.sendMail({
             to: `mail-time-meteor-tests-4@${domain}`,
             userName: 'Concatenator',
-            subject: '{{Concatenator}}: testing concatenation 2',
-            text: '{{Concatenator}}: testing concatenation 2',
-            html: '<b>{{Concatenator}}: testing concatenation 2</b>',
+            subject: '{{userName}}: testing concatenation 2',
+            text: '{{userName}}: testing concatenation 2',
+            html: '<b>{{userName}}: testing concatenation 2</b>',
             template: '<body>{{{html}}}</body>'
           });
         }, CHECK_TIMEOUT / 4);
 
-        setTimeout(() => {
-          mailQueue.collection.find({
+        setTimeout(async () => {
+          const taskCursor = mailQueue.collection.find({
             $or: [{
               to: `mail-time-meteor-tests-4@${domain}`
             }, {
               'mailOptions.to': `mail-time-meteor-tests-4@${domain}`
             }]
-          }, async (findError, taskCursor) => {
-            assert.equal(findError, undefined, 'no error');
-
-            const qty = await taskCursor.count();
-
-            if (concat === true) {
-              assert.equal(qty, 1, 'Has single email record with concatenation');
-            } else {
-              assert.equal(qty, 2, 'Has two email records without concatenation');
-            }
-
-            taskCursor.close();
-            done();
           });
+
+          const qty = await taskCursor.count();
+
+          if (concat === true) {
+            assert.equal(qty, 1, 'Has single email record with concatenation');
+          } else {
+            assert.equal(qty, 2, 'Has two email records without concatenation');
+          }
+
+          taskCursor.close();
+          done();
         }, CHECK_TIMEOUT);
       });
     });
