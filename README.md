@@ -14,6 +14,12 @@ Every `MailTime` instance can be configured to be a *Server* or *Client*.
 Main difference of *Server* from *Client* - *Server* handles queue and actually sends email.
 While *Client* is only put emails into the queue.
 
+"Mail-Time" is a micro-service package for mail queue, with *Server* and *Client* APIs. Build on top of the [`nodemailer`](https://github.com/nodemailer/nodemailer) package.
+
+Every `MailTime` instance can get configured as *Server* or *Client*.
+
+The main difference between *Server* and *Client* modes is that the *Server* handles the queue and __sends__ email. While the *Client* only __adds__ emails into the queue.
+
 ## ToC
 
 - [How it works?](https://github.com/veliovgroup/Mail-Time#how-it-works)
@@ -45,7 +51,7 @@ Redundant solution for email transmission.
 
 ### Single point of failure
 
-Issue - classic solution with the single point of failure:
+Issue - classic solution with a single point of failure:
 
 ```ascii
 |----------------|         |------|         |------------------|
@@ -93,11 +99,11 @@ Backup scheme with multiple SMTP providers
 
 ### Cluster issue
 
-Let's say, — to scale quickly growing application we decided to create a "Cluster" of servers to balance the load and add durability layer.
+It is common to create a "Cluster" of servers to balance the load and add a durability layer for horizontal scaling of quickly growing applications.
 
-Also, our application has scheduled emails, once a day — with recent news. While we have had a single server — emails were sent by daily interval. Upon "Cluster" implementation - each server would have its own timer and each server will send daily emails to users. In such case - users will receive multiple emails, sounds not okay.
+Most modern application has scheduled or recurring emails. For example, once a day — with recent news and updates. It won't be an issue with a single server setup — the server would send emails at a daily interval via timer or CRON. While in "Cluster" implementation — each server will attempt to send the same email. In such cases, users will receive multiple emails with the same content. We built MailTime to address this and other similar issues.
 
-Here is how we solve this issue using MailTime:
+Here is how this issue is solved by using MailTime:
 
 ```ascii
 |===================THE=CLUSTER===================| |=QUEUE=| |===Mail=Time===|
@@ -117,17 +123,17 @@ Here is how we solve this issue using MailTime:
 
 ## Features
 
-- Queue - Managed via MongoDB, and will survive server reboots and failures
+- Queue - Managed via MongoDB, will survive server reboots and failures
 - Support for multiple server setups - "Cluster", Phusion Passenger instances, Load Balanced solutions, etc.
 - Emails concatenation by addressee email - Reduce amount of sent emails to a single user with concatenation, and avoid mistakenly doubled emails
 - When concatenation is enabled - Same emails won't be sent twice, if for any reason, due to bad logic or application failure emails are sent twice or more times - this is solution to solve this annoying behavior
-- Balancing for multiple nodemailer's transports, two modes - `backup` and `balancing`. Most useful feature - allows to reduce the cost of SMTP services and add durability. So, if any of used transports are failing to send an email it will switch to next one
+- Balancing for multiple nodemailer's transports, two modes - `backup` and `balancing`. This is the most useful feature — allowing to reduce the cost of SMTP services and add extra layer of durability. If one transport failing to send an email `mail-time` will switch to the next one
 - Sending retries for network and other failures
-- Template support with Mustache-like placeholders
+- Templating support with [Mustache](https://mustache.github.io/)-like placeholders
 
 ## Installation
 
-If you're working on Server functionality - first you will need `nodemailer`, although this package is meant to be used with `nodemailer`, it's not added as the dependency, as it not needed by Client, and you're free to choose `nodemailer`'s version to fit your needs:
+To implement Server functionality — as a first step install `nodemailer`, although this package meant to be used with `nodemailer`, it's not added as the dependency, as `nodemailer` not needed by Client, and you're free to choose `nodemailer`'s version to fit your project needs:
 
 ```shell
 npm install --save nodemailer
@@ -151,14 +157,14 @@ Require package:
 const MailTime = require('mail-time');
 ```
 
-Create nodemailer's transports (see [nodemailer docs](https://github.com/nodemailer/nodemailer/tree/v2#setting-up)):
+Create nodemailer's transports (see [`nodemailer` docs](https://github.com/nodemailer/nodemailer/tree/v2#setting-up)):
 
 ```js
 const transports = [];
 const nodemailer = require('nodemailer');
 
 // Use DIRECT transport
-// To enable sending email from localhost
+// and enable sending email from localhost
 // install "nodemailer-direct-transport" NPM package:
 const directTransport = require('nodemailer-direct-transport');
 const directTransportOpts = {
@@ -204,8 +210,7 @@ transports.push(nodemailer.createTransport({
 }));
 ```
 
-Create `mail-time` *Server*, it is able to send and add emails to the queue.
-We will need connect to MongoDB first:
+As the next step initiate `mail-time` in the *Server* mode, it will be able to __send__ and __add__ emails to the queue. Connecting to a MongoDB before initiating `new MailTime` instance:
 
 ```js
 const MongoClient = require('mongodb').MongoClient;
@@ -226,7 +231,7 @@ MongoClient.connect(process.env.MONGO_URL, (error, client) => {
     from(transport) {
       // To pass spam-filters `from` field should be correctly set
       // for each transport, check `transport` object for more options
-      return '"Awesome App" <' + transport.options.from + '>';
+      return `"Awesome App" <${transport.options.from}>`;
     },
     concatEmails: true, // Concatenate emails to the same addressee
     concatDelimiter: '<h1>{{{subject}}}</h1>', // Start each concatenated email with it's own subject
@@ -235,7 +240,7 @@ MongoClient.connect(process.env.MONGO_URL, (error, client) => {
 });
 ```
 
-Create the *Client* to add emails to queue from other application units, like UI unit:
+Only __one__ `MailTime` *Server* instance required to send email. In the other parts of an app (like UI units or in sub-apps) use `mail-time` in the *Client* mode to __add__ emails to queue:
 
 ```js
 const MongoClient = require('mongodb').MongoClient;
@@ -254,7 +259,7 @@ MongoClient.connect(process.env.MONGO_URL, (error, client) => {
 });
 ```
 
-Send email:
+Send email example:
 
 ```js
 mailQueue.sendMail({
@@ -265,39 +270,111 @@ mailQueue.sendMail({
 });
 ```
 
+### Two `MailTime` instances usage example
+
+Create two `MailTime` instances with different settings.
+
+```js
+// USE FOR NON-URGENT EMAILS WHICH IS OKAY TO CONCATENATE
+const mailQueue = new MailTime({
+  db: db,
+  interval: 35,
+  strategy: 'backup',
+  failsToNext: 1,
+  concatEmails: true,
+  concatThrottling: 16,
+  zombieTime: 120000
+});
+
+// USE FOR TRANSACTIONAL EMAILS AND ALERTS
+const mailInstantQueue = new MailTime({
+  db: db,
+  prefix: 'instant',
+  interval: 2,
+  strategy: 'backup',
+  failsToNext: 1,
+  concatEmails: false,
+  zombieTime: 20000
+});
+
+mailQueue.sendMail({
+  to: 'user@gmail.com',
+  subject: 'You\'ve got an email!',
+  text: 'Plain text message',
+  html: '<h1>HTML</h1><p>Styled message</p>'
+});
+
+mailInstantQueue.sendMail({
+  to: 'user@gmail.com',
+  subject: 'Sign in request',
+  text: 'Your OTP login code: xxxx:',
+  html: '<h1>Code:</h1><code>XXXX</code>'
+});
+```
+
+### Passing variables to the template
+
+All options passed to the `.sendMail()` method is available inside `text`, `html`, and global templates
+
+```js
+const templates = {
+  global: '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>{{subject}}</title></head><body>{{html}}<footer>Message sent to @{{username}} user ({{to}})</footer></body></html>',
+  signInCode: {
+    text: 'Hello @{{username}}! Here\'s your login code: {{code}}'
+    html: `<h1>Sign-in request</h1><p>Hello @{{username}}! Copy your login code below <pre><code>{{code}}</code></pre>`
+  }
+}
+
+const mailQueue = new MailTime({
+  db: db,
+  template: templates.global
+});
+
+mailQueue.sendMail({
+  to: 'user@gmail.com',
+  subject: 'Sign-in request',
+  username: 'johndoe',
+  code: 'XXXXX-YY'
+  text: templates.signInCode.text,
+  html: templates.signInCode.html
+});
+```
+
 ## Meteor.js usage:
 
-### Meteor.js Installation:
+Mail-Time package can be installed and used within [Meteor.js](https://docs.meteor.com/) via [NPM](https://www.npmjs.com/package/mail-time) or [Atmosphere](https://atmospherejs.com/ostrio/mailer)
 
-#### Installation & Import (*via NPM*):
+### Installation & Import (*via NPM*):
 
-Install NPM *MailTime* package:
+Install [NPM `mail-time` package](https://www.npmjs.com/package/mail-time):
 
 ```shell
 meteor npm install --save mail-time
 ```
 
-ES6 Import:
+Meteor.js: ES6 Import NPM package:
 
 ```js
 import MailTime from 'mail-time';
 ```
 
-#### Installation & Import (*via Atmosphere*):
+### Installation & Import (*via Atmosphere*):
 
-Install Atmosphere *ostrio:mailer* package:
+Install [Atmosphere `ostrio:mailer` package](https://atmospherejs.com/ostrio/mailer):
 
 ```shell
 meteor add ostrio:mailer
 ```
 
-ES6 Import:
+Meteor.js: ES6 Import atmosphere package:
 
 ```js
 import MailTime from 'meteor/ostrio:mailer';
 ```
 
 ### Usage:
+
+`mail-time` package usage examples in Meteor.js
 
 ```js
 import { MongoInternals } from 'meteor/mongo';
@@ -338,6 +415,8 @@ const mailQueue = new MailTime({
 
 ## API
 
+All available constructor options and `.sendMail()` method API overview
+
 ### `new MailTime(opts)` constructor
 
 - `opts` {*Object*} - Configuration object
@@ -373,7 +452,7 @@ const mailQueue = new MailTime({
 
 ### `static MailTime.Template`
 
-Simple and bulletproof HTML template, see its [source](https://github.com/veliovgroup/Mail-Time/blob/master/template.html). Usage:
+Simple and bulletproof HTML template, see [its source](https://github.com/veliovgroup/Mail-Time/blob/master/template.html). Usage example:
 
 ```js
 const MailTime  = require('mail-time');
@@ -393,6 +472,8 @@ mailQueue.sendMail({
 ```
 
 ### Template Example
+
+Pass custom template via `template` property to `.sendMail()` method
 
 ```js
 mailQueue.sendMail({
