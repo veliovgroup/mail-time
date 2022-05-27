@@ -1,5 +1,5 @@
-const JoSk   = require('josk');
-const NoOp   = () =>  {};
+const JoSk = require('josk');
+const noop = () =>  {};
 const merge  = require('deepmerge');
 const _debug = (isDebug, ...args) => {
   if (isDebug) {
@@ -142,9 +142,9 @@ module.exports = class MailTime {
       return false;
     })();
 
-    this.concatEmails     = (opts.concatEmails !== true) ? false : true;
-    this.concatSubject    = (opts.concatSubject && typeof opts.concatSubject === 'string') ? opts.concatSubject : 'Multiple notifications';
-    this.concatDelimiter  = (opts.concatDelimiter && typeof opts.concatDelimiter === 'string') ? opts.concatDelimiter : '<hr>';
+    this.concatEmails = (opts.concatEmails !== true) ? false : true;
+    this.concatSubject = (opts.concatSubject && typeof opts.concatSubject === 'string') ? opts.concatSubject : 'Multiple notifications';
+    this.concatDelimiter = (opts.concatDelimiter && typeof opts.concatDelimiter === 'string') ? opts.concatDelimiter : '<hr>';
     this.concatThrottling = ((opts.concatThrottling && !isNaN(opts.concatThrottling)) ? parseInt(opts.concatThrottling) : 60) * 1000;
 
     if (this.concatThrottling < 2048) {
@@ -192,7 +192,7 @@ module.exports = class MailTime {
     // mailOptions.Other nodeMailer `sendMail` options...
 
     if (this.type === 'server') {
-      this.scheduler = new JoSk({
+      const scheduler = new JoSk({
         db: opts.db,
         debug: this.debug,
         prefix: `mailTimeQueue${this.prefix}`,
@@ -202,7 +202,7 @@ module.exports = class MailTime {
         maxRevolvingDelay: this.maxRevolvingDelay
       });
 
-      this.scheduler.setInterval(this.___send.bind(this), this.revolvingInterval, `mailTimeQueue${this.prefix}`);
+      scheduler.setInterval(this.___send.bind(this), this.revolvingInterval, `mailTimeQueue${this.prefix}`);
     }
   }
 
@@ -279,7 +279,6 @@ module.exports = class MailTime {
    * @returns {void}
    */
   ___send(ready) {
-    let finished = 0;
     const cursor = this.collection.find({
       isSent: false,
       sendAt: {
@@ -299,88 +298,71 @@ module.exports = class MailTime {
       }
     });
 
-    cursor.count((countError, count) => {
-      if (countError) {
-        ready();
-        cursor.close();
-        _logError('[___send] [count] [countError]', countError);
-        return;
-      }
-
-      if (count) {
-        cursor.forEach((task) => {
-          this.collection.updateOne({
-            _id: task._id
-          }, {
-            $set: {
-              isSent: true
-            },
-            $inc: {
-              tries: 1
+    cursor.forEach((task) => {
+      this.collection.updateOne({
+        _id: task._id
+      }, {
+        $set: {
+          isSent: true
+        },
+        $inc: {
+          tries: 1
+        }
+      }, (updateError) => {
+        if (updateError) {
+          this.___handleError(task, updateError, {});
+        } else {
+          let transport;
+          let transportIndex;
+          if (this.strategy === 'balancer') {
+            this.transport = this.transport + 1;
+            if (this.transport >= this.transports.length) {
+              this.transport = 0;
             }
-          }, (updateError) => {
-            if (count === ++finished) {
-              ready();
-            }
-
-            if (updateError) {
-              this.___handleError(task, updateError, {});
-            } else {
-              let transport;
-              let transportIndex;
-              if (this.strategy === 'balancer') {
-                this.transport = this.transport + 1;
-                if (this.transport >= this.transports.length) {
-                  this.transport = 0;
-                }
-                transportIndex = this.transport;
-                transport = this.transports[this.transport];
-              } else {
-                transportIndex = task.transport;
-                transport = this.transports[task.transport];
-              }
-
-              try {
-                const _mailOpts = this.___compileMailOpts(transport, task);
-
-                _debug(this.debug, '[sendMail] [sending] To:', _mailOpts.to);
-                transport.sendMail(_mailOpts, (error, info) => {
-                  if (error) {
-                    this.___handleError(task, error, info);
-                    return;
-                  }
-
-                  if (info.accepted && !info.accepted.length) {
-                    this.___handleError(task, 'Message not accepted or Greeting never received', info);
-                    return;
-                  }
-
-                  _debug(this.debug, `email successfully sent, attempts: #${task.tries}, transport #${transportIndex} to: `, _mailOpts.to);
-                  if (this.keepHistory) {
-                    this.___triggerCallbacks(void 0, task, info);
-                  } else {
-                    this.collection.deleteOne({ _id: task._id }, () => {
-                      this.___triggerCallbacks(void 0, task, info);
-                    });
-                  }
-
-                  return;
-                });
-              } catch (e) {
-                _logError('Exception during runtime:', e);
-                this.___handleError(task, e, {});
-              }
-            }
-          });
-        }, (forEachError) => {
-          cursor.close();
-          if (forEachError) {
-            _logError('[___send] [forEach] [forEachError]', forEachError);
+            transportIndex = this.transport;
+            transport = this.transports[this.transport];
+          } else {
+            transportIndex = task.transport;
+            transport = this.transports[task.transport];
           }
-        });
-      } else {
-        ready();
-        cursor.close();
+
+          try {
+            const _mailOpts = this.___compileMailOpts(transport, task);
+
+            _debug(this.debug, '[sendMail] [sending] To:', _mailOpts.to);
+            transport.sendMail(_mailOpts, (error, info) => {
+              if (error) {
+                this.___handleError(task, error, info);
+                return;
+              }
+
+              if (info.accepted && !info.accepted.length) {
+                this.___handleError(task, 'Message not accepted or Greeting never received', info);
+                return;
+              }
+
+              _debug(this.debug, `email successfully sent, attempts: #${task.tries}, transport #${transportIndex} to: `, _mailOpts.to);
+              if (this.keepHistory) {
+                this.___triggerCallbacks(void 0, task, info);
+              } else {
+                this.collection.deleteOne({ _id: task._id }, () => {
+                  this.___triggerCallbacks(void 0, task, info);
+                });
+              }
+
+              return;
+            });
+          } catch (e) {
+            _logError('Exception during runtime:', e);
+            this.___handleError(task, e, {});
+          }
+        }
+      });
+    }, (forEachError) => {
+      ready();
+      cursor.close();
+      if (forEachError) {
+        _logError('[___send] [forEach] [forEachError]', forEachError);
       }
     });
   }
@@ -405,7 +387,7 @@ module.exports = class MailTime {
    * @param callback      {Function} - [OPTIONAL] Callback function
    * @returns {void}
    */
-  sendMail(opts = {}, callback = NoOp) {
+  sendMail(opts = {}, callback = noop) {
     _debug(this.debug, '[sendMail] [attempt] To:', opts.to);
     if (!opts.html && !opts.text) {
       throw new Error('`html` nor `text` field is presented, at least one of those fields is required');
@@ -423,8 +405,8 @@ module.exports = class MailTime {
       opts.concatSubject = false;
     }
 
-    let _sendAt          = opts.sendAt;
-    const _template      = opts.template;
+    let _sendAt = opts.sendAt;
+    const _template = opts.template;
     const _concatSubject = opts.concatSubject;
     delete opts.sendAt;
     delete opts.template;
@@ -599,7 +581,7 @@ module.exports = class MailTime {
    */
   ___render(_string, replacements) {
     let i;
-    let string      = _string;
+    let string = _string;
     const matchHTML = string.match(/\{{3}\s?([a-zA-Z0-9\-\_]+)\s?\}{3}/g);
     if (matchHTML) {
       for (i = 0; i < matchHTML.length; i++) {
