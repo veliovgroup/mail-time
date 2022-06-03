@@ -1,4 +1,4 @@
-[![support](https://img.shields.io/badge/support-GitHub-white)](https://github.com/sponsors/veliovgroup)
+[![support](https://img.shields.io/badge/support-GitHub-white)](https://github.com/sponsors/dr-dimitru)
 [![support](https://img.shields.io/badge/support-PayPal-white)](https://paypal.me/veliovgroup)
 <a href="https://ostr.io/info/built-by-developers-for-developers">
   <img src="https://ostr.io/apple-touch-icon-60x60.png" height="20">
@@ -318,10 +318,10 @@ All options passed to the `.sendMail()` method is available inside `text`, `html
 
 ```js
 const templates = {
-  global: '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>{{subject}}</title></head><body>{{html}}<footer>Message sent to @{{username}} user ({{to}})</footer></body></html>',
+  global: '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>{{subject}}</title></head><body>{{{html}}}<footer>Message sent to @{{username}} user ({{to}})</footer></body></html>',
   signInCode: {
     text: 'Hello @{{username}}! Here\'s your login code: {{code}}'
-    html: `<h1>Sign-in request</h1><p>Hello @{{username}}! Copy your login code below <pre><code>{{code}}</code></pre>`
+    html: `<h1>Sign-in request</h1><p>Hello @{{username}}! <p>Copy your login code below:</p> <pre><code>{{code}}</code></pre>`
   }
 }
 
@@ -334,7 +334,7 @@ mailQueue.sendMail({
   to: 'user@gmail.com',
   subject: 'Sign-in request',
   username: 'johndoe',
-  code: 'XXXXX-YY'
+  code: 'XXXXX-YY',
   text: templates.signInCode.text,
   html: templates.signInCode.html
 });
