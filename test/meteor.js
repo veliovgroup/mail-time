@@ -98,7 +98,7 @@ const runTests = (type, concat) => {
           text: '{{user}}, {{ baseUrl }}',
           html: '<p>Hi {{user}}, {{{ baseUrl }}}</p>',
           template: '{{{html}}} {{baseUrl}}',
-          sendAt: new Date(Date.now() + CHECK_TIMEOUT + 512)
+          sendAt: new Date(Date.now() + CHECK_TIMEOUT + 2048)
         });
 
         setTimeout(() => {
