@@ -173,8 +173,8 @@ const directTransportOpts = {
   from: 'no-reply@example.com',
 };
 transports.push(nodemailer.createTransport(directTransport(directTransportOpts)));
-// IMPORTANT: Copy-paste passed options from directTransport() to
-// transport's "options" property, to make sure it's available to MailTime package:
+// IMPORTANT: Add `.options` to a newly created transport,
+// this is necessary to make sure options are available to MailTime package:
 transports[0].options = directTransportOpts;
 
 // Private SMTP
