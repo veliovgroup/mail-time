@@ -1,6 +1,6 @@
 const JoSk = require('josk');
 const noop = () =>  {};
-const merge  = require('deepmerge');
+const merge = require('deepmerge');
 const _debug = (isDebug, ...args) => {
   if (isDebug) {
     console.info.call(console, '[DEBUG] [mail-time]', `${new Date}`, ...args);
@@ -102,13 +102,13 @@ module.exports = class MailTime {
       throw new Error('[mail-time] MongoDB database {db} option is required, like returned from `MongoClient.connect`');
     }
 
-    this.callbacks  = {};
-    this.type       = (!opts.type || (opts.type !== 'client' && opts.type !== 'server')) ? 'server' : opts.type;
-    this.debug      = (opts.debug !== true) ? false : true;
-    this.prefix     = opts.prefix || '';
-    this.maxTries   = ((opts.maxTries && !isNaN(opts.maxTries)) ? parseInt(opts.maxTries) : 59) + 1;
-    this.interval   = ((opts.interval && !isNaN(opts.interval)) ? parseInt(opts.interval) : 60) * 1000;
-    this.template   = (typeof opts.template === 'string') ? opts.template : '{{{html}}}';
+    this.callbacks = {};
+    this.type = (!opts.type || (opts.type !== 'client' && opts.type !== 'server')) ? 'server' : opts.type;
+    this.debug = (opts.debug !== true) ? false : true;
+    this.prefix = opts.prefix || '';
+    this.maxTries = ((opts.maxTries && !isNaN(opts.maxTries)) ? parseInt(opts.maxTries) : 59) + 1;
+    this.interval = ((opts.interval && !isNaN(opts.interval)) ? parseInt(opts.interval) : 60) * 1000;
+    this.template = (typeof opts.template === 'string') ? opts.template : '{{{html}}}';
     this.zombieTime = opts.zombieTime || 32786;
     this.keepHistory = opts.keepHistory || false;
 
@@ -124,11 +124,11 @@ module.exports = class MailTime {
       this.zombieTime = 8192;
     }
 
-    this.strategy    = (opts.strategy === 'backup' || opts.strategy === 'balancer') ? opts.strategy : 'backup';
     this.failsToNext = (opts.failsToNext && !isNaN(opts.failsToNext)) ? parseInt(opts.failsToNext) : 4;
-    this.transports  = opts.transports || [];
-    this.transport   = 0;
-    this.from        = (() => {
+    this.strategy = (opts.strategy === 'backup' || opts.strategy === 'balancer') ? opts.strategy : 'backup';
+    this.transports = opts.transports || [];
+    this.transport = 0;
+    this.from = (() => {
       if (typeof opts.from === 'string') {
         return () => {
           return opts.from;
@@ -320,10 +320,10 @@ module.exports = class MailTime {
               this.transport = 0;
             }
             transportIndex = this.transport;
-            transport = this.transports[this.transport];
+            transport = this.transports[transportIndex];
           } else {
             transportIndex = task.transport;
-            transport = this.transports[task.transport];
+            transport = this.transports[transportIndex];
           }
 
           try {
@@ -499,12 +499,14 @@ module.exports = class MailTime {
     }
 
     if (task.tries >= this.maxTries) {
-      this.collection.deleteOne({
-        _id: task._id
-      }, (deleteError) => {
-        _debug(this.debug, `Giving up trying send email after ${task.tries} attempts to: `, task.mailOptions[0].to, error, deleteError);
-        this.___triggerCallbacks(error, task, info);
-      });
+      if (!this.keepHistory) {
+        this.collection.deleteOne({
+          _id: task._id
+        }, (deleteError) => {
+          _debug(this.debug, `Giving up trying send email after ${task.tries} attempts to: `, task.mailOptions[0].to, error, deleteError);
+          this.___triggerCallbacks(error, task, info);
+        });
+      }
     } else {
       let transportIndex = task.transport;
 
@@ -591,7 +593,7 @@ module.exports = class MailTime {
       }
     }
 
-    const matchStr  = string.match(/\{{2}\s?([a-zA-Z0-9\-\_]+)\s?\}{2}/g);
+    const matchStr = string.match(/\{{2}\s?([a-zA-Z0-9\-\_]+)\s?\}{2}/g);
     if (matchStr) {
       for (i = 0; i < matchStr.length; i++) {
         if (replacements[matchStr[i].replace('{{', '').replace('}}', '').trim()]) {
