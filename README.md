@@ -212,12 +212,12 @@ transports.push(nodemailer.createTransport({
 As the next step initiate `mail-time` in the *Server* mode, it will be able to __send__ and __add__ emails to the queue. Connecting to a MongoDB before initiating `new MailTime` instance:
 
 ```js
+const MailTime = require('mail-time');
 const MongoClient = require('mongodb').MongoClient;
-const MailTime    = require('mail-time');
-const dbName      = 'DatabaseName';
 
-// We're using environment variable MONGO_URL
-// to store connection string to MongoDB
+const dbName = 'databaseName';
+
+// Use MONGO_URL environment variable to store connection string to MongoDB
 // example: "MONGO_URL=mongodb://127.0.0.1:27017/myapp node mail-micro-service.js"
 MongoClient.connect(process.env.MONGO_URL, (error, client) => {
   const db = client.db(dbName);
@@ -242,9 +242,10 @@ MongoClient.connect(process.env.MONGO_URL, (error, client) => {
 Only __one__ `MailTime` *Server* instance required to send email. In the other parts of an app (like UI units or in sub-apps) use `mail-time` in the *Client* mode to __add__ emails to queue:
 
 ```js
-const dbName = 'databaseName';
 const MailTime = require('mail-time');
 const MongoClient = require('mongodb').MongoClient;
+
+const dbName = 'databaseName';
 
 MongoClient.connect(process.env.MONGO_URL, (error, client) => {
   const db = client.db(dbName);
@@ -274,7 +275,7 @@ mailQueue.sendMail({
 Create two `MailTime` instances with different settings.
 
 ```js
-// USE FOR NON-URGENT EMAILS WHICH IS OKAY TO CONCATENATE
+// CREATE mailQueue FOR NON-URGENT EMAILS WHICH IS OKAY TO CONCATENATE
 const mailQueue = new MailTime({
   db: db,
   interval: 35,
@@ -285,7 +286,7 @@ const mailQueue = new MailTime({
   zombieTime: 120000
 });
 
-// USE FOR TRANSACTIONAL EMAILS AND ALERTS
+// CREATE mailInstantQueue FOR TRANSACTIONAL EMAILS AND ALERTS
 const mailInstantQueue = new MailTime({
   db: db,
   prefix: 'instant',
