@@ -2,11 +2,11 @@
 
 We maintain a custom package build specifically for [Meteor.js](https://docs.meteor.com/). Learn how to install and use it within [Meteor Framework](https://meteor.com)
 
-## Meteor.js usage:
+## Installation
 
 Mail-Time package can be installed and used within [Meteor.js](https://docs.meteor.com/) via [NPM](https://www.npmjs.com/package/mail-time) or [Atmosphere](https://atmospherejs.com/ostrio/mailer)
 
-### Installation & Import (*via Atmosphere*):
+### Install and import via Atmosphere:
 
 Install [Atmosphere `ostrio:mailer` package](https://atmospherejs.com/ostrio/mailer):
 
@@ -20,7 +20,7 @@ Meteor.js: ES6 Import atmosphere package:
 import MailTime from 'meteor/ostrio:mailer';
 ```
 
-### Installation & Import (*via NPM*):
+### Install and import via NPM:
 
 Install [NPM `mail-time` package](https://www.npmjs.com/package/mail-time):
 
@@ -34,7 +34,7 @@ Meteor.js: ES6 Import NPM package:
 import MailTime from 'mail-time';
 ```
 
-### Examples:
+## Examples:
 
 `mail-time` package usage examples in Meteor.js
 
@@ -77,11 +77,11 @@ const mailQueue = new MailTime({
 
 ## Testing
 
+Run automated tests
+
 1. Clone this package
 2. In Terminal (*Console*) go to directory where package is cloned
 3. Then run:
-
-Test Atmosphere (meteor.js) package:
 
 ```shell
 # Default

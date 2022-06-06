@@ -28,8 +28,7 @@ The main difference between *Server* and *Client* modes is that the *Server* han
   - [As Micro-Service](https://github.com/veliovgroup/Mail-Time#cluster-issue)
 - [Features](https://github.com/veliovgroup/Mail-Time#features)
 - [Installation](https://github.com/veliovgroup/Mail-Time#installation)
-- [Meteor.js Installation](https://github.com/veliovgroup/Mail-Time#installation--import-via-npm): as [NPM Package](https://www.npmjs.com/package/mail-time)
-- [Meteor.js Installation](https://github.com/veliovgroup/Mail-Time#installation--import-via-atmosphere): as [Atmosphere package](https://atmospherejs.com/ostrio/mailer)
+- [Meteor.js usage](https://github.com/veliovgroup/mail-time/blob/master/docs/meteor.md)
 - [Usage example](https://github.com/veliovgroup/Mail-Time#basic-usage)
 - [API](https://github.com/veliovgroup/Mail-Time#api)
   - [*Constructor*](https://github.com/veliovgroup/Mail-Time#new-mailtimeopts-constructor)
@@ -243,9 +242,9 @@ MongoClient.connect(process.env.MONGO_URL, (error, client) => {
 Only __one__ `MailTime` *Server* instance required to send email. In the other parts of an app (like UI units or in sub-apps) use `mail-time` in the *Client* mode to __add__ emails to queue:
 
 ```js
+const dbName = 'databaseName';
+const MailTime = require('mail-time');
 const MongoClient = require('mongodb').MongoClient;
-const MailTime    = require('mail-time');
-const dbName      = 'DatabaseName';
 
 MongoClient.connect(process.env.MONGO_URL, (error, client) => {
   const db = client.db(dbName);
@@ -320,10 +319,10 @@ All options passed to the `.sendMail()` method is available inside `text`, `html
 const templates = {
   global: '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>{{subject}}</title></head><body>{{{html}}}<footer>Message sent to @{{username}} user ({{to}})</footer></body></html>',
   signInCode: {
-    text: 'Hello @{{username}}! Here\'s your login code: {{code}}'
+    text: 'Hello @{{username}}! Here\'s your login code: {{code}}',
     html: `<h1>Sign-in request</h1><p>Hello @{{username}}! <p>Copy your login code below:</p> <pre><code>{{code}}</code></pre>`
   }
-}
+};
 
 const mailQueue = new MailTime({
   db: db,
@@ -337,79 +336,6 @@ mailQueue.sendMail({
   code: 'XXXXX-YY',
   text: templates.signInCode.text,
   html: templates.signInCode.html
-});
-```
-
-## Meteor.js usage:
-
-Mail-Time package can be installed and used within [Meteor.js](https://docs.meteor.com/) via [NPM](https://www.npmjs.com/package/mail-time) or [Atmosphere](https://atmospherejs.com/ostrio/mailer)
-
-### Installation & Import (*via NPM*):
-
-Install [NPM `mail-time` package](https://www.npmjs.com/package/mail-time):
-
-```shell
-meteor npm install --save mail-time
-```
-
-Meteor.js: ES6 Import NPM package:
-
-```js
-import MailTime from 'mail-time';
-```
-
-### Installation & Import (*via Atmosphere*):
-
-Install [Atmosphere `ostrio:mailer` package](https://atmospherejs.com/ostrio/mailer):
-
-```shell
-meteor add ostrio:mailer
-```
-
-Meteor.js: ES6 Import atmosphere package:
-
-```js
-import MailTime from 'meteor/ostrio:mailer';
-```
-
-### Usage:
-
-`mail-time` package usage examples in Meteor.js
-
-```js
-import { MongoInternals } from 'meteor/mongo';
-
-import MailTime from 'mail-time';
-import nodemailer from 'nodemailer';
-// Use DIRECT transport
-// To enable sending email from localhost
-// install "nodemailer-direct-transport" NPM package:
-import directTransport from 'nodemailer-direct-transport';
-
-const transports = [];
-const directTransportOpts = {
-  pool: false,
-  direct: true,
-  name: 'mail.example.com',
-  from: 'no-reply@example.com',
-};
-transports.push(nodemailer.createTransport(directTransport(directTransportOpts)));
-// IMPORTANT: Copy-paste passed options from directTransport() to
-// transport's "options" property, to make sure it's available to MailTime package:
-transports[0].options = directTransportOpts;
-
-////////////////////////
-// For more transports example see sections above and read nodemailer's docs
-////////////////////////
-
-const mailQueue = new MailTime({
-  db: MongoInternals.defaultRemoteCollectionDriver().mongo.db, // MongoDB
-  transports,
-  from(transport) {
-    // To pass spam-filters `from` field should be correctly set
-    // for each transport, check `transport` object for more options
-    return '"Awesome App" <' + transport.options.from + '>';
-  }
 });
 ```
 
