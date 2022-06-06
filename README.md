@@ -22,20 +22,20 @@ The main difference between *Server* and *Client* modes is that the *Server* han
 
 ## ToC
 
-- [How it works?](https://github.com/veliovgroup/Mail-Time#how-it-works)
-  - [With single SMTP](https://github.com/veliovgroup/Mail-Time#single-point-of-failure)
-  - [With multiple SMTP](https://github.com/veliovgroup/Mail-Time#multiple-smtp-providers)
-  - [As Micro-Service](https://github.com/veliovgroup/Mail-Time#cluster-issue)
-- [Features](https://github.com/veliovgroup/Mail-Time#features)
-- [Installation](https://github.com/veliovgroup/Mail-Time#installation)
+- [How it works?](https://github.com/veliovgroup/mail-time#how-it-works)
+  - [With single SMTP](https://github.com/veliovgroup/mail-time#single-point-of-failure)
+  - [With multiple SMTP](https://github.com/veliovgroup/mail-time#multiple-smtp-providers)
+  - [As Micro-Service](https://github.com/veliovgroup/mail-time#cluster-issue)
+- [Features](https://github.com/veliovgroup/mail-time#features)
+- [Installation](https://github.com/veliovgroup/mail-time#installation)
 - [Meteor.js usage](https://github.com/veliovgroup/mail-time/blob/master/docs/meteor.md)
-- [Usage example](https://github.com/veliovgroup/Mail-Time#basic-usage)
-- [API](https://github.com/veliovgroup/Mail-Time#api)
-  - [*Constructor*](https://github.com/veliovgroup/Mail-Time#new-mailtimeopts-constructor)
-  - [`.send()`](https://github.com/veliovgroup/Mail-Time#sendmailopts--callback)
-  - [Default Template](https://github.com/veliovgroup/Mail-Time#static-mailtimetemplate)
-- [Custom Templates](https://github.com/veliovgroup/Mail-Time#template-example)
-- [~92% tests coverage](https://github.com/veliovgroup/Mail-Time#testing)
+- [Usage example](https://github.com/veliovgroup/mail-time#basic-usage)
+- [API](https://github.com/veliovgroup/mail-time#api)
+  - [*Constructor*](https://github.com/veliovgroup/mail-time#new-mailtimeopts-constructor)
+  - [`.send()`](https://github.com/veliovgroup/mail-time#sendmailopts--callback)
+  - [Default Template](https://github.com/veliovgroup/mail-time#static-mailtimetemplate)
+- [Custom Templates](https://github.com/veliovgroup/mail-time#template-example)
+- [~92% tests coverage](https://github.com/veliovgroup/mail-time#testing)
 
 ## Main features:
 
@@ -374,15 +374,15 @@ All available constructor options and `.sendMail()` method API overview
 - `opts.sendAt` {*Date*} - When email should be sent, default - `new Date()` use with caution on multi-server setup at different location with the different time-zones
 - `opts.template` - Email specific template, this will override default template passed to `MailTime` constructor
 - `opts.concatSubject` - Email specific concatenation subject, this will override default concatenation subject passed to `MailTime` constructor
-- `opts[key]` {*Mix*} - Other custom and NodeMailer specific options, like `text`, `html` and `to`, see more [here](https://github.com/nodemailer/nodemailer/tree/v2#e-mail-message-fields). Note `attachments` should work only via `path`, and file must exists on all micro-services servers
+- `opts[key]` {*Mix*} - Other custom and NodeMailer specific options, like `text`, `html` and `to`, [learn more here](https://github.com/nodemailer/nodemailer/tree/v2#e-mail-message-fields). Note `attachments` should work only via `path`, and file must exists on all micro-services servers
 - `callback` {*Function*} - Callback called after the email was sent or failed to be sent. __Do not use on multi-server setup__
 
 ### `static MailTime.Template`
 
-Simple and bulletproof HTML template, see [its source](https://github.com/veliovgroup/Mail-Time/blob/master/template.html). Usage example:
+Simple and bulletproof HTML template, see [its source](https://github.com/veliovgroup/mail-time/blob/master/template.html). Usage example:
 
 ```js
-const MailTime  = require('mail-time');
+const MailTime = require('mail-time');
 // Make it default
 const mailQueue = new MailTime({
   db: db, // MongoDB

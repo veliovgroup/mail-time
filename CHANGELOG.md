@@ -1,1 +1,1 @@
-For full changelog see [releases](https://github.com/veliovgroup/Mail-Time/releases) in GitHub
+For full changelog see [releases](https://github.com/veliovgroup/mail-time/releases) in GitHub
