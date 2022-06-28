@@ -6,19 +6,11 @@
 
 # MailTime
 
-Micro-service package for mail queue, with *Server* and *Client* API.
-Build on top of [`nodemailer`](https://github.com/nodemailer/nodemailer) package.
-
-Every `MailTime` instance can be configured to be a *Server* or *Client*.
-
-Main difference of *Server* from *Client* - *Server* handles queue and actually sends email.
-While *Client* is only put emails into the queue.
-
 "Mail-Time" is a micro-service package for mail queue, with *Server* and *Client* APIs. Build on top of the [`nodemailer`](https://github.com/nodemailer/nodemailer) package.
 
-Every `MailTime` instance can get configured as *Server* or *Client*.
+Every `MailTime` instance can get `type` configured as *Server* or *Client*.
 
-The main difference between *Server* and *Client* modes is that the *Server* handles the queue and __sends__ email. While the *Client* only __adds__ emails into the queue.
+The main difference between *Server* and *Client* `type` is that the *Server* handles the queue and __sends__ email. While the *Client* only __adds__ emails into the queue.
 
 ## ToC
 
