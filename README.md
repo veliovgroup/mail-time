@@ -424,21 +424,6 @@ DEBUG="true" EMAIL_DOMAIN="example.com" MONGO_URL="mongodb://127.0.0.1:27017/npm
 # Be patient, tests are taking around 2 mins
 ```
 
-Test Atmosphere (meteor.js) package:
-
-```shell
-# Default
-EMAIL_DOMAIN="example.com" meteor test-packages ./ --driver-package=meteortesting:mocha
-
-# With custom port
-DEBUG="true" EMAIL_DOMAIN="example.com" meteor test-packages ./ --driver-package=meteortesting:mocha --port 8888
-
-# With local MongoDB and custom port
-DEBUG="true" EMAIL_DOMAIN="example.com" MONGO_URL="mongodb://127.0.0.1:27017/meteor-mail-time-test-001" meteor test-packages ./ --driver-package=meteortesting:mocha --port 8888
-
-# Be patient, tests are taking around 2 mins
-```
-
 ## Support this project:
 
 - Star on [GitHub](https://github.com/veliovgroup/mail-time)
