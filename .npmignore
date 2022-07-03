@@ -4,6 +4,7 @@
 .eslintrc
 .github
 .meteor
+.meteorignore
 .npm
 .versions
 ascii
@@ -15,3 +16,5 @@ package.js
 template.html
 test/
 test/*
+docs/
+docs/*
