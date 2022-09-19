@@ -163,12 +163,12 @@ module.exports = class MailTime {
     }
 
     this.collection = opts.db.collection(`__mailTimeQueue__${this.prefix}`);
-    this.collection.createIndex({ to: 1, isSent: 1, sendAt: 1 }, (indexError) => {
+    this.collection.createIndex({ isSent: 1, to: 1, sendAt: 1 }, (indexError) => {
       if (indexError) {
         _logError('[createIndex]', indexError);
       }
     });
-    this.collection.createIndex({ sendAt: 1, isSent: 1, tries: 1 }, { background: true }, (indexError) => {
+    this.collection.createIndex({ isSent: 1, sendAt: 1, tries: 1 }, { background: true }, (indexError) => {
       if (indexError) {
         _logError('[createIndex]', indexError);
       }
