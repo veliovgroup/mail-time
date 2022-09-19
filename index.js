@@ -162,7 +162,7 @@ module.exports = class MailTime {
       throw new Error('[mail-time] transports is required and must be an Array, like returned from `nodemailer.createTransport`');
     }
 
-    this.collection = opts.db.collection('__mailTimeQueue__' + this.prefix);
+    this.collection = opts.db.collection(`__mailTimeQueue__${this.prefix}`);
     this.collection.createIndex({ to: 1, isSent: 1, sendAt: 1 }, (indexError) => {
       if (indexError) {
         _logError('[createIndex]', indexError);
