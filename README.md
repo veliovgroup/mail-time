@@ -1,11 +1,7 @@
 [![support](https://img.shields.io/badge/support-GitHub-white)](https://github.com/sponsors/dr-dimitru)
 [![support](https://img.shields.io/badge/support-PayPal-white)](https://paypal.me/veliovgroup)
-<a href="https://ostr.io/info/built-by-developers-for-developers?ref=github-mail-time-repo-top">
-  <img src="https://ostr.io/apple-touch-icon-60x60.png" height="20">
-</a>
-<a href="https://meteor-files.com/?ref=github-mail-time-repo-top">
-  <img src="https://meteor-files.com/apple-touch-icon-60x60.png" height="20">
-</a>
+<a href="https://ostr.io/info/built-by-developers-for-developers?ref=github-mail-time-repo-top"><img src="https://ostr.io/apple-touch-icon-60x60.png" height="20"></a>
+<a href="https://meteor-files.com/?ref=github-mail-time-repo-top"><img src="https://meteor-files.com/apple-touch-icon-60x60.png" height="20"></a>
 
 # MailTime
 
