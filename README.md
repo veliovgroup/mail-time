@@ -1,7 +1,10 @@
 [![support](https://img.shields.io/badge/support-GitHub-white)](https://github.com/sponsors/dr-dimitru)
 [![support](https://img.shields.io/badge/support-PayPal-white)](https://paypal.me/veliovgroup)
-<a href="https://ostr.io/info/built-by-developers-for-developers">
+<a href="https://ostr.io/info/built-by-developers-for-developers?ref=github-mail-time-repo-top">
   <img src="https://ostr.io/apple-touch-icon-60x60.png" height="20">
+</a>
+<a href="https://meteor-files.com/?ref=github-mail-time-repo-top">
+  <img src="https://meteor-files.com/apple-touch-icon-60x60.png" height="20">
 </a>
 
 # MailTime
@@ -432,4 +435,5 @@ DEBUG="true" EMAIL_DOMAIN="example.com" MONGO_URL="mongodb://127.0.0.1:27017/npm
 - [Sponsor maintainer via GitHub](https://github.com/sponsors/dr-dimitru) — support open source with one-time contribution or on a regular basis
 - [Sponsor veliovgroup via GitHub](https://github.com/sponsors/veliovgroup) — support company behind this package
 - [Support via PayPal](https://paypal.me/veliovgroup) — support our open source contributions
-- Use [ostr.io](https://ostr.io) — [Monitoring](https://snmp-monitoring.com), [Analytics](https://ostr.io/info/web-analytics), [WebSec](https://domain-protection.info), [Web-CRON](https://web-cron.info) and [Pre-rendering](https://prerendering.com) for a website
+- Use [meteor-files.com](https://meteor-files.com/?ref=github-mail-time-repo-footer) — Resume interrupted file uploads without losing any progress. There is nothing that will stop Meteor from delivering your file to the desired destination
+- Use [ostr.io](https://ostr.io?ref=github-mail-time-repo-footer) — [Monitoring](https://snmp-monitoring.com), [Analytics](https://ostr.io/info/web-analytics?ref=github-mail-time-repo-footer), [WebSec](https://domain-protection.info), [Web-CRON](https://web-cron.info) and [Pre-rendering](https://prerendering.com) for a website
