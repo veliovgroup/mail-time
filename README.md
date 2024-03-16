@@ -425,8 +425,8 @@ DEBUG="true" EMAIL_DOMAIN="example.com" MONGO_URL="mongodb://127.0.0.1:27017/npm
 
 ## Support this project:
 
-- Upload and share files using [☄️ meteor-files.com](https://meteor-files.com/?ref=github-mail-time-repo-footer) — Resume interrupted file uploads without losing any progress. There is nothing that will stop Meteor from delivering your file to the desired destination
-- Use [▲ ostr.io](https://ostr.io?ref=github-mail-time-repo-footer) For [Server Monitoring](https://snmp-monitoring.com), [Web Analytics](https://ostr.io/info/web-analytics?ref=github-mail-time-repo-footer), [WebSec](https://domain-protection.info), [Web-CRON](https://web-cron.info) and [SEO Pre-rendering](https://prerendering.com) for a website
+- Upload and share files using [☄️ meteor-files.com](https://meteor-files.com/?ref=github-mail-time-repo-footer) — Continue interrupted file uploads without losing any progress. There is nothing that will stop Meteor from delivering your file to the desired destination
+- Use [▲ ostr.io](https://ostr.io?ref=github-mail-time-repo-footer) for [Server Monitoring](https://snmp-monitoring.com), [Web Analytics](https://ostr.io/info/web-analytics?ref=github-mail-time-repo-footer), [WebSec](https://domain-protection.info), [Web-CRON](https://web-cron.info) and [SEO Pre-rendering](https://prerendering.com) of a website
 - Star on [GitHub](https://github.com/veliovgroup/mail-time)
 - Star on [NPM](https://www.npmjs.com/package/mail-time)
 - Star on [Atmosphere](https://atmospherejs.com/ostrio/mailer)
