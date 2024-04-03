@@ -1,11 +1,13 @@
+import MailTime from '../index.js';
+import nodemailer from 'nodemailer';
+import directTransport from 'nodemailer-direct-transport';
+import { MongoClient } from 'mongodb';
+import { assert } from 'chai';
+import { it, describe, before } from 'mocha';
+
 if (!process.env.MONGO_URL) {
   throw new Error('MONGO_URL env.var is not defined! Please run test with MONGO_URL, like `MONGO_URL=mongodb://127.0.0.1:27017/dbname npm test`');
 }
-
-const MailTime        = require('../index.js');
-const nodemailer      = require('nodemailer');
-const directTransport = require('nodemailer-direct-transport');
-const { MongoClient } = require('mongodb');
 
 const mongoAddr  = (process.env.MONGO_URL || '');
 const dbName     = mongoAddr.split('/').pop().replace(/\/$/, '');
@@ -14,9 +16,6 @@ const DEBUG      = process.env.DEBUG === 'true' ? true : false;
 const domain     = process.env.EMAIL_DOMAIN || 'example.com';
 const TEST_TITLE = 'testSuiteNPM';
 const CHECK_TIMEOUT = 1024;
-
-const { assert } = require('chai');
-const { it, describe, before } = require('mocha');
 
 let db;
 let client;
@@ -36,8 +35,8 @@ before(async function () {
     // poolSize: 15,
     // reconnectTries: 60,
     socketTimeoutMS: 720000,
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
+    // useNewUrlParser: true,
+    // useUnifiedTopology: true,
     connectTimeoutMS: 120000,
     // reconnectInterval: 3072,
     // connectWithNoPrimary: false,
@@ -139,18 +138,16 @@ describe('MailTime Instance', function () {
             sendAt: new Date(Date.now() + CHECK_TIMEOUT + 2048)
           });
 
-          setTimeout(() => {
-            mailTimes[type].collection.findOne({
+          setTimeout(async () => {
+            const task = await mailTimes[type].collection.findOne({
               'mailOptions.to': `mail-time-tests-1@${domain}`
-            }, (findError, task) => {
-              assert.equal(findError, undefined, 'no error');
-              assert.isObject(task, 'task is Object');
-
-              const rendered = mailTimes[type].___compileMailOpts(transports[0], task);
-              assert.equal(rendered.html, '<p>Hi John, <b>http://example.com</b></p> http://example.com', 'HTML template is properly rendered');
-              assert.equal(rendered.text, 'John, http://example.com', 'Text template is properly rendered');
-              done();
             });
+
+            assert.isObject(task, 'task is Object');
+            const rendered = mailTimes[type].___compileMailOpts(transports[0], task);
+            assert.equal(rendered.html, '<p>Hi John, <b>http://example.com</b></p> http://example.com', 'HTML template is properly rendered');
+            assert.equal(rendered.text, 'John, http://example.com', 'Text template is properly rendered');
+            done();
           }, CHECK_TIMEOUT);
         });
 
@@ -163,18 +160,17 @@ describe('MailTime Instance', function () {
             html: '<p>Plain text</p>',
           });
 
-          setTimeout(() => {
-            mailTimes[type].collection.findOne({
+          setTimeout(async () => {
+            const task = await mailTimes[type].collection.findOne({
               'mailOptions.to': `mail-time-tests-2@${domain}`
-            }, (findError, task) => {
-              assert.equal(findError, undefined, 'no error');
-              assert.isObject(task, 'task is Object');
-
-              const rendered = mailTimes[type].___compileMailOpts(transports[0], task);
-              assert.equal(rendered.html, '<p>Plain text</p>', 'HTML template is properly rendered');
-              assert.equal(rendered.text, 'Plain text', 'Text template is properly rendered');
-              done();
             });
+
+            assert.isObject(task, 'task is Object');
+
+            const rendered = mailTimes[type].___compileMailOpts(transports[0], task);
+            assert.equal(rendered.html, '<p>Plain text</p>', 'HTML template is properly rendered');
+            assert.equal(rendered.text, 'Plain text', 'Text template is properly rendered');
+            done();
           }, CHECK_TIMEOUT);
         });
 
@@ -188,18 +184,17 @@ describe('MailTime Instance', function () {
             template: '<body>{{{html}}}</body>'
           });
 
-          setTimeout(() => {
-            mailTimes[type].collection.findOne({
+          setTimeout(async () => {
+            const task = await mailTimes[type].collection.findOne({
               'mailOptions.to': `mail-time-tests-3@${domain}`
-            }, (findError, task) => {
-              assert.equal(findError, undefined, 'no error');
-              assert.isObject(task, 'task is Object');
-
-              const rendered = mailTimes[type].___compileMailOpts(transports[0], task);
-              assert.equal(rendered.html, `<body><div style="text-align: center"><h1>Hello Mike</h1><p><ul><li>Thank you for registration</li><li>Your login: mail-time-tests-3@${domain}</li></ul></p></div></body>`, 'HTML template is properly rendered');
-              assert.equal(rendered.text, `Hello Mike, \r\n Thank you for registration \r\n Your login: mail-time-tests-3@${domain}`, 'Text template is properly rendered');
-              done();
             });
+
+            assert.isObject(task, 'task is Object');
+
+            const rendered = mailTimes[type].___compileMailOpts(transports[0], task);
+            assert.equal(rendered.html, `<body><div style="text-align: center"><h1>Hello Mike</h1><p><ul><li>Thank you for registration</li><li>Your login: mail-time-tests-3@${domain}</li></ul></p></div></body>`, 'HTML template is properly rendered');
+            assert.equal(rendered.text, `Hello Mike, \r\n Thank you for registration \r\n Your login: mail-time-tests-3@${domain}`, 'Text template is properly rendered');
+            done();
           }, CHECK_TIMEOUT);
         });
 

@@ -1,17 +1,17 @@
 import { MongoInternals } from 'meteor/mongo';
-import MailTime           from '../index.js';
-import nodemailer         from 'nodemailer';
-import directTransport    from 'nodemailer-direct-transport';
-import { assert }         from 'meteor/practicalmeteor:chai';
+import MailTime from '../index.js';
+import nodemailer from 'nodemailer';
+import directTransport from 'nodemailer-direct-transport';
+import { assert } from 'chai';
 
 if (!process.env.MONGO_URL) {
   throw new Error('MONGO_URL env.var is not defined! Please run test with MONGO_URL, like `MONGO_URL=mongodb://127.0.0.1:27017/dbname npm test`');
 }
 
 const transports = [];
-const DEBUG      = process.env.DEBUG === 'true' ? true : false;
-const db         = MongoInternals.defaultRemoteCollectionDriver().mongo.db;
-const domain     = process.env.EMAIL_DOMAIN || 'example.com';
+const DEBUG = process.env.DEBUG === 'true' ? true : false;
+const db = MongoInternals.defaultRemoteCollectionDriver().mongo.db;
+const domain = process.env.EMAIL_DOMAIN || 'example.com';
 const TEST_TITLE = 'testSuiteMeteor';
 const CHECK_TIMEOUT = 2048;
 
@@ -101,18 +101,16 @@ const runTests = (type, concat) => {
           sendAt: new Date(Date.now() + CHECK_TIMEOUT + 2048)
         });
 
-        setTimeout(() => {
-          mailQueue.collection.findOne({
+        setTimeout(async () => {
+          const task = await mailQueue.collection.findOne({
             'mailOptions.to': `mail-time-meteor-tests-1@${domain}`
-          }, (findError, task) => {
-            assert.equal(findError, undefined, 'no error');
-            assert.isObject(task, 'task is Object');
-
-            const rendered = mailQueue.___compileMailOpts(transports[0], task);
-            assert.equal(rendered.html, '<p>Hi John, <b>http://example.com</b></p> http://example.com', 'HTML template is properly rendered');
-            assert.equal(rendered.text, 'John, http://example.com', 'Text template is properly rendered');
-            done();
           });
+          assert.isObject(task, 'task is Object');
+
+          const rendered = mailQueue.___compileMailOpts(transports[0], task);
+          assert.equal(rendered.html, '<p>Hi John, <b>http://example.com</b></p> http://example.com', 'HTML template is properly rendered');
+          assert.equal(rendered.text, 'John, http://example.com', 'Text template is properly rendered');
+          done();
         }, CHECK_TIMEOUT);
       });
 
@@ -125,18 +123,16 @@ const runTests = (type, concat) => {
           html: '<p>Plain text</p>',
         });
 
-        setTimeout(() => {
-          mailQueue.collection.findOne({
+        setTimeout(async () => {
+          const task = await mailQueue.collection.findOne({
             'mailOptions.to': `mail-time-meteor-tests-2@${domain}`
-          }, (findError, task) => {
-            assert.equal(findError, undefined, 'no error');
-            assert.isObject(task, 'task is Object');
-
-            const rendered = mailQueue.___compileMailOpts(transports[0], task);
-            assert.equal(rendered.html, '<p>Plain text</p>', 'HTML template is properly rendered');
-            assert.equal(rendered.text, 'Plain text', 'Text template is properly rendered');
-            done();
           });
+          assert.isObject(task, 'task is Object');
+
+          const rendered = mailQueue.___compileMailOpts(transports[0], task);
+          assert.equal(rendered.html, '<p>Plain text</p>', 'HTML template is properly rendered');
+          assert.equal(rendered.text, 'Plain text', 'Text template is properly rendered');
+          done();
         }, CHECK_TIMEOUT);
       });
 
@@ -150,18 +146,16 @@ const runTests = (type, concat) => {
           template: '<body>{{{html}}}</body>'
         });
 
-        setTimeout(() => {
-          mailQueue.collection.findOne({
+        setTimeout(async () => {
+          const task = await mailQueue.collection.findOne({
             'mailOptions.to': `mail-time-meteor-tests-3@${domain}`
-          }, (findError, task) => {
-            assert.equal(findError, undefined, 'no error');
-            assert.isObject(task, 'task is Object');
-
-            const rendered = mailQueue.___compileMailOpts(transports[0], task);
-            assert.equal(rendered.html, `<body><div style="text-align: center"><h1>Hello Mike</h1><p><ul><li>Thank you for registration</li><li>Your login: mail-time-meteor-tests-3@${domain}</li></ul></p></div></body>`, 'HTML template is properly rendered');
-            assert.equal(rendered.text, `Hello Mike, \r\n Thank you for registration \r\n Your login: mail-time-meteor-tests-3@${domain}`, 'Text template is properly rendered');
-            done();
           });
+          assert.isObject(task, 'task is Object');
+
+          const rendered = mailQueue.___compileMailOpts(transports[0], task);
+          assert.equal(rendered.html, `<body><div style="text-align: center"><h1>Hello Mike</h1><p><ul><li>Thank you for registration</li><li>Your login: mail-time-meteor-tests-3@${domain}</li></ul></p></div></body>`, 'HTML template is properly rendered');
+          assert.equal(rendered.text, `Hello Mike, \r\n Thank you for registration \r\n Your login: mail-time-meteor-tests-3@${domain}`, 'Text template is properly rendered');
+          done();
         }, CHECK_TIMEOUT);
       });
 
@@ -187,7 +181,7 @@ const runTests = (type, concat) => {
         }, CHECK_TIMEOUT / 4);
 
         setTimeout(async () => {
-          const taskCursor = mailQueue.collection.find({
+          const qty = await mailQueue.collection.countDocuments({
             $or: [{
               to: `mail-time-meteor-tests-4@${domain}`
             }, {
@@ -195,15 +189,12 @@ const runTests = (type, concat) => {
             }]
           });
 
-          const qty = await taskCursor.count();
-
           if (concat === true) {
             assert.equal(qty, 1, 'Has single email record with concatenation');
           } else {
             assert.equal(qty, 2, 'Has two email records without concatenation');
           }
 
-          taskCursor.close();
           done();
         }, CHECK_TIMEOUT);
       });
