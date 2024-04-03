@@ -40,24 +40,37 @@ SINGLE SERVER WITH MULTIPLE SMTPs:
 
 
 
-CLUSTER USAGE:
+CLUSTER USAGE (DURABILITY):
+|===================THE=CLUSTER===================| |=QUEUE=|
+| |----------|     |----------|     |----------|  | |       |   |--------|
+| |   App    |     |   App    |     |   App    |  | |       |-->| SMTP 1 |------\
+| | Server 1 |     | Server 2 |     | Server 3 |  | |       |   |--------|       \
+| |-----\----|     |----\-----|     |----\-----|  | |       |                |-------------|
+|        \---------------\----------------\---------->      |   |--------|   |     ^_^     |
+|                                                 | |       |-->| SMTP 2 |-->| Happy users |
+| Each "App Server" or "Cluster Node"             | |       |   |--------|   |-------------|
+| runs MailTime as a "Server"                     | |       |                    /
+| for the maximum durability                      | |       |   |--------|      /
+|                                                 | |       |-->| SMTP 3 |-----/
+|                                                 | |       |   |--------|
+|=================================================| |=======|
+
+CLUSTER USAGE (MICROSERVICE):
 |===================THE=CLUSTER===================| |=QUEUE=| |===Mail=Time===|
-| |----------|     |----------|     |----------|  | |       | |=Micro-service=|   |--------|
-| |   App    |     |   App    |     |   App    |  | |       | |               |-->| SMTP 1 |------\
-| | Server 1 |     | Server 2 |     | Server 3 |  | |    <--------            |   |--------|       \
-| |-----\----|     |----\-----|     |----\-----|  | |    -------->            |                |-------------|
-|        \---------------\----------------\---------->      | |               |   |--------|   |     ^_^     |
-| Each of the "App Server" or "Cluster Node"      | |       | |               |-->| SMTP 2 |-->| Happy users |
-| runs Mail Time as a Client which only puts      | |       | |               |   |--------|   |-------------|
-| emails into the queue. Aside to "App Servers"   | |       | |               |                    /
-| We suggest running Mail Time as a Micro-service | |       | |               |   |--------|      /
-| which will be responsible for making sure queue | |       | |               |-->| SMTP 3 |-----/
-| has no duplicates and to actually send emails   | |       | |               |   |--------|
+| |----------|     |----------|     |----------|  | |       | |               |   |--------|
+| |   App    |     |   App    |     |   App    |  | |       | | Micro-service |-->| SMTP 1 |------\
+| | Server 1 |     | Server 2 |     | Server 3 |  | |       | | running       |   |--------|       \
+| |-----\----|     |----\-----|     |----\-----|  | |       | | MailTime as   |                |-------------|
+|        \---------------\----------------\---------->      | | "Server" only |   |--------|   |     ^_^     |
+|                                                 | |       | | sending       |-->| SMTP 2 |-->| Happy users |
+| Each "App Server" runs MailTime as              | |       | | emails        |   |--------|   |-------------|
+| a "Client" only placing emails to the queue.    | |    <--------            |                    /
+|                                                 | |    -------->            |   |--------|      /
+|                                                 | |       | |               |-->| SMTP 3 |-----/
+|                                                 | |       | |               |   |--------|
 |=================================================| |=======| |===============|
 
-
-
-CLUSTER EXPLAINED (Other angle):
+CLUSTER EXPLAINED (MICROSERVICE UNDER DIFFERENT ANLGE):
 |====================THE=CLUSTER===================|
 |  |----------|     |----------|     |----------|  |
 |  |   App    |     |   App    |     |   App    |  |

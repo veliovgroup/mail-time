@@ -61,7 +61,7 @@ transports.push(nodemailer.createTransport(directTransport(directTransportOpts))
 transports[0].options = directTransportOpts;
 
 ////////////////////////
-// See sections above and read nodemailer's docs for `transports` examples
+// Read nodemailer's docs for `transports` examples
 ////////////////////////
 
 const mailQueue = new MailTime({

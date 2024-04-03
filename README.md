@@ -5,34 +5,34 @@
 
 # MailTime
 
-"Mail-Time" is a micro-service package for mail queue, with *Server* and *Client* APIs. Build on top of the [`nodemailer`](https://github.com/nodemailer/nodemailer) package.
+"Mail-Time" is a micro-service package for mail queue, with *Server* and *Client* APIs. Build on top of the [`nodemailer`](https://github.com/nodemailer/nodemailer) package. Mail-Time made for single-server and horizontally scaled multi-server setups in mind.
 
-Every `MailTime` instance can get `type` configured as *Server* or *Client*.
+Every `MailTime` instance can have `type` configured as *Server* or *Client*.
 
 The main difference between *Server* and *Client* `type` is that the *Server* handles the queue and __sends__ email. While the *Client* only __adds__ emails into the queue.
 
 ## ToC
 
-- [How it works?](https://github.com/veliovgroup/mail-time#how-it-works)
-  - [With single SMTP](https://github.com/veliovgroup/mail-time#single-point-of-failure)
-  - [With multiple SMTP](https://github.com/veliovgroup/mail-time#multiple-smtp-providers)
-  - [As Micro-Service](https://github.com/veliovgroup/mail-time#cluster-issue)
-- [Features](https://github.com/veliovgroup/mail-time#features)
-- [Installation](https://github.com/veliovgroup/mail-time#installation)
+- [How it works?](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#how-it-works)
+  - [With single SMTP](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#single-point-of-failure)
+  - [With multiple SMTP](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#multiple-smtp-providers)
+  - [For Clusters](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#sending-emails-from-cluster-of-servers)
+- [Features](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#features)
+- [Installation](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#installation)
 - [Meteor.js usage](https://github.com/veliovgroup/mail-time/blob/master/docs/meteor.md)
-- [Usage example](https://github.com/veliovgroup/mail-time#basic-usage)
-- [API](https://github.com/veliovgroup/mail-time#api)
-  - [*Constructor*](https://github.com/veliovgroup/mail-time#new-mailtimeopts-constructor)
-  - [`.send()`](https://github.com/veliovgroup/mail-time#sendmailopts--callback)
-  - [Default Template](https://github.com/veliovgroup/mail-time#static-mailtimetemplate)
-- [Custom Templates](https://github.com/veliovgroup/mail-time#template-example)
-- [~92% tests coverage](https://github.com/veliovgroup/mail-time#testing)
+- [Usage example](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#basic-usage)
+- [API](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#api)
+  - [*Constructor*](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#new-mailtimeopts-constructor)
+  - [`.send()`](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#sendmailopts--callback)
+  - [Default Template](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#static-mailtimetemplate)
+- [Custom Templates](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#template-example)
+- [~92% tests coverage](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#testing)
 
 ## Main features:
 
 - 👨‍🔬 ~92% tests coverage;
 - 📦 Two simple dependencies, written from scratch for top performance;
-- 🏢 Synchronize email queue across multiple servers;
+- 🏢 Synchronize email queue across multiple (horizontally scaled) servers;
 - 💪 Bulletproof design, built-in retries.
 
 ## How does it work?
@@ -41,7 +41,7 @@ Redundant solution for email transmission.
 
 ### Single point of failure
 
-Issue - classic solution with a single point of failure:
+Issue - mitigate a single point of failure:
 
 ```ascii
 |----------------|         |------|         |------------------|
@@ -71,7 +71,7 @@ it will keep the letter in the queue and retry to send it again
 
 ### Multiple SMTP providers
 
-Backup scheme with multiple SMTP providers
+Rotate or backup email transports by using multiple SMTP providers
 
 ```ascii
                            |--------|
@@ -87,27 +87,45 @@ Backup scheme with multiple SMTP providers
                            |--------|
 ```
 
-### Cluster issue
+### Sending emails from cluster of servers
 
-It is common to create a "Cluster" of servers to balance the load and add a durability layer for horizontal scaling of quickly growing applications.
+It is common to have horizontally scaled "Cluster" of servers for load-balancing and for durability.
 
-Most modern application has scheduled or recurring emails. For example, once a day — with recent news and updates. It won't be an issue with a single server setup — the server would send emails at a daily interval via timer or CRON. While in "Cluster" implementation — each server will attempt to send the same email. In such cases, users will receive multiple emails with the same content. We built MailTime to address this and other similar issues.
+Most modern application has scheduled or recurring emails. For example, once a day — with recent news and updates. It won't be an issue with a single server setup — the server would send emails at a daily interval via timer or CRON. But in "Cluster" implementation — each server will attempt to send the same email. MailTime built to avoid sending the same email multiple times to a user from horizontally scaled applications.
 
-Here is how this issue is solved by using MailTime:
+For the maximum durability and agility each Application Server can run MailTime in the "Server" mode:
+
+```ascii
+|===================THE=CLUSTER===================| |=QUEUE=|
+| |----------|     |----------|     |----------|  | |       |   |--------|
+| |   App    |     |   App    |     |   App    |  | |       |-->| SMTP 1 |------\
+| | Server 1 |     | Server 2 |     | Server 3 |  | |       |   |--------|       \
+| |-----\----|     |----\-----|     |----\-----|  | |       |                |-------------|
+|        \---------------\----------------\---------->      |   |--------|   |     ^_^     |
+|                                                 | |       |-->| SMTP 2 |-->| Happy users |
+| Each "App Server" or "Cluster Node"             | |       |   |--------|   |-------------|
+| runs MailTime as a "Server"                     | |       |                    /
+| for the maximum durability                      | |       |   |--------|      /
+|                                                 | |       |-->| SMTP 3 |-----/
+|                                                 | |       |   |--------|
+|=================================================| |=======|
+```
+
+To split roles MailTime can run on a dedicated machine as micro-service. This case is great for private email servers with implemented authentication via rDNS and PTR records:
 
 ```ascii
 |===================THE=CLUSTER===================| |=QUEUE=| |===Mail=Time===|
-| |----------|     |----------|     |----------|  | |       | |=Micro-service=|   |--------|
-| |   App    |     |   App    |     |   App    |  | |       | |               |-->| SMTP 1 |------\
-| | Server 1 |     | Server 2 |     | Server 3 |  | |    <--------            |   |--------|       \
-| |-----\----|     |----\-----|     |----\-----|  | |    -------->            |                |-------------|
-|        \---------------\----------------\---------->      | |               |   |--------|   |     ^_^     |
-| Each of the "App Server" or "Cluster Node"      | |       | |               |-->| SMTP 2 |-->| Happy users |
-| runs Mail Time as a Client which only puts      | |       | |               |   |--------|   |-------------|
-| emails into the queue. Aside to "App Servers"   | |       | |               |                    /
-| We suggest running Mail Time as a Micro-service | |       | |               |   |--------|      /
-| which will be responsible for making sure queue | |       | |               |-->| SMTP 3 |-----/
-| has no duplicates and to actually send emails   | |       | |               |   |--------|
+| |----------|     |----------|     |----------|  | |       | |               |   |--------|
+| |   App    |     |   App    |     |   App    |  | |       | | Micro-service |-->| SMTP 1 |------\
+| | Server 1 |     | Server 2 |     | Server 3 |  | |       | | running       |   |--------|       \
+| |-----\----|     |----\-----|     |----\-----|  | |       | | MailTime as   |                |-------------|
+|        \---------------\----------------\---------->      | | "Server" only |   |--------|   |     ^_^     |
+|                                                 | |       | | sending       |-->| SMTP 2 |-->| Happy users |
+| Each "App Server" runs MailTime as              | |       | | emails        |   |--------|   |-------------|
+| a "Client" only placing emails to the queue.    | |    <--------            |                    /
+|                                                 | |    -------->            |   |--------|      /
+|                                                 | |       | |               |-->| SMTP 3 |-----/
+|                                                 | |       | |               |   |--------|
 |=================================================| |=======| |===============|
 ```
 
@@ -132,8 +150,11 @@ npm install --save nodemailer
 Install *MailTime* package:
 
 ```shell
-# for node@>=8.9.0
+# for node@>=14.20.0
 npm install --save mail-time
+
+# for node@<14.20.0
+npm install --save mail-time@=1.3.4
 
 # for node@<8.9.0
 npm install --save mail-time@=0.1.7
@@ -144,19 +165,23 @@ npm install --save mail-time@=0.1.7
 Require package:
 
 ```js
+// import as ES Module
+import MailTime from 'mail-time';
+
+// requires as CommonJS
 const MailTime = require('mail-time');
 ```
 
-Create nodemailer's transports (see [`nodemailer` docs](https://github.com/nodemailer/nodemailer/tree/v2#setting-up)):
+Create nodemailer's transports, for details see [`nodemailer` docs](https://github.com/nodemailer/nodemailer/tree/v2#setting-up):
 
 ```js
-const transports = [];
-const nodemailer = require('nodemailer');
-
+import nodemailer from 'nodemailer';
 // Use DIRECT transport
 // and enable sending email from localhost
 // install "nodemailer-direct-transport" NPM package:
-const directTransport = require('nodemailer-direct-transport');
+import directTransport from 'nodemailer-direct-transport';
+
+const transports = [];
 const directTransportOpts = {
   pool: false,
   direct: true,
