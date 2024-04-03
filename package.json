@@ -1,9 +1,15 @@
 {
   "name": "mail-time",
-  "version": "1.3.4",
+  "version": "1.4.0",
   "description": "Bulletproof email queue on top of NodeMailer for a single and multi-server setups",
   "main": "index.js",
+  "type": "module",
+  "exports": {
+    "import": "./index.js",
+    "require": "./index.cjs"
+  },
   "scripts": {
+    "prepublishOnly": "rollup --config rollup.config.js",
     "test": "mocha ./test/npm.js"
   },
   "keywords": [
@@ -11,11 +17,17 @@
     "balanced",
     "balancer",
     "bulletproof",
+    "cluster",
     "email",
+    "highload",
+    "high load",
+    "horizontal scaling",
     "mail",
     "mail-time",
     "mailer",
     "mailtime",
+    "microservice",
+    "micro-service",
     "nodemailer",
     "queue",
     "template"
@@ -25,11 +37,17 @@
     "balanced",
     "balancer",
     "bulletproof",
+    "cluster",
     "email",
+    "highload",
+    "high load",
+    "horizontal scaling",
     "mail",
     "mail-time",
     "mailer",
     "mailtime",
+    "microservice",
+    "micro-service",
     "nodemailer",
     "queue",
     "template"
@@ -45,19 +63,19 @@
   "author": "dr.dimitru (https://veliovgroup.com)",
   "license": "BSD-3-Clause",
   "engines": {
-    "node": ">=8.9.0"
+    "node": ">=14.1.0"
   },
   "dependencies": {
-    "deepmerge": "^4.2.2",
-    "josk": "^3.0.2"
+    "deepmerge": "^4.3.1",
+    "josk": "^3.1.1"
   },
   "devDependencies": {
-    "bson": "^4.7.0",
+    "bson": "^6.6.0",
     "bson-ext": "^4.0.3",
-    "chai": "^4.3.6",
-    "mocha": "^10.0.0",
-    "mongodb": "^4.10.0",
-    "nodemailer": "^6.7.8",
-    "nodemailer-direct-transport": "^3.0.7"
+    "chai": "^4.4.1",
+    "mocha": "^10.3.0",
+    "mongodb": "^6.5.0",
+    "nodemailer": "^6.9.12",
+    "nodemailer-direct-transport": "^3.3.2"
   }
 }

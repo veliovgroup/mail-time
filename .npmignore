@@ -13,6 +13,7 @@ cover.png
 node_modules
 npm-debug.log*
 package.js
+rollup.config.js
 template.html
 test/
 test/*

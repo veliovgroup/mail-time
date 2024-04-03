@@ -1,6 +1,7 @@
-const JoSk = require('josk');
+import JoSk from 'josk';
+import merge from 'deepmerge';
+
 const noop = () =>  {};
-const merge = require('deepmerge');
 const _debug = (isDebug, ...args) => {
   if (isDebug) {
     console.info.call(console, '[DEBUG] [mail-time]', `${new Date}`, ...args);
@@ -17,8 +18,62 @@ const mongoErrorHandler = (error) => {
   }
 };
 
-let equals;
-equals = (a, b) => {
+/**
+ * Ensure (create) index on MongoDB collection, catch and log exception if thrown
+ * @function ensureIndex
+ * @param {Collection} collection - Mongo's driver Collection instance
+ * @param {object} keys - Field and value pairs where the field is the index key and the value describes the type of index for that field
+ * @param {object} opts - Set of options that controls the creation of the index
+ * @returns {void 0}
+ */
+const ensureIndex = async (collection, keys, opts) => {
+  try {
+    await collection.createIndex(keys, opts);
+  } catch (e) {
+    if (e.code === 85) {
+      let indexName;
+      const indexes = await collection.indexes();
+      for (const index of indexes) {
+        let drop = true;
+        for (const indexKey of Object.keys(keys)) {
+          if (typeof index.key[indexKey] === 'undefined') {
+            drop = false;
+            break;
+          }
+        }
+
+        for (const indexKey of Object.keys(index.key)) {
+          if (typeof keys[indexKey] === 'undefined') {
+            drop = false;
+            break;
+          }
+        }
+
+        if (drop) {
+          indexName = index.name;
+          break;
+        }
+      }
+
+      if (indexName) {
+        await collection.dropIndex(indexName);
+        await collection.createIndex(keys, opts);
+      }
+    } else {
+      _logError(`[ensureIndex] Can not set ${Object.keys(keys).join(' + ')} index on "${collection._name}" collection`, { keys, opts, details: e });
+    }
+  }
+};
+
+/**
+ * Check if entities of various types are equal
+ * including edge cases like unordered Objects and Array
+ * @function equals
+ * @param {mix} a
+ * @param {mix} b
+ * @returns {boolean}
+ */
+const equals = (a, b) => {
   let i;
   if (a === b) {
     return true;
@@ -92,7 +147,8 @@ equals = (a, b) => {
 
 let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml><meta content="text/html; charset=utf-8"http-equiv=Content-Type><meta content="width=device-width,initial-scale=1"name=viewport><title>{{subject}}</title><style>body{-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:none;font-family:Tiempos,Georgia,Times,serif;font-weight:400;width:100%;height:100%;background:#fff;font-size:15px;color:#000;line-height:1.5}a{text-decoration:underline;border:0;color:#000;outline:0;color:inherit}a:hover{text-decoration:none}a[href^=sms],a[href^=tel]{text-decoration:none;color:#000;cursor:default}a img{border:none;text-decoration:none}td{font-family:Tiempos,Georgia,Times,serif;font-weight:400}hr{height:1px;border:none;width:100%;margin:0;margin-top:25px;margin-bottom:25px;background-color:#ECECEC}h1,h2,h3,h4,h5,h6{font-family:HelveticaNeue,"Helvetica Neue",Helvetica,Arial,sans-serif;font-weight:300;line-height:normal;margin-top:35px;margin-bottom:4px;margin-left:0;margin-right:0}h1{margin:23px 15px;font-size:25px}h2{margin-top:15px;font-size:21px}h3{font-weight:400;font-size:19px;border-bottom:1px solid #ECECEC}h4{font-weight:400;font-size:18px}h5{font-weight:400;font-size:17px}h6{font-weight:600;font-size:16px}h1 a,h2 a,h3 a,h4 a,h5 a,h6 a{text-decoration:none}pre{font-family:Consolas,Menlo,Monaco,Lucida Console,Liberation Mono,DejaVu Sans Mono,Bitstream Vera Sans Mono,Courier New,monospace,sans-serif;display:block;font-size:13px;padding:9.5px;margin:0 0 10px;line-height:1.42;color:#333;word-break:break-all;word-wrap:break-word;background-color:#f5f5f5;border:1px solid #ccc;border-radius:4px;text-align:left!important;max-width:100%;white-space:pre-wrap;width:auto;overflow:auto}code{font-size:13px;font-family:font-family: Consolas,Menlo,Monaco,Lucida Console,Liberation Mono,DejaVu Sans Mono,Bitstream Vera Sans Mono,Courier New,monospace,sans-serif;border:1px solid rgba(0,0,0,.223);border-radius:2px;padding:1px 2px;word-break:break-all;word-wrap:break-word}pre code{padding:0;font-size:inherit;color:inherit;white-space:pre-wrap;background-color:transparent;border:none;border-radius:0;word-break:break-all;word-wrap:break-word}td{text-align:center}table{border-collapse:collapse!important}.force-full-width{width:100%!important}</style><style media=screen>@media screen{h1,h2,h3,h4,h5,h6{font-family:\'Helvetica Neue\',Arial,sans-serif!important}td{font-family:Tiempos,Georgia,Times,serif!important}code,pre{font-family:Consolas,Menlo,Monaco,\'Lucida Console\',\'Liberation Mono\',\'DejaVu Sans Mono\',\'Bitstream Vera Sans Mono\',\'Courier New\',monospace,sans-serif!important}}</style><style media="only screen and (max-width:480px)">@media only screen and (max-width:480px){table[class=w320]{width:100%!important}}</style><body bgcolor=#FFFFFF class=body style=padding:0;margin:0;display:block;background:#fff;-webkit-text-size-adjust:none><table cellpadding=0 cellspacing=0 width=100% align=center><tr><td align=center valign=top bgcolor=#FFFFFF width=100%><center><table cellpadding=0 cellspacing=0 width=600 style="margin:0 auto"class=w320><tr><td align=center valign=top><table cellpadding=0 cellspacing=0 width=100% style="margin:0 auto;border-bottom:1px solid #ddd"bgcolor=#ECECEC><tr><td><h1>{{{subject}}}</h1></table><table cellpadding=0 cellspacing=0 width=100% style="margin:0 auto"bgcolor=#F2F2F2><tr><td><center><table cellpadding=0 cellspacing=0 width=100% style="margin:0 auto"><tr><td align=left style="text-align:left;padding:30px 25px">{{{html}}}</table></center></table></table></center></table>';
 
-module.exports = class MailTime {
+/** Class of MailTime */
+export default class MailTime {
   constructor (opts) {
     if (!opts || typeof opts !== 'object' || opts === null) {
       throw new TypeError('[mail-time] Configuration object must be passed into MailTime constructor');
@@ -163,17 +219,10 @@ module.exports = class MailTime {
     }
 
     this.collection = opts.db.collection(`__mailTimeQueue__${this.prefix}`);
-    this.collection.createIndex({ isSent: 1, to: 1, sendAt: 1 }, (indexError) => {
-      if (indexError) {
-        _logError('[createIndex]', indexError);
-      }
-    });
-    this.collection.createIndex({ isSent: 1, sendAt: 1, tries: 1 }, { background: true }, (indexError) => {
-      if (indexError) {
-        _logError('[createIndex]', indexError);
-      }
-    });
-    // Schema:
+    ensureIndex(this.collection, { isSent: 1, to: 1, sendAt: 1 });
+    ensureIndex(this.collection, { isSent: 1, sendAt: 1, tries: 1 }, { background: true });
+
+    // MongoDB Collection Schema:
     // _id
     // to          {String|[String]}
     // tries       {Number}  - qty of send attempts
@@ -298,72 +347,67 @@ module.exports = class MailTime {
       }
     });
 
-    cursor.forEach((task) => {
-      this.collection.updateOne({
-        _id: task._id
-      }, {
-        $set: {
-          isSent: true
-        },
-        $inc: {
-          tries: 1
-        }
-      }, (updateError) => {
-        if (updateError) {
-          this.___handleError(task, updateError, {});
+    cursor.forEach(async (task) => {
+      try {
+        await this.collection.updateOne({
+          _id: task._id
+        }, {
+          $set: {
+            isSent: true
+          },
+          $inc: {
+            tries: 1
+          }
+        });
+
+        let transport;
+        let transportIndex;
+        if (this.strategy === 'balancer') {
+          this.transport = this.transport + 1;
+          if (this.transport >= this.transports.length) {
+            this.transport = 0;
+          }
+          transportIndex = this.transport;
+          transport = this.transports[transportIndex];
         } else {
-          let transport;
-          let transportIndex;
-          if (this.strategy === 'balancer') {
-            this.transport = this.transport + 1;
-            if (this.transport >= this.transports.length) {
-              this.transport = 0;
-            }
-            transportIndex = this.transport;
-            transport = this.transports[transportIndex];
-          } else {
-            transportIndex = task.transport;
-            transport = this.transports[transportIndex];
-          }
-
-          try {
-            const _mailOpts = this.___compileMailOpts(transport, task);
-
-            _debug(this.debug, '[sendMail] [sending] To:', _mailOpts.to);
-            transport.sendMail(_mailOpts, (error, info) => {
-              if (error) {
-                this.___handleError(task, error, info);
-                return;
-              }
-
-              if (info.accepted && !info.accepted.length) {
-                this.___handleError(task, 'Message not accepted or Greeting never received', info);
-                return;
-              }
-
-              _debug(this.debug, `email successfully sent, attempts: #${task.tries}, transport #${transportIndex} to: `, _mailOpts.to);
-              if (this.keepHistory) {
-                this.___triggerCallbacks(void 0, task, info);
-              } else {
-                this.collection.deleteOne({ _id: task._id }, () => {
-                  this.___triggerCallbacks(void 0, task, info);
-                });
-              }
-
-              return;
-            });
-          } catch (e) {
-            _logError('Exception during runtime:', e);
-            this.___handleError(task, e, {});
-          }
+          transportIndex = task.transport;
+          transport = this.transports[transportIndex];
         }
-      });
-    }, (forEachError) => {
+
+        const _mailOpts = this.___compileMailOpts(transport, task);
+
+        _debug(this.debug, '[sendMail] [sending] To:', _mailOpts.to);
+        transport.sendMail(_mailOpts, (error, info) => {
+          if (error) {
+            this.___handleError(task, error, info);
+            return;
+          }
+
+          if (info.accepted && !info.accepted.length) {
+            this.___handleError(task, 'Message not accepted or Greeting never received', info);
+            return;
+          }
+
+          _debug(this.debug, `email successfully sent, attempts: #${task.tries}, transport #${transportIndex} to: `, _mailOpts.to);
+
+          if (!this.keepHistory) {
+            this.collection.deleteOne({
+              _id: task._id
+            }).catch(mongoErrorHandler);
+          }
+
+          this.___triggerCallbacks(void 0, task, info);
+          return;
+        });
+      } catch (e) {
+        _logError('Exception during runtime:', e);
+        this.___handleError(task, e, {});
+      }
+    }).catch((forEachError) => {
+      _logError('[___send] [forEach] [forEachError]', forEachError);
+    }).finally(() => {
       ready();
       cursor.close();
-      if (forEachError) {
-        _logError('[___send] [forEach] [forEachError]', forEachError);
-      }
     });
   }
 
@@ -417,24 +461,19 @@ module.exports = class MailTime {
     }
 
     if (this.concatEmails) {
+      _sendAt = new Date(+_sendAt + this.concatThrottling);
       this.collection.findOne({
         to: opts.to,
         isSent: false,
         sendAt: {
-          $lte: new Date(+_sendAt + this.concatThrottling)
+          $lte: _sendAt
         }
       }, {
         projection: {
           _id: 1,
           mailOptions: 1
         }
-      }, (findError, task) => {
-        if (findError) {
-          _debug(this.debug, 'something went wrong, can\'t send email to: ', opts.to, findError);
-          callback(findError, void 0, task);
-          return;
-        }
-
+      }).then((task) => {
         if (task) {
           const queue = task.mailOptions || [];
 
@@ -445,32 +484,29 @@ module.exports = class MailTime {
           }
 
           queue.push(opts);
-
           this.collection.updateOne({
             _id: task._id
           }, {
             $set: {
               mailOptions: queue
             }
-          }, (updateError) => {
-            if (updateError) {
-              _debug('something went wrong, can\'t send email to: ', task.mailOptions[0].to, updateError);
-              callback(updateError, void 0, task);
+          }).then(() => {
+            const _id = task._id.toHexString();
+            if (!this.callbacks[_id]) {
+              this.callbacks[_id] = [];
             }
-          });
-
+            this.callbacks[_id].push(callback);
+          }).catch(mongoErrorHandler);
           return;
         }
 
-        _sendAt = new Date(+_sendAt + this.concatThrottling);
         this.___addToQueue({
           sendAt: _sendAt,
           template: _template,
           mailOptions: opts,
           concatSubject: _concatSubject
         }, callback);
-        return;
-      });
+      }).catch(mongoErrorHandler);
 
       return;
     }
@@ -502,33 +538,34 @@ module.exports = class MailTime {
       if (!this.keepHistory) {
         this.collection.deleteOne({
           _id: task._id
-        }, (deleteError) => {
-          _debug(this.debug, `Giving up trying send email after ${task.tries} attempts to: `, task.mailOptions[0].to, error, deleteError);
-          this.___triggerCallbacks(error, task, info);
-        });
-      }
-    } else {
-      let transportIndex = task.transport;
-
-      if (this.strategy === 'backup' && (task.tries % this.failsToNext) === 0) {
-        ++transportIndex;
-        if (transportIndex > this.transports.length - 1) {
-          transportIndex = 0;
-        }
+        }).catch(mongoErrorHandler);
       }
 
-      this.collection.updateOne({
-        _id: task._id
-      }, {
-        $set: {
-          isSent: false,
-          sendAt: new Date(Date.now() + this.interval),
-          transport: transportIndex
-        }
-      }, mongoErrorHandler);
-
-      _debug(this.debug, `Next re-send attempt at ${new Date(Date.now() + this.interval)}: #${task.tries}/${this.maxTries}, transport #${transportIndex} to: `, task.mailOptions[0].to, error);
+      _debug(this.debug, `Giving up trying send email after ${task.tries} attempts to: `, task.mailOptions[0].to, error);
+      this.___triggerCallbacks(error, task, info);
+      return;
     }
+
+    let transportIndex = task.transport;
+
+    if (this.strategy === 'backup' && this.transports.length > 1 && (task.tries % this.failsToNext) === 0) {
+      ++transportIndex;
+      if (transportIndex > this.transports.length - 1) {
+        transportIndex = 0;
+      }
+    }
+
+    this.collection.updateOne({
+      _id: task._id
+    }, {
+      $set: {
+        isSent: false,
+        sendAt: new Date(Date.now() + this.interval),
+        transport: transportIndex
+      }
+    }).catch(mongoErrorHandler);
+
+    _debug(this.debug, `Next re-send attempt at ${new Date(Date.now() + this.interval)}: #${task.tries}/${this.maxTries}, transport #${transportIndex} to: `, task.mailOptions[0].to, error);
   }
 
   /**
@@ -558,20 +595,13 @@ module.exports = class MailTime {
       task.to = opts.mailOptions.to;
     }
 
-    this.collection.insertOne(task, (insertError, r) => {
-      if (insertError) {
-        _logError('something went wrong, can\'t send email to: ', opts.mailOptions[0].to, insertError);
-        callback(insertError, void 0, opts);
-        return;
-      }
-
+    this.collection.insertOne(task).then((r) => {
       const _id = r.insertedId.toHexString();
       if (!this.callbacks[_id]) {
         this.callbacks[_id] = [];
       }
       this.callbacks[_id].push(callback);
-      return;
-    });
+    }).catch(mongoErrorHandler);
   }
 
   /**
@@ -616,9 +646,9 @@ module.exports = class MailTime {
     const _id = task._id.toHexString();
     if (this.callbacks[_id] && this.callbacks[_id].length) {
       this.callbacks[_id].forEach((cb, i) => {
-        cb(error, info, task.mailOptions[i]);
+        cb(error, info, task?.mailOptions?.[i]);
       });
     }
     delete this.callbacks[_id];
   }
-};
+}
