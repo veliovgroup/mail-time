@@ -42,13 +42,13 @@ const ensureIndex = async (collection, keys, opts) => {
         await collection.createIndex(keys, opts);
       }
     } else {
-      logError(`[ensureIndex] Can not set ${Object.keys(keys).join(' + ')} index on "${collection._name}" collection`, { keys, opts, details: e });
+      logError(`[ensureIndex] Can not set ${Object.keys(keys).join(' + ')} index on "${collection._name || 'MongoDB'}" collection`, { keys, opts, details: e });
     }
   }
 };
 
 class MongoQueue {
-  constructor (mailTimeInstance, opts) {
+  constructor (opts) {
     if (!opts || typeof opts !== 'object' || opts === null) {
       throw new TypeError('[mail-time] Configuration object must be passed into MongoQueue constructor');
     }
@@ -57,10 +57,8 @@ class MongoQueue {
       throw new Error('[mail-time] [MongoQueue] requires MongoDB database {db} option, like returned from `MongoClient.connect`');
     }
 
-    this.prefix = opts.prefix || '';
-    this.mailTimeInstance = mailTimeInstance;
+    this.prefix = (typeof opts.prefix === 'string') ? opts.prefix : '';
     this.db = opts.db;
-    this.debug = mailTimeInstance.debug;
     this.collection = opts.db.collection(`__mailTimeQueue__${this.prefix}`);
     ensureIndex(this.collection, { uuid: 1 }, { background: false });
     ensureIndex(this.collection, { isSent: 1, isFailed: 1, isCancelled: 1, to: 1, sendAt: 1 }, { background: false });
@@ -96,6 +94,15 @@ class MongoQueue {
    * @returns {Promise<object>}
    */
   async ping() {
+    if (!this.mailTimeInstance) {
+      return {
+        status: 'Service Unavailable',
+        code: 503,
+        statusCode: 503,
+        error: new Error('MailTime instance not yet assigned to {mailTimeInstance} of Queue Adapter context'),
+      };
+    }
+
     try {
       const ping = await this.db.command({ ping: 1 });
       if (ping?.ok === 1) {
@@ -126,43 +133,42 @@ class MongoQueue {
    * @memberOf MongoQueue
    * @name iterate
    * @description iterate over queued tasks passing to `mailTimeInstance.___send` method
-   * @param ready {function} - JoSk ready callback
    * @returns {void 0}
    */
-  iterate(ready) {
-    const cursor = this.collection.find({
-      isSent: false,
-      isFailed: false,
-      isCancelled: false,
-      sendAt: {
-        $lte: new Date()
-      },
-      tries: {
-        $lt: this.maxTries
-      }
-    }, {
-      projection: {
-        _id: 1,
-        uuid: 1,
-        tries: 1,
-        template: 1,
-        transport: 1,
-        isSent: 1,
-        isFailed: 1,
-        isCancelled: 1,
-        mailOptions: 1,
-        concatSubject: 1,
-      }
-    });
+  async iterate() {
+    try {
+      const cursor = this.collection.find({
+        isSent: false,
+        isFailed: false,
+        isCancelled: false,
+        sendAt: {
+          $lte: Date.now()
+        },
+        tries: {
+          $lt: this.mailTimeInstance.maxTries
+        }
+      }, {
+        projection: {
+          _id: 1,
+          uuid: 1,
+          tries: 1,
+          template: 1,
+          transport: 1,
+          isSent: 1,
+          isFailed: 1,
+          isCancelled: 1,
+          mailOptions: 1,
+          concatSubject: 1,
+        }
+      });
 
-    cursor.forEach(async (task) => {
-      await this.mailTimeInstance.___send(task);
-    }).catch((forEachError) => {
-      logError('[___send] [forEach] [forEachError]', forEachError);
-    }).finally(() => {
-      ready();
-      cursor.close();
-    });
+      while (await cursor.hasNext()) {
+        await this.mailTimeInstance.___send(await cursor.next());
+      }
+      await cursor.close();
+    } catch (iterateError) {
+      logError('[iterate] [while/await] [iterateError]', iterateError);
+    }
   }
 
   /**
@@ -171,10 +177,14 @@ class MongoQueue {
    * @name getPendingTo
    * @description get queued task by `to` field (addressee)
    * @param to {string} - email address
-   * @param sendAt {Date} - timestamp
-   * @returns {Promise<void 0>}
+   * @param sendAt {number} - timestamp
+   * @returns {Promise<object|null>}
    */
   async getPendingTo(to, sendAt) {
+    if (typeof to !== 'string' || typeof sendAt !== 'number') {
+      return null;
+    }
+
     return await this.collection.findOne({
       to: to,
       isSent: false,
@@ -206,6 +216,13 @@ class MongoQueue {
    * @returns {Promise<void 0>}
    */
   async push(task) {
+    if (typeof task !== 'object') {
+      return;
+    }
+
+    if (task.sendAt instanceof Date) {
+      task.sendAt = +task.sendAt;
+    }
     await this.collection.insertOne(task);
   }
 
@@ -215,23 +232,28 @@ class MongoQueue {
    * @name cancel
    * @description cancel scheduled email
    * @param uuid {string} - email's uuid
-   * @returns {Promise<boolean>} returns `true` if cancelled or `false` if not found was sent or was cancelled previously
+   * @returns {Promise<boolean>} returns `true` if cancelled or `false` if not found, was sent, or was cancelled previously
    */
   async cancel(uuid) {
+    if (typeof uuid !== 'string') {
+      return false;
+    }
+
     const task = await this.collection.findOne({ uuid }, {
       projection: {
         _id: 1,
         uuid: 1,
+        isSent: 1,
         isCancelled: 1,
       }
     });
 
-    if (!task || task.isCancelled === true) {
+    if (!task || task.isSent === true || task.isCancelled === true) {
       return false;
     }
 
     if (!this.mailTimeInstance.keepHistory) {
-      return await this.remove(task);
+      return await this.remove({ _id: task._id });
     }
 
     return await this.update(task, {
@@ -248,6 +270,10 @@ class MongoQueue {
    * @returns {Promise<boolean>} returns `true` if removed or `false` if not found
    */
   async remove(task) {
+    if (typeof task !== 'object') {
+      return false;
+    }
+
     return (await this.collection.deleteOne({ _id: task._id }))?.deletedCount >= 1;
   }
 
@@ -261,6 +287,10 @@ class MongoQueue {
    * @returns {Promise<boolean>} returns `true` if updated or `false` if not found or no changes was made
    */
   async update(task, updateObj) {
+    if (typeof task !== 'object' || typeof updateObj !== 'object') {
+      return;
+    }
+
     return (await this.collection.updateOne({
       _id: task._id
     }, {
