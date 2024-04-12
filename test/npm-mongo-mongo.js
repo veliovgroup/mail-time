@@ -73,7 +73,7 @@ before(async function () {
     josk: {
       adapter: {
         db,
-        type: 'mongo'
+        type: 'mongo',
       }
     },
     transports,
@@ -138,9 +138,11 @@ describe('Mongo - Mongo', function () {
     });
 
     it('Change MailTime.Template', () => {
+      const orig = MailTime.Template;
       assert.equal(MailTime.Template === '{{{html}}}', false, 'MailTime#Template has original value');
       MailTime.Template = '{{{html}}}';
       assert.equal(MailTime.Template === '{{{html}}}', true, 'MailTime#Template has new value');
+      MailTime.Template = orig;
     });
   });
 
