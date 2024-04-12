@@ -6,7 +6,7 @@ import { MongoQueue } from './adapters/mongo.js';
 // import { RedisQueue } from './adapters/redis.js';
 import { debug, logError } from './helpers.js';
 
-const noop = () =>  {};
+const noop = () => {};
 
 /**
  * Check if entities of various types are equal
@@ -97,38 +97,54 @@ class MailTime {
       throw new TypeError('[mail-time] Configuration object must be passed into MailTime constructor');
     }
 
-    if (!opts.queue) {
+    if (!opts.queue || typeof opts.queue !== 'object') {
       throw new Error('[mail-time] {queue} option is required', {
-        description: 'JoSk requires MongoQueue, RedisQueue, or CustomQueue to connect to an intermediate database'
+        description: 'MailTime requires MongoQueue, RedisQueue, or CustomQueue to connect to an intermediate database'
       });
     }
 
-    this.queue = new opts.queue(this, opts);
+    this.queue = opts.queue;
+    this.queue.mailTimeInstance = this;
     const queueMethods = ['ping', 'iterate', 'getPendingTo', 'push', 'remove', 'update', 'cancel'];
 
     for (let i = queueMethods.length - 1; i >= 0; i--) {
       if (typeof this.queue[queueMethods[i]] !== 'function') {
-        throw new Error(`{queue} is missing {${queueMethods[i]}} method that is required!`);
+        throw new Error(`{queue} instance is missing {${queueMethods[i]}} method that is required!`);
       }
     }
 
-    this.type = (!opts.type || (opts.type !== 'client' && opts.type !== 'server')) ? 'server' : opts.type;
     this.debug = (opts.debug !== true) ? false : true;
-    this.prefix = opts.prefix || '';
-    this.maxTries = ((opts.maxTries && !isNaN(opts.maxTries)) ? parseInt(opts.maxTries) : 59) + 1;
-    this.interval = ((opts.interval && !isNaN(opts.interval)) ? parseInt(opts.interval) : 60) * 1000;
+    this._debug = (...args) => {
+      debug(this.debug, ...args);
+    };
+
+    this.type = (typeof opts.type !== 'string' || (opts.type !== 'client' && opts.type !== 'server')) ? 'server' : opts.type;
+    this.prefix = (typeof opts.prefix === 'string') ? opts.prefix : '';
+
+    if (typeof opts.retries === 'number') {
+      this.maxTries = opts.retries + 1;
+    } else if (typeof opts.maxTries === 'number') {
+      this.maxTries = (opts.maxTries < 1) ? 1 : 0;
+    } else {
+      this.maxTries = 60;
+    }
+
+    if (typeof opts.retryDelay === 'number') {
+      this.retryDelay = opts.retryDelay;
+    } else if (typeof opts.interval === 'number') {
+      this.retryDelay = (opts.interval) * 1000;
+    } else {
+      this.retryDelay = 60000;
+    }
+
     this.template = (typeof opts.template === 'string') ? opts.template : '{{{html}}}';
-    this.keepHistory = opts.keepHistory || false;
+    this.keepHistory = (typeof opts.keepHistory === 'boolean') ? opts.keepHistory : false;
     this.onSent = opts.onSent || noop;
     this.onError = opts.onError || noop;
 
     this.revolvingInterval = opts.revolvingInterval || 1536;
 
-    if (this.interval < 2048 || isNaN(this.interval)) {
-      this.interval = 3072;
-    }
-
-    this.failsToNext = (opts.failsToNext && !isNaN(opts.failsToNext)) ? parseInt(opts.failsToNext) : 4;
+    this.failsToNext = (typeof opts.failsToNext === 'number') ? opts.failsToNext : 4;
     this.strategy = (opts.strategy === 'backup' || opts.strategy === 'balancer') ? opts.strategy : 'backup';
     this.transports = opts.transports || [];
     this.transport = 0;
@@ -149,19 +165,24 @@ class MailTime {
     this.concatEmails = (opts.concatEmails !== true) ? false : true;
     this.concatSubject = (opts.concatSubject && typeof opts.concatSubject === 'string') ? opts.concatSubject : 'Multiple notifications';
     this.concatDelimiter = (opts.concatDelimiter && typeof opts.concatDelimiter === 'string') ? opts.concatDelimiter : '<hr>';
-    this.concatThrottling = ((opts.concatThrottling && !isNaN(opts.concatThrottling)) ? parseInt(opts.concatThrottling) : 60) * 1000;
 
-    if (this.concatThrottling < 2048) {
-      this.concatThrottling = 3072;
+    if (typeof opts.concatDelay === 'number') {
+      this.concatDelay = opts.concatDelay;
+    } else if (typeof opts.concatThrottling === 'number') {
+      this.concatDelay = opts.concatThrottling * 1000;
+    } else {
+      this.concatDelay = 60000;
     }
 
-    debug(this.debug, 'DEBUG ON {debug: true}');
-    debug(this.debug, `INITIALIZING [type: ${this.type}]`);
-    debug(this.debug, `INITIALIZING [strategy: ${this.strategy}]`);
-    debug(this.debug, `INITIALIZING [josk.adapter: ${opts?.josk?.adapter}]`);
-    debug(this.debug, `INITIALIZING [prefix: ${this.prefix}]`);
-    debug(this.debug, `INITIALIZING [maxTries: ${this.maxTries}]`);
-    debug(this.debug, `INITIALIZING [failsToNext: ${this.failsToNext}]`);
+    this._debug('DEBUG ON {debug: true}');
+    this._debug(`INITIALIZING [type: ${this.type}]`);
+    this._debug(`INITIALIZING [strategy: ${this.strategy}]`);
+    this._debug(`INITIALIZING [josk.adapter: ${opts?.josk?.adapter}]`);
+    this._debug(`INITIALIZING [prefix: ${this.prefix}]`);
+    this._debug(`INITIALIZING [retries: ${this.retries}]`);
+    this._debug(`INITIALIZING [failsToNext: ${this.failsToNext}]`);
+    this._debug(`INITIALIZING [onError: ${this.onError}]`);
+    this._debug(`INITIALIZING [onSent: ${this.onSent}]`);
 
     /** SERVER-SPECIFIC CHECKS AND CONFIG */
     if (this.type === 'server') {
@@ -173,24 +194,24 @@ class MailTime {
         throw new Error('[mail-time] {josk} option is required {object} for {type: "server"}');
       }
 
-      if (!opts.josk.adapter) {
-        throw new Error('[mail-time] {josk.adapter} option required to be set to "mongo" or "redis" {string}. Or custom adapter Class');
+      if (typeof opts.josk.adapter !== 'object') {
+        throw new Error('[mail-time] {josk.adapter} option is required {object} *or* custom adapter Class');
       }
 
       this.josk = { ...opts.josk };
 
-      if (opts.josk.adapter === 'mongo' || opts.josk.adapter === MongoAdapter) {
-        if (!opts.josk.db) {
-          throw new Error('[mail-time] {josk.db} option required for {josk.adapter: "mongo"}');
+      if (typeof opts.josk.adapter?.type === 'string' && opts.josk.adapter?.type === 'mongo') {
+        if (!opts.josk.adapter.db) {
+          throw new Error('[mail-time] {josk.adapter.db} option required for {josk.adapter.type: "mongo"}');
         }
-        this.josk.adapter = MongoAdapter;
+        this.josk.adapter = new MongoAdapter({ prefix: `mailTimeQueue${this.prefix}`, ...opts.josk.adapter });
       }
 
-      if (opts.josk.adapter === 'redis' || opts.josk.adapter === RedisAdapter) {
+      if (typeof opts.josk.adapter?.type === 'string' && opts.josk.adapter?.type === 'redis') {
         if (!opts.josk.client) {
-          throw new Error('[mail-time] {josk.client} option required for {josk.adapter: "redis"}');
+          throw new Error('[mail-time] {josk.adapter.client} option required for {josk.adapter.type: "redis"}');
         }
-        this.josk.adapter = RedisAdapter;
+        this.josk.adapter = new RedisAdapter({ prefix: `mailTimeQueue${this.prefix}`, ...opts.josk.adapter });
       }
 
       this.josk.minRevolvingDelay = opts.josk.minRevolvingDelay || 512;
@@ -202,9 +223,13 @@ class MailTime {
 
       const scheduler = new JoSk({
         debug: this.debug,
-        prefix: `mailTimeQueue${this.prefix}`,
-        resetOnInit: false,
         ...this.josk,
+      });
+
+      process.nextTick(async () => {
+        if ((await scheduler.ping()).status !== 'OK') {
+          throw new Error('[mail-time] [JoSk#ping] can not connect to storage, make sure it is available and properly configured');
+        }
       });
 
       scheduler.setInterval(this.___iterate.bind(this), this.revolvingInterval, `mailTimeQueue${this.prefix}`);
@@ -228,7 +253,7 @@ class MailTime {
    * @throws {mix}
    */
   async ping() {
-    debug(this.debug, '[ping]');
+    this._debug('[ping]');
     return await this.queue.ping();
   }
 
@@ -239,7 +264,7 @@ class MailTime {
    * @returns {Promise<string>} uuid of the email
    */
   async send(opts) {
-    debug(this.debug, '[send]', opts);
+    this._debug('[send]', opts);
     return await this.sendMail(opts);
   }
 
@@ -249,56 +274,67 @@ class MailTime {
    * @name sendMail
    * @description add email to the queue or append to existing letter if {concatEmails: true}
    * @param opts {object} - email options
-   * @param opts.sendAt {Date}  - When email should be sent
+   * @param opts.sendAt {Date|number}  - When email should be sent
    * @param opts.template {string} - Email-specific template
    * @param opts[key] {mix} - Other NodeMailer's options
    * @returns {Promise<string>} uuid of the email
    * @throws {Error}
    */
   async sendMail(opts = {}) {
-    debug(this.debug, '[sendMail]', opts);
+    this._debug('[sendMail]', opts);
     if (!opts.html && !opts.text) {
       throw new Error('`html` nor `text` field is presented, at least one of those fields is required');
     }
 
-    if (!opts.sendAt || Object.prototype.toString.call(opts.sendAt) !== '[object Date]') {
-      opts.sendAt = new Date();
-    }
-
-    if (typeof opts.template !== 'string') {
-      opts.template = false;
-    }
-
-    if (typeof opts.concatSubject !== 'string') {
-      opts.concatSubject = false;
-    }
-
     let sendAt = opts.sendAt;
-    const template = opts.template;
-    const concatSubject = opts.concatSubject;
-    delete opts.sendAt;
-    delete opts.template;
-    delete opts.concatSubject;
+    if (!sendAt) {
+      sendAt = Date.now();
+    }
 
-    if (typeof opts.to !== 'string' && (!(opts.to instanceof Array) || !opts.to.length)) {
+    if (sendAt instanceof Date) {
+      sendAt = +sendAt;
+    }
+
+    if (typeof sendAt !== 'number') {
+      sendAt = Date.now();
+    }
+
+    let template = opts.template;
+    if (typeof template !== 'string') {
+      template = false;
+    }
+
+    let concatSubject = opts.concatSubject;
+    if (typeof concatSubject !== 'string') {
+      concatSubject = false;
+    }
+
+    const mailOptions = { ...opts };
+    delete mailOptions.sendAt;
+    delete mailOptions.template;
+    delete mailOptions.concatSubject;
+
+    if (typeof mailOptions.to !== 'string' && (!(mailOptions.to instanceof Array) || !mailOptions.to.length)) {
       throw new Error('[mail-time] `mailOptions.to` is required and must be a string or non-empty Array');
     }
 
     if (this.concatEmails) {
-      sendAt = new Date(+sendAt + this.concatThrottling);
-      const task = await this.queue.getPendingTo(opts.to, sendAt);
+      sendAt = sendAt + this.concatDelay;
+      const task = await this.queue.getPendingTo(mailOptions.to, sendAt);
 
       if (task) {
-        const mailOptions = task.mailOptions || [];
+        const pendingMailOptions = task.mailOptions || [];
 
-        for (let i = 0; i < mailOptions.length; i++) {
-          if (equals(mailOptions[i], opts)) {
+        for (let i = 0; i < pendingMailOptions.length; i++) {
+          if (equals(pendingMailOptions[i], mailOptions)) {
             return task.uuid;
           }
         }
 
-        mailOptions.push(opts);
-        await this.queue.update(task, { mailOptions });
+        pendingMailOptions.push(opts);
+        await this.queue.update(task, {
+          mailOptions: pendingMailOptions
+        });
         return task.uuid;
       }
     }
@@ -307,7 +343,7 @@ class MailTime {
       sendAt,
       template,
       concatSubject,
-      mailOptions: opts,
+      mailOptions: mailOptions,
     });
   }
 
@@ -318,7 +354,7 @@ class MailTime {
    * @returns {Promise<boolean>} returns `true` if cancelled or `false` if not found was sent or was cancelled previously
    */
   async cancel(uuid) {
-    debug(this.debug, '[cancel]', uuid);
+    this._debug('[cancel]', uuid);
     return await this.cancelMail(uuid);
   }
 
@@ -327,11 +363,14 @@ class MailTime {
    * @memberOf MailTime
    * @name cancelMail
    * @description remove email from the queue or mark as `isCancelled`
-   * @param uuid {string} - uuid returned from `send` or `sendMail`
+   * @param uuid {string|Promise<string>} - uuid returned from `send` or `sendMail`
    * @returns {Promise<boolean>} returns `true` if cancelled or `false` if not found was sent or was cancelled previously
    */
   async cancelMail(uuid) {
-    debug(this.debug, '[cancelMail]', uuid);
+    this._debug('[cancelMail]', uuid);
+    if (typeof uuid === 'object' && uuid instanceof Promise) {
+      return await this.queue.cancel(await uuid);
+    }
     return await this.queue.cancel(uuid);
   }
 
@@ -346,22 +385,25 @@ class MailTime {
    * @returns {Promise<void 0>}
    */
   async ___handleError(task, error, info) {
-    debug(this.debug, '[private handleError]', { task, error, info });
+    this._debug('[private handleError]', { task, error, info });
     if (!task) {
       return;
     }
 
     if (task.tries >= this.maxTries) {
+      task.isSent = false;
+      task.isFailed = true;
+
       if (!this.keepHistory) {
         await this.queue.remove(task);
       } else {
         await this.queue.update(task, {
-          isSent: false,
-          isFailed: true,
+          isSent: task.isSent,
+          isFailed: task.isFailed,
         });
       }
 
-      debug(this.debug, `[handleError] Giving up trying send email after ${task.tries} attempts to: `, task.mailOptions[0].to, error);
+      this._debug(`[private handleError] Giving up trying send email after ${task.tries} attempts to: `, task.mailOptions[0].to, error);
       this.onError(error, task, info);
       return;
     }
@@ -377,11 +419,11 @@ class MailTime {
 
     await this.queue.update(task, {
       isSent: false,
-      sendAt: new Date(Date.now() + this.interval),
+      sendAt: Date.now() + this.retryDelay,
       transport: transportIndex,
     });
 
-    debug(this.debug, `[handleError] Next re-send attempt at ${new Date(Date.now() + this.interval)}: #${task.tries}/${this.maxTries}, transport #${transportIndex} to: `, task.mailOptions[0].to, error);
+    this._debug(`[private handleError] Next re-send attempt at ${new Date(Date.now() + this.retryDelay)}: #${task.tries}/${this.maxTries}, transport #${transportIndex} to: `, task.mailOptions[0].to, error);
   }
 
   /**
@@ -390,14 +432,14 @@ class MailTime {
    * @name ___addToQueue
    * @description Prepare task's object and push to the queue
    * @param opts {object} - Email options with next properties:
-   * @param opts.sendAt {Date} - When email should be sent
+   * @param opts.sendAt {number} - When email should be sent
    * @param opts.template {string} - Email-specific template
    * @param opts.mailOptions {object} - MailOptions according to NodeMailer lib
    * @param opts.concatSubject {string} - Email subject used when sending concatenated email
    * @returns {Promise<string>} message uuid
    */
   async ___addToQueue(opts) {
-    debug(this.debug, '[private addToQueue]', opts);
+    this._debug('[private addToQueue]', opts);
     const task = {
       uuid: crypto.randomUUID(),
       tries: 0,
@@ -525,15 +567,17 @@ class MailTime {
    * @returns {Promise<void 0>}
    */
   async ___send(task) {
-    debug(this.debug, '[private send]', task);
+    this._debug('[private send]', task);
     try {
+      task.tries++;
+
       const isUpdated = await this.queue.update(task, {
         isSent: true,
-        tries: task.tries + 1
+        tries: task.tries
       });
 
       if (!isUpdated) {
-        await this.___handleError(task, new Error('[queue.update] Not updated!'));
+        logError('[private send] [queue.update] Not updated!');
         return;
       }
 
@@ -555,7 +599,7 @@ class MailTime {
 
       await new Promise((resolve) => {
         transport.sendMail(compiledOpts, async (error, info) => {
-          debug(this.debug, '[private send] [sending]', { error, info });
+          this._debug('[private send] [sending]', { error, info });
           if (error) {
             await this.___handleError(task, error, info);
             resolve();
@@ -568,12 +612,13 @@ class MailTime {
             return;
           }
 
-          debug(this.debug, `email successfully sent, attempts: #${task.tries}, transport #${transportIndex} to: `, compiledOpts.to);
+          this._debug(`email successfully sent, attempts: #${task.tries}, transport #${transportIndex} to: `, compiledOpts.to);
 
           if (!this.keepHistory) {
             await this.queue.remove(task);
           }
 
+          task.isSent = true;
           this.onSent(task, info);
           resolve();
         });
@@ -588,11 +633,11 @@ class MailTime {
    * @memberOf MailTime
    * @name ___iterate
    * @description Iterate over queued tasks
-   * @param ready {function} - See JoSk NPM package
-   * @returns {void 0}
+   * @returns {Promise}
    */
-  ___iterate(ready) {
-    this.queue.iterate(ready);
+  async ___iterate() {
+    this._debug('[private iterate]');
+    return await this.queue.iterate();
   }
 }
 
