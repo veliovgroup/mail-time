@@ -208,31 +208,28 @@ class MailTime {
       }
 
       if (typeof opts.josk.adapter?.type === 'string' && opts.josk.adapter?.type === 'redis') {
-        if (!opts.josk.client) {
+        if (!opts.josk.adapter.client) {
           throw new Error('[mail-time] {josk.adapter.client} option required for {josk.adapter.type: "redis"}');
         }
         this.josk.adapter = new RedisAdapter({ prefix: `mailTimeQueue${this.prefix}`, ...opts.josk.adapter });
       }
 
-      this.josk.minRevolvingDelay = opts.josk.minRevolvingDelay || 512;
-      this.josk.maxRevolvingDelay = opts.josk.maxRevolvingDelay || 2048;
-      this.josk.zombieTime = opts.josk.zombieTime || 32786;
-      if (this.josk.zombieTime < 8192 || isNaN(this.josk.zombieTime)) {
-        this.josk.zombieTime = 8192;
-      }
+      this.josk.minRevolvingDelay = (typeof opts.josk.minRevolvingDelay === 'number') ? opts.josk.minRevolvingDelay : 512;
+      this.josk.maxRevolvingDelay = (typeof opts.josk.maxRevolvingDelay === 'number') ? opts.josk.maxRevolvingDelay : 2048;
+      this.josk.zombieTime = (typeof opts.josk.zombieTime === 'number') ? opts.josk.zombieTime : 32786;
 
-      const scheduler = new JoSk({
+      this.scheduler = new JoSk({
         debug: this.debug,
         ...this.josk,
       });
 
       process.nextTick(async () => {
-        if ((await scheduler.ping()).status !== 'OK') {
+        if ((await this.scheduler.ping()).status !== 'OK') {
           throw new Error('[mail-time] [JoSk#ping] can not connect to storage, make sure it is available and properly configured');
         }
       });
 
-      scheduler.setInterval(this.___iterate.bind(this), this.revolvingInterval, `mailTimeQueue${this.prefix}`);
+      this.scheduler.setInterval(this.___iterate.bind(this), this.revolvingInterval, `mailTimeQueue${this.prefix}`);
     }
   }
 
@@ -254,6 +251,10 @@ class MailTime {
    */
   async ping() {
     this._debug('[ping]');
+    const schedulerPing = await this.scheduler.ping();
+    if (schedulerPing.status !== 'OK') {
+      return schedulerPing;
+    }
     return await this.queue.ping();
   }
 
