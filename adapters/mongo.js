@@ -53,7 +53,7 @@ class MongoQueue {
    * Create a MongoQueue instance
    * @param {object} opts - configuration object
    * @param {Db} opts.db - Required, Mongo's `Db` instance, like one returned from `MongoClient#db()` method
-   * @param {string} [opts.prefix] - Optional prefix for scope isolation; use when creating multiple MailTime instances within the single application; By default prefix inherited from MailTime instance
+   * @param {string} [opts.prefix] - Optional prefix for scope isolation; use when creating multiple MailTime instances within the single application
    */
   constructor (opts) {
     this.name = 'mongo-queue';
