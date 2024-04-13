@@ -3,7 +3,7 @@ import merge from 'deepmerge';
 
 import crypto from 'crypto';
 import { MongoQueue } from './adapters/mongo.js';
-// import { RedisQueue } from './adapters/redis.js';
+import { RedisQueue } from './adapters/redis.js';
 import { debug, logError } from './helpers.js';
 
 const noop = () => {};
@@ -92,6 +92,27 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
 
 /** Class of MailTime */
 class MailTime {
+  /**
+   * Create a MailTime instance
+   * @param {object} opts - configuration object
+   * @param {RedisQueue|MongoQueue|CustomQueue} opts.queue - Queue Storage Driver instance
+   * @param {string} [opts.type] - "server" or "client" type of MailTime instance
+   * @param {function} [opts.from] - A function returning *String* for `from` header, format: `"MyApp" <user@example.com>`
+   * @param {[object]} [opts.transports] - An array of `nodemailer`'s transports, returned from `nodemailer.createTransport({})`; Required for `{type: 'server'}`
+   * @param {string} [opts.strategy] - `backup` or `balancer`
+   * @param {number} [opts.failsToNext] - After how many failed "send attempts" switch to the next transport? Applied only for `backup` strategy, default - `4`
+   * @param {number} [opts.retries] - How many times resend failed emails
+   * @param {number} [opts.retryDelay] - Interval in milliseconds between send re-tries
+   * @param {boolean} [opts.keepHistory] - Keep queue task as it is in the database
+   * @param {boolean} [opts.concatEmails] - Concatenate email by `to` field, default - `false`
+   * @param {string} [opts.concatSubject] - Email subject used in concatenated email, default - `Multiple notifications`
+   * @param {string} [opts.concatDelimiter] - HTML or plain string delimiter used between concatenated email, default - `<hr>`
+   * @param {number} [opts.concatDelay] - HTML or plain string delimiter used between concatenated email, default - `<hr>`
+   * @param {number} [opts.revolvingInterval] -  Interval in *milliseconds* in between queue checks, default - `256`
+   * @param {object|RedisAdapter|MongoAdapter|CustomAdapter} [opts.josk.adapter] - Interval in milliseconds between send re-tries
+   * @param {string} [opts.josk.adapter.type] - One of `mongo` or `redis`
+   * @param {string} [opts.prefix] - Optional prefix for scope isolation; use when creating multiple MailTime instances within the single application; By default prefix inherited from MailTime instance
+   */
   constructor (opts) {
     if (!opts || typeof opts !== 'object' || opts === null) {
       throw new TypeError('[mail-time] Configuration object must be passed into MailTime constructor');
@@ -132,7 +153,7 @@ class MailTime {
     if (typeof opts.retryDelay === 'number') {
       this.retryDelay = opts.retryDelay;
     } else if (typeof opts.interval === 'number') {
-      this.retryDelay = (opts.interval) * 1000;
+      this.retryDelay = opts.interval * 1000;
     } else {
       this.retryDelay = 60000;
     }
@@ -225,7 +246,7 @@ class MailTime {
 
       process.nextTick(async () => {
         if ((await this.scheduler.ping()).status !== 'OK') {
-          throw new Error('[mail-time] [JoSk#ping] can not connect to storage, make sure it is available and properly configured');
+          throw new Error('[mail-time] [MailTime#ping] can not connect to storage, make sure it is available and properly configured');
         }
       });
 
@@ -570,8 +591,11 @@ class MailTime {
   async ___send(task) {
     this._debug('[private send]', task);
     try {
-      task.tries++;
+      if (task.isSent === true || task.isFailed === true || task.isCancelled === true) {
+        return;
+      }
 
+      task.tries++;
       const isUpdated = await this.queue.update(task, {
         isSent: true,
         tries: task.tries
@@ -642,4 +666,4 @@ class MailTime {
   }
 }
 
-export { MailTime, MongoQueue };
+export { MailTime, MongoQueue, RedisQueue };
