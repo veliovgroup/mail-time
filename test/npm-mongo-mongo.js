@@ -212,7 +212,7 @@ describe('Mongo - Mongo', function () {
             assert.isObject(task, 'Task saved {keepHistory: true}');
             assert.isTrue(task.isCancelled, 'task.isCancelled');
           } else {
-            assert.isNull(task, 'Task saved {keepHistory: true}');
+            assert.isNull(task, 'Task removed {keepHistory: false}');
           }
         });
 
@@ -237,7 +237,7 @@ describe('Mongo - Mongo', function () {
             assert.isObject(task, 'Task saved {keepHistory: true}');
             assert.isTrue(task.isCancelled, 'task.isCancelled');
           } else {
-            assert.isNull(task, 'Task saved {keepHistory: true}');
+            assert.isNull(task, 'Task removed {keepHistory: false}');
           }
         });
       });
