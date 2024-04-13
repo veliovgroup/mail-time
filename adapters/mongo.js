@@ -47,8 +47,16 @@ const ensureIndex = async (collection, keys, opts) => {
   }
 };
 
+/** Class representing MongoDB Queue for MailTime */
 class MongoQueue {
+  /**
+   * Create a MongoQueue instance
+   * @param {object} opts - configuration object
+   * @param {Db} opts.db - Required, Mongo's `Db` instance, like one returned from `MongoClient#db()` method
+   * @param {string} [opts.prefix] - Optional prefix for scope isolation; use when creating multiple MailTime instances within the single application; By default prefix inherited from MailTime instance
+   */
   constructor (opts) {
+    this.name = 'mongo-queue';
     if (!opts || typeof opts !== 'object' || opts === null) {
       throw new TypeError('[mail-time] Configuration object must be passed into MongoQueue constructor');
     }
@@ -68,7 +76,7 @@ class MongoQueue {
     // _id
     // to          {string|[string]}
     // tries       {number}  - qty of send attempts
-    // sendAt      {date}    - When letter should be sent
+    // sendAt      {number}  - When letter should be sent
     // isSent      {boolean} - Email status
     // isCancelled {boolean} - `true` if email was cancelled before it was sent
     // isFailed    {boolean} - `true` if email has failed to send
@@ -253,7 +261,7 @@ class MongoQueue {
     }
 
     if (!this.mailTimeInstance.keepHistory) {
-      return await this.remove({ _id: task._id });
+      return await this.remove(task);
     }
 
     return await this.update(task, {
@@ -288,7 +296,7 @@ class MongoQueue {
    */
   async update(task, updateObj) {
     if (typeof task !== 'object' || typeof updateObj !== 'object') {
-      return;
+      return false;
     }
 
     return (await this.collection.updateOne({
