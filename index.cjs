@@ -1,23 +1,17 @@
 'use strict';
 
-const JoSk = require('josk');
+const josk = require('josk');
 const merge = require('deepmerge');
+const crypto = require('crypto');
 
-const noop = () =>  {};
-const _debug = (isDebug, ...args) => {
+const debug = (isDebug, ...args) => {
   if (isDebug) {
     console.info.call(console, '[DEBUG] [mail-time]', `${new Date}`, ...args);
   }
 };
-const _logError = (...args) => {
-  console.error.call(console, '[ERROR] [mail-time]', `${new Date}`, ...args);
-};
 
-const mongoErrorHandler = (error) => {
-  if (error) {
-    _logError('[mongoErrorHandler]:', error);
-    console.trace();
-  }
+const logError = (...args) => {
+  console.error.call(console, '[ERROR] [mail-time]', `${new Date}`, ...args);
 };
 
 /**
@@ -62,10 +56,571 @@ const ensureIndex = async (collection, keys, opts) => {
         await collection.createIndex(keys, opts);
       }
     } else {
-      _logError(`[ensureIndex] Can not set ${Object.keys(keys).join(' + ')} index on "${collection._name}" collection`, { keys, opts, details: e });
+      logError(`[ensureIndex] Can not set ${Object.keys(keys).join(' + ')} index on "${collection._name || 'MongoDB'}" collection`, { keys, opts, details: e });
     }
   }
 };
+
+/** Class representing MongoDB Queue for MailTime */
+class MongoQueue {
+  /**
+   * Create a MongoQueue instance
+   * @param {object} opts - configuration object
+   * @param {Db} opts.db - Required, Mongo's `Db` instance, like one returned from `MongoClient#db()` method
+   * @param {string} [opts.prefix] - Optional prefix for scope isolation; use when creating multiple MailTime instances within the single application
+   */
+  constructor (opts) {
+    this.name = 'mongo-queue';
+    if (!opts || typeof opts !== 'object' || opts === null) {
+      throw new TypeError('[mail-time] Configuration object must be passed into MongoQueue constructor');
+    }
+
+    if (!opts.db) {
+      throw new Error('[mail-time] [MongoQueue] requires MongoDB database {db} option, like returned from `MongoClient.connect`');
+    }
+
+    this.prefix = (typeof opts.prefix === 'string') ? opts.prefix : '';
+    this.db = opts.db;
+    this.collection = opts.db.collection(`__mailTimeQueue__${this.prefix}`);
+    ensureIndex(this.collection, { uuid: 1 }, { background: false });
+    ensureIndex(this.collection, { isSent: 1, isFailed: 1, isCancelled: 1, to: 1, sendAt: 1 }, { background: false });
+    ensureIndex(this.collection, { isSent: 1, isFailed: 1, isCancelled: 1, sendAt: 1, tries: 1 }, { background: false });
+
+    // MongoDB Collection Schema:
+    // _id
+    // uuid        {string}
+    // to          {string|[string]}
+    // tries       {number}  - qty of send attempts
+    // sendAt      {number}  - When letter should be sent
+    // isSent      {boolean} - Email status
+    // isCancelled {boolean} - `true` if email was cancelled before it was sent
+    // isFailed    {boolean} - `true` if email has failed to send
+    // template    {string}  - Template for this email
+    // transport   {number}  - Last used transport
+    // concatSubject {string|boolean} - Email concatenation subject
+    // ---
+    // mailOptions         {[object]}  - Array of nodeMailer's `mailOptions`
+    // mailOptions.to      {string|[string]} - [REQUIRED]
+    // mailOptions.from    {string}
+    // mailOptions.text    {string|boolean}
+    // mailOptions.html    {string}
+    // mailOptions.subject {string}
+    // mailOptions.Other nodeMailer `sendMail` options...
+  }
+
+  /**
+   * @async
+   * @memberOf MongoQueue
+   * @name ping
+   * @description Check connection to Storage
+   * @returns {Promise<object>}
+   */
+  async ping() {
+    if (!this.mailTimeInstance) {
+      return {
+        status: 'Service Unavailable',
+        code: 503,
+        statusCode: 503,
+        error: new Error('MailTime instance not yet assigned to {mailTimeInstance} of Queue Adapter context'),
+      };
+    }
+
+    try {
+      const ping = await this.db.command({ ping: 1 });
+      if (ping?.ok === 1) {
+        return {
+          status: 'OK',
+          code: 200,
+          statusCode: 200,
+        };
+      }
+    } catch (pingError) {
+      return {
+        status: 'Internal Server Error',
+        code: 500,
+        statusCode: 500,
+        error: pingError
+      };
+    }
+
+    return {
+      status: 'Service Unavailable',
+      code: 503,
+      statusCode: 503,
+      error: new Error('Service Unavailable')
+    };
+  }
+
+  /**
+   * @memberOf MongoQueue
+   * @name iterate
+   * @description iterate over queued tasks passing to `mailTimeInstance.___send` method
+   * @returns {void 0}
+   */
+  async iterate() {
+    try {
+      const cursor = this.collection.find({
+        isSent: false,
+        isFailed: false,
+        isCancelled: false,
+        sendAt: {
+          $lte: Date.now()
+        },
+        tries: {
+          $lt: this.mailTimeInstance.maxTries
+        }
+      }, {
+        projection: {
+          _id: 1,
+          uuid: 1,
+          tries: 1,
+          template: 1,
+          transport: 1,
+          isSent: 1,
+          isFailed: 1,
+          isCancelled: 1,
+          mailOptions: 1,
+          concatSubject: 1,
+        }
+      });
+
+      while (await cursor.hasNext()) {
+        await this.mailTimeInstance.___send(await cursor.next());
+      }
+      await cursor.close();
+    } catch (iterateError) {
+      logError('[iterate] [while/await] [iterateError]', iterateError);
+    }
+  }
+
+  /**
+   * @async
+   * @memberOf MongoQueue
+   * @name getPendingTo
+   * @description get queued task by `to` field (addressee)
+   * @param to {string} - email address
+   * @param sendAt {number} - timestamp
+   * @returns {Promise<object|null>}
+   */
+  async getPendingTo(to, sendAt) {
+    if (typeof to !== 'string' || typeof sendAt !== 'number') {
+      return null;
+    }
+
+    return await this.collection.findOne({
+      to: to,
+      isSent: false,
+      isFailed: false,
+      isCancelled: false,
+      sendAt: {
+        $lte: sendAt
+      }
+    }, {
+      projection: {
+        _id: 1,
+        to: 1,
+        uuid: 1,
+        tries: 1,
+        isSent: 1,
+        isFailed: 1,
+        isCancelled: 1,
+        mailOptions: 1,
+      }
+    });
+  }
+
+  /**
+   * @async
+   * @memberOf MongoQueue
+   * @name push
+   * @description push task to the queue/storage
+   * @param task {object} - task's object
+   * @returns {Promise<void 0>}
+   */
+  async push(task) {
+    if (typeof task !== 'object') {
+      return;
+    }
+
+    if (task.sendAt instanceof Date) {
+      task.sendAt = +task.sendAt;
+    }
+    await this.collection.insertOne(task);
+  }
+
+  /**
+   * @async
+   * @memberOf MongoQueue
+   * @name cancel
+   * @description cancel scheduled email
+   * @param uuid {string} - email's uuid
+   * @returns {Promise<boolean>} returns `true` if cancelled or `false` if not found, was sent, or was cancelled previously
+   */
+  async cancel(uuid) {
+    if (typeof uuid !== 'string') {
+      return false;
+    }
+
+    const task = await this.collection.findOne({ uuid }, {
+      projection: {
+        _id: 1,
+        uuid: 1,
+        isSent: 1,
+        isCancelled: 1,
+      }
+    });
+
+    if (!task || task.isSent === true || task.isCancelled === true) {
+      return false;
+    }
+
+    if (!this.mailTimeInstance.keepHistory) {
+      return await this.remove(task);
+    }
+
+    return await this.update(task, {
+      isCancelled: true,
+    });
+  }
+
+  /**
+   * @async
+   * @memberOf MongoQueue
+   * @name remove
+   * @description remove task from queue
+   * @param task {object} - task's object
+   * @returns {Promise<boolean>} returns `true` if removed or `false` if not found
+   */
+  async remove(task) {
+    if (typeof task !== 'object') {
+      return false;
+    }
+
+    return (await this.collection.deleteOne({ _id: task._id }))?.deletedCount >= 1;
+  }
+
+  /**
+   * @async
+   * @memberOf MongoQueue
+   * @name update
+   * @description remove task from queue
+   * @param task {object} - task's object
+   * @param updateObj {object} - fields with new values to update
+   * @returns {Promise<boolean>} returns `true` if updated or `false` if not found or no changes was made
+   */
+  async update(task, updateObj) {
+    if (typeof task !== 'object' || typeof updateObj !== 'object') {
+      return false;
+    }
+
+    return (await this.collection.updateOne({
+      _id: task._id
+    }, {
+      $set: updateObj
+    }))?.modifiedCount >= 1;
+  }
+}
+
+/** Class representing Redis Queue for MailTime */
+class RedisQueue {
+  /**
+   * Create a RedisQueue instance
+   * @param {object} opts - configuration object
+   * @param {RedisClient} opts.client - Required, Redis'es `RedisClient` instance, like one returned from `await redis.createClient().connect()` method
+   * @param {string} [opts.prefix] - Optional prefix for scope isolation; use when creating multiple MailTime instances within the single application
+   */
+  constructor (opts) {
+    this.name = 'redis-queue';
+    if (!opts || typeof opts !== 'object' || opts === null) {
+      throw new TypeError('[mail-time] Configuration object must be passed into RedisQueue constructor');
+    }
+
+    if (!opts.client) {
+      throw new Error('[mail-time] [RedisQueue] required {client} option is missing, e.g. returned from `redis.createClient()` or `redis.createCluster()` method');
+    }
+
+    this.prefix = (typeof opts.prefix === 'string') ? opts.prefix : 'default';
+    this.uniqueName = `mailtime:${this.prefix}`;
+    this.client = opts.client;
+
+    // 3 types of keys are stored in Redis:
+    // 'letter' - JSON with email details
+    // 'sendat' - Timestamp used to scan/find/iterate over scheduled emails
+    // 'concatletter' — uuid of "pending" email for concatenation used when {concatEmails: true}
+
+    // Stored JSON structure:
+    // to          {string|[string]}
+    // uuid        {string}
+    // tries       {number}  - qty of send attempts
+    // sendAt      {number}  - When letter should be sent
+    // isSent      {boolean} - Email status
+    // isCancelled {boolean} - `true` if email was cancelled before it was sent
+    // isFailed    {boolean} - `true` if email has failed to send
+    // template    {string}  - Template for this email
+    // transport   {number}  - Last used transport
+    // concatSubject {string|boolean} - Email concatenation subject
+    // ---
+    // mailOptions         {[object]}  - Array of nodeMailer's `mailOptions`
+    // mailOptions.to      {string|[string]} - [REQUIRED]
+    // mailOptions.from    {string}
+    // mailOptions.text    {string|boolean}
+    // mailOptions.html    {string}
+    // mailOptions.subject {string}
+    // mailOptions.Other nodeMailer `sendMail` options...
+  }
+
+  /**
+   * @async
+   * @memberOf RedisQueue
+   * @name ping
+   * @description Check connection to Storage
+   * @returns {Promise<object>}
+   */
+  async ping() {
+    if (!this.mailTimeInstance) {
+      return {
+        status: 'Service Unavailable',
+        code: 503,
+        statusCode: 503,
+        error: new Error('MailTime instance not yet assigned to {mailTimeInstance} of Queue Adapter context'),
+      };
+    }
+
+    try {
+      const ping = await this.client.ping();
+      if (ping === 'PONG') {
+        return {
+          status: 'OK',
+          code: 200,
+          statusCode: 200,
+        };
+      }
+    } catch (pingError) {
+      return {
+        status: 'Internal Server Error',
+        code: 500,
+        statusCode: 500,
+        error: pingError
+      };
+    }
+
+    return {
+      status: 'Service Unavailable',
+      code: 503,
+      statusCode: 503,
+      error: new Error('Service Unavailable')
+    };
+  }
+
+  /**
+   * @memberOf RedisQueue
+   * @name iterate
+   * @description iterate over queued tasks passing to `mailTimeInstance.___send` method
+   * @returns {void 0}
+   */
+  async iterate() {
+    try {
+      const now = Date.now();
+      const cursor = this.client.scanIterator({
+        TYPE: 'string',
+        MATCH: this.__getKey('*', 'sendat'),
+        COUNT: 9999,
+      });
+
+      for await (const sendatKey of cursor) {
+        if (parseInt(await this.client.get(sendatKey)) <= now) {
+          await this.mailTimeInstance.___send(JSON.parse(await this.client.get(this.__getKey(sendatKey.split(':')[3]))));
+        }
+      }
+    } catch (iterateError) {
+      logError('[iterate] [for/await] [iterateError]', iterateError);
+    }
+  }
+
+  /**
+   * @async
+   * @memberOf RedisQueue
+   * @name getPendingTo
+   * @description get queued task by `to` field (addressee)
+   * @param to {string} - email address
+   * @param sendAt {number} - timestamp
+   * @returns {Promise<object|null>}
+   */
+  async getPendingTo(to, sendAt) {
+    if (typeof to !== 'string' || typeof sendAt !== 'number') {
+      return null;
+    }
+
+    const concatKey = this.__getKey(to, 'concatletter');
+    let exists = await this.client.exists(concatKey);
+    if (!exists) {
+      return null;
+    }
+
+    const uuid = await this.client.get(concatKey);
+    const letterKey = this.__getKey(uuid, 'letter');
+    exists = await this.client.exists(letterKey);
+    if (!exists) {
+      return null;
+    }
+
+    const task = JSON.parse(await this.client.get(letterKey));
+    if (!task || task.isSent === true || task.isCancelled === true || task.isFailed === true) {
+      return null;
+    }
+
+    return task;
+  }
+
+  /**
+   * @async
+   * @memberOf RedisQueue
+   * @name push
+   * @description push task to the queue/storage
+   * @param task {object} - task's object
+   * @returns {Promise<void 0>}
+   */
+  async push(task) {
+    if (typeof task !== 'object') {
+      return;
+    }
+
+    if (task.sendAt instanceof Date) {
+      task.sendAt = +task.sendAt;
+    }
+
+    await this.client.set(this.__getKey(task.uuid, 'letter'), JSON.stringify(task));
+    await this.client.set(this.__getKey(task.uuid, 'sendat'), `${task.sendAt}`);
+    if (task.to) {
+      await this.client.set(this.__getKey(task.to, 'concatletter'), task.uuid, {
+        PXAT: task.sendAt - 128
+      });
+    }
+  }
+
+  /**
+   * @async
+   * @memberOf RedisQueue
+   * @name cancel
+   * @description cancel scheduled email
+   * @param uuid {string} - email's uuid
+   * @returns {Promise<boolean>} returns `true` if cancelled or `false` if not found, was sent, or was cancelled previously
+   */
+  async cancel(uuid) {
+    if (typeof uuid !== 'string') {
+      return false;
+    }
+
+    await this.client.del(this.__getKey(uuid, 'sendat'));
+    const letterKey = this.__getKey(uuid, 'letter');
+    const exists = await this.client.exists(letterKey);
+    if (!exists) {
+      return false;
+    }
+
+    const task = JSON.parse(await this.client.get(letterKey));
+    if (!task || task.isSent === true || task.isCancelled === true) {
+      return false;
+    }
+
+    if (!this.mailTimeInstance.keepHistory) {
+      return await this.remove(task);
+    }
+
+    return await this.update(task, {
+      isCancelled: true,
+    });
+  }
+
+  /**
+   * @async
+   * @memberOf RedisQueue
+   * @name remove
+   * @description remove task from queue
+   * @param task {object} - task's object
+   * @returns {Promise<boolean>} returns `true` if removed or `false` if not found
+   */
+  async remove(task) {
+    if (typeof task !== 'object' || typeof task.uuid !== 'string') {
+      return false;
+    }
+
+    const letterKey = this.__getKey(task.uuid, 'letter');
+    const exists = await this.client.exists(letterKey);
+    if (!exists) {
+      return false;
+    }
+
+    await this.client.del([
+      letterKey,
+      this.__getKey(task.uuid, 'sendat'),
+    ]);
+    return true;
+  }
+
+  /**
+   * @async
+   * @memberOf RedisQueue
+   * @name update
+   * @description remove task from queue
+   * @param task {object} - task's object
+   * @param updateObj {object} - fields with new values to update
+   * @returns {Promise<boolean>} returns `true` if updated or `false` if not found or no changes was made
+   */
+  async update(task, updateObj) {
+    if (typeof task !== 'object' || typeof task.uuid !== 'string' || typeof updateObj !== 'object') {
+      return false;
+    }
+
+    const letterKey = this.__getKey(task.uuid, 'letter');
+
+    try {
+      const exists = await this.client.exists(letterKey);
+      if (!exists) {
+        return false;
+      }
+      const updatedTask = { ...task, ...updateObj };
+      await this.client.set(letterKey, JSON.stringify(updatedTask));
+
+      const sendatKey = this.__getKey(task.uuid, 'sendat');
+      if (updatedTask.isSent === true || updatedTask.isFailed === true || updatedTask.isCancelled === true) {
+        await this.client.del(sendatKey);
+      } else if (task.sendAt) {
+        await this.client.set(sendatKey, `${+task.sendAt}`);
+      }
+      return true;
+    } catch (opError) {
+      logError('[update] [try/catch] [opError]', opError);
+      return false;
+    }
+  }
+
+
+  /**
+   * @memberOf RedisQueue
+   * @name __getKey
+   * @description helper to generate scoped key
+   * @param uuid {string} - letter's uuid
+   * @param type {string} - "letter" or "sendat" or "concatletter"
+   * @returns {string} returns key used by Redis
+   */
+  __getKey(uuid, type = 'letter') {
+    if (!this.__keyTypes.includes(type)) {
+      throw new Error(`[mail-time] [RedisQueue] [__getKey] unsupported key "${type}" passed into the second argument`);
+    }
+    return `${this.uniqueName}:${type}:${uuid}`;
+  }
+
+  /**
+   * @memberOf RedisQueue
+   * @name __keyTypes
+   * @description list of supported key type
+   * @returns {string} returns key used by Redis
+   */
+  __keyTypes = ['letter', 'sendat', 'concatletter'];
+}
+
+const noop = () => {};
 
 /**
  * Check if entities of various types are equal
@@ -151,38 +706,80 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
 
 /** Class of MailTime */
 class MailTime {
+  /**
+   * Create a MailTime instance
+   * @param {object} opts - configuration object
+   * @param {RedisQueue|MongoQueue|CustomQueue} opts.queue - Queue Storage Driver instance
+   * @param {string} [opts.type] - "server" or "client" type of MailTime instance
+   * @param {function} [opts.from] - A function returning *String* for `from` header, format: `"MyApp" <user@example.com>`
+   * @param {[object]} [opts.transports] - An array of `nodemailer`'s transports, returned from `nodemailer.createTransport({})`; Required for `{type: 'server'}`
+   * @param {string} [opts.strategy] - `backup` or `balancer`
+   * @param {number} [opts.failsToNext] - After how many failed "send attempts" switch to the next transport? Applied only for `backup` strategy, default - `4`
+   * @param {number} [opts.retries] - How many times resend failed emails
+   * @param {number} [opts.retryDelay] - Interval in milliseconds between send re-tries
+   * @param {boolean} [opts.keepHistory] - Keep queue task as it is in the database
+   * @param {boolean} [opts.concatEmails] - Concatenate email by `to` field, default - `false`
+   * @param {string} [opts.concatSubject] - Email subject used in concatenated email, default - `Multiple notifications`
+   * @param {string} [opts.concatDelimiter] - HTML or plain string delimiter used between concatenated email, default - `<hr>`
+   * @param {number} [opts.concatDelay] - HTML or plain string delimiter used between concatenated email, default - `<hr>`
+   * @param {number} [opts.revolvingInterval] -  Interval in *milliseconds* in between queue checks, default - `256`
+   * @param {object|RedisAdapter|MongoAdapter|CustomAdapter} [opts.josk.adapter] - Interval in milliseconds between send re-tries
+   * @param {string} [opts.josk.adapter.type] - One of `mongo` or `redis`
+   * @param {string} [opts.prefix] - Optional prefix for scope isolation; use when creating multiple MailTime instances within the single application; By default prefix inherited from MailTime instance
+   */
   constructor (opts) {
     if (!opts || typeof opts !== 'object' || opts === null) {
       throw new TypeError('[mail-time] Configuration object must be passed into MailTime constructor');
     }
 
-    if (!opts.db) {
-      throw new Error('[mail-time] MongoDB database {db} option is required, like returned from `MongoClient.connect`');
+    if (!opts.queue || typeof opts.queue !== 'object') {
+      throw new Error('[mail-time] {queue} option is required', {
+        description: 'MailTime requires MongoQueue, RedisQueue, or CustomQueue to connect to an intermediate database'
+      });
     }
 
-    this.callbacks = {};
-    this.type = (!opts.type || (opts.type !== 'client' && opts.type !== 'server')) ? 'server' : opts.type;
+    this.queue = opts.queue;
+    this.queue.mailTimeInstance = this;
+    const queueMethods = ['ping', 'iterate', 'getPendingTo', 'push', 'remove', 'update', 'cancel'];
+
+    for (let i = queueMethods.length - 1; i >= 0; i--) {
+      if (typeof this.queue[queueMethods[i]] !== 'function') {
+        throw new Error(`{queue} instance is missing {${queueMethods[i]}} method that is required!`);
+      }
+    }
+
     this.debug = (opts.debug !== true) ? false : true;
-    this.prefix = opts.prefix || '';
-    this.maxTries = ((opts.maxTries && !isNaN(opts.maxTries)) ? parseInt(opts.maxTries) : 59) + 1;
-    this.interval = ((opts.interval && !isNaN(opts.interval)) ? parseInt(opts.interval) : 60) * 1000;
+    this._debug = (...args) => {
+      debug(this.debug, ...args);
+    };
+
+    this.type = (typeof opts.type !== 'string' || (opts.type !== 'client' && opts.type !== 'server')) ? 'server' : opts.type;
+    this.prefix = (typeof opts.prefix === 'string') ? opts.prefix : '';
+
+    if (typeof opts.retries === 'number') {
+      this.maxTries = opts.retries + 1;
+    } else if (typeof opts.maxTries === 'number') {
+      this.maxTries = (opts.maxTries < 1) ? 1 : 0;
+    } else {
+      this.maxTries = 60;
+    }
+
+    if (typeof opts.retryDelay === 'number') {
+      this.retryDelay = opts.retryDelay;
+    } else if (typeof opts.interval === 'number') {
+      this.retryDelay = opts.interval * 1000;
+    } else {
+      this.retryDelay = 60000;
+    }
+
     this.template = (typeof opts.template === 'string') ? opts.template : '{{{html}}}';
-    this.zombieTime = opts.zombieTime || 32786;
-    this.keepHistory = opts.keepHistory || false;
+    this.keepHistory = (typeof opts.keepHistory === 'boolean') ? opts.keepHistory : false;
+    this.onSent = opts.onSent || noop;
+    this.onError = opts.onError || noop;
 
     this.revolvingInterval = opts.revolvingInterval || 1536;
-    this.minRevolvingDelay = opts.minRevolvingDelay || 512;
-    this.maxRevolvingDelay = opts.maxRevolvingDelay || 2048;
 
-    if (this.interval < 2048 || isNaN(this.interval)) {
-      this.interval = 3072;
-    }
-
-    if (this.zombieTime < 8192 || isNaN(this.zombieTime)) {
-      this.zombieTime = 8192;
-    }
-
-    this.failsToNext = (opts.failsToNext && !isNaN(opts.failsToNext)) ? parseInt(opts.failsToNext) : 4;
+    this.failsToNext = (typeof opts.failsToNext === 'number') ? opts.failsToNext : 4;
     this.strategy = (opts.strategy === 'backup' || opts.strategy === 'balancer') ? opts.strategy : 'backup';
     this.transports = opts.transports || [];
     this.transport = 0;
@@ -203,57 +800,71 @@ class MailTime {
     this.concatEmails = (opts.concatEmails !== true) ? false : true;
     this.concatSubject = (opts.concatSubject && typeof opts.concatSubject === 'string') ? opts.concatSubject : 'Multiple notifications';
     this.concatDelimiter = (opts.concatDelimiter && typeof opts.concatDelimiter === 'string') ? opts.concatDelimiter : '<hr>';
-    this.concatThrottling = ((opts.concatThrottling && !isNaN(opts.concatThrottling)) ? parseInt(opts.concatThrottling) : 60) * 1000;
 
-    if (this.concatThrottling < 2048) {
-      this.concatThrottling = 3072;
+    if (typeof opts.concatDelay === 'number') {
+      this.concatDelay = opts.concatDelay;
+    } else if (typeof opts.concatThrottling === 'number') {
+      this.concatDelay = opts.concatThrottling * 1000;
+    } else {
+      this.concatDelay = 60000;
     }
 
-    _debug(this.debug, 'DEBUG ON {debug: true}');
-    _debug(this.debug, `INITIALIZING [type: ${this.type}]`);
-    _debug(this.debug, `INITIALIZING [strategy: ${this.strategy}]`);
-    _debug(this.debug, `INITIALIZING [prefix: ${this.prefix}]`);
-    _debug(this.debug, `INITIALIZING [maxTries: ${this.maxTries}]`);
-    _debug(this.debug, `INITIALIZING [failsToNext: ${this.failsToNext}]`);
+    this._debug('DEBUG ON {debug: true}');
+    this._debug(`INITIALIZING [type: ${this.type}]`);
+    this._debug(`INITIALIZING [strategy: ${this.strategy}]`);
+    this._debug(`INITIALIZING [josk.adapter: ${opts?.josk?.adapter}]`);
+    this._debug(`INITIALIZING [prefix: ${this.prefix}]`);
+    this._debug(`INITIALIZING [retries: ${this.retries}]`);
+    this._debug(`INITIALIZING [failsToNext: ${this.failsToNext}]`);
+    this._debug(`INITIALIZING [onError: ${this.onError}]`);
+    this._debug(`INITIALIZING [onSent: ${this.onSent}]`);
 
-    if (opts.type === 'server' && (this.transports.constructor !== Array || !this.transports.length)) {
-      throw new Error('[mail-time] transports is required and must be an Array, like returned from `nodemailer.createTransport`');
-    }
-
-    this.collection = opts.db.collection(`__mailTimeQueue__${this.prefix}`);
-    ensureIndex(this.collection, { isSent: 1, to: 1, sendAt: 1 });
-    ensureIndex(this.collection, { isSent: 1, sendAt: 1, tries: 1 }, { background: true });
-
-    // MongoDB Collection Schema:
-    // _id
-    // to          {String|[String]}
-    // tries       {Number}  - qty of send attempts
-    // sendAt      {Date}    - When letter should be sent
-    // isSent      {Boolean} - Email status
-    // template    {String}  - Template for this email
-    // transport   {Number}  - Last used transport
-    // concatSubject {String|Boolean} - Email concatenation subject
-    // ---
-    // mailOptions         {[Object]}  - Array of nodeMailer's `mailOptions`
-    // mailOptions.to      {String|Array} - [REQUIRED]
-    // mailOptions.from    {String}
-    // mailOptions.text    {String|Boolean}
-    // mailOptions.html    (String)
-    // mailOptions.subject {String}
-    // mailOptions.Other nodeMailer `sendMail` options...
-
+    /** SERVER-SPECIFIC CHECKS AND CONFIG */
     if (this.type === 'server') {
-      const scheduler = new JoSk({
-        db: opts.db,
+      if (this.transports.constructor !== Array || !this.transports.length) {
+        throw new Error('[mail-time] {transports} is required for {type: "server"} and must be an Array, like returned from `nodemailer.createTransport`');
+      }
+
+      if (typeof opts.josk !== 'object') {
+        throw new Error('[mail-time] {josk} option is required {object} for {type: "server"}');
+      }
+
+      if (typeof opts.josk.adapter !== 'object') {
+        throw new Error('[mail-time] {josk.adapter} option is required {object} *or* custom adapter Class');
+      }
+
+      this.josk = { ...opts.josk };
+
+      if (typeof opts.josk.adapter?.type === 'string' && opts.josk.adapter?.type === 'mongo') {
+        if (!opts.josk.adapter.db) {
+          throw new Error('[mail-time] {josk.adapter.db} option required for {josk.adapter.type: "mongo"}');
+        }
+        this.josk.adapter = new josk.MongoAdapter({ prefix: `mailTimeQueue${this.prefix}`, ...opts.josk.adapter });
+      }
+
+      if (typeof opts.josk.adapter?.type === 'string' && opts.josk.adapter?.type === 'redis') {
+        if (!opts.josk.adapter.client) {
+          throw new Error('[mail-time] {josk.adapter.client} option required for {josk.adapter.type: "redis"}');
+        }
+        this.josk.adapter = new josk.RedisAdapter({ prefix: `mailTimeQueue${this.prefix}`, ...opts.josk.adapter });
+      }
+
+      this.josk.minRevolvingDelay = (typeof opts.josk.minRevolvingDelay === 'number') ? opts.josk.minRevolvingDelay : 512;
+      this.josk.maxRevolvingDelay = (typeof opts.josk.maxRevolvingDelay === 'number') ? opts.josk.maxRevolvingDelay : 2048;
+      this.josk.zombieTime = (typeof opts.josk.zombieTime === 'number') ? opts.josk.zombieTime : 32786;
+
+      this.scheduler = new josk.JoSk({
         debug: this.debug,
-        prefix: `mailTimeQueue${this.prefix}`,
-        resetOnInit: false,
-        zombieTime: this.zombieTime,
-        minRevolvingDelay: this.minRevolvingDelay,
-        maxRevolvingDelay: this.maxRevolvingDelay
+        ...this.josk,
       });
 
-      scheduler.setInterval(this.___send.bind(this), this.revolvingInterval, `mailTimeQueue${this.prefix}`);
+      process.nextTick(async () => {
+        if ((await this.scheduler.ping()).status !== 'OK') {
+          throw new Error('[mail-time] [MailTime#ping] can not connect to storage, make sure it is available and properly configured');
+        }
+      });
+
+      this.scheduler.setInterval(this.___iterate.bind(this), this.revolvingInterval, `mailTimeQueue${this.prefix}`);
     }
   }
 
@@ -265,286 +876,171 @@ class MailTime {
     DEFAULT_TEMPLATE = newVal;
   }
 
-  ___compileMailOpts(transport, task) {
-    let _mailOpts = {};
-
-    if (!transport) {
-      throw new Error('[mail-time] [sendMail] [___compileMailOpts] transport not available or misconfiguration is in place!');
-    }
-
-    if (transport._options && typeof transport._options === 'object' && transport._options !== null && transport._options.mailOptions) {
-      _mailOpts = merge(_mailOpts, transport._options.mailOptions);
-    }
-
-    if (transport.options && typeof transport.options === 'object' && transport.options !== null && transport.options.mailOptions) {
-      _mailOpts = merge(_mailOpts, transport.options.mailOptions);
-    }
-
-    _mailOpts = merge(_mailOpts, {
-      html: '',
-      text: '',
-      subject: ''
-    });
-
-    for (let i = 0; i < task.mailOptions.length; i++) {
-      if (task.mailOptions[i].html) {
-        if (task.mailOptions.length > 1) {
-          _mailOpts.html += this.___render(this.concatDelimiter, task.mailOptions[i]) + this.___render(task.mailOptions[i].html, task.mailOptions[i]);
-        } else {
-          _mailOpts.html = this.___render(task.mailOptions[i].html, task.mailOptions[i]);
-        }
-        delete task.mailOptions[i].html;
-      }
-
-      if (task.mailOptions[i].text) {
-        if (task.mailOptions.length > 1) {
-          _mailOpts.text += '\r\n' + this.___render(task.mailOptions[i].text, task.mailOptions[i]);
-        } else {
-          _mailOpts.text = this.___render(task.mailOptions[i].text, task.mailOptions[i]);
-        }
-        delete task.mailOptions[i].text;
-      }
-
-      _mailOpts = merge(_mailOpts, task.mailOptions[i]);
-    }
-
-    if (_mailOpts.html && (task.template || this.template)) {
-      _mailOpts.html = this.___render((task.template || this.template), _mailOpts);
-    }
-
-    if (task.mailOptions.length > 1) {
-      _mailOpts.subject = task.concatSubject || this.concatSubject || _mailOpts.subject;
-    }
-
-    if (!_mailOpts.from && this.from) {
-      _mailOpts.from = this.from(transport);
-    }
-
-    return _mailOpts;
-  }
-
   /**
+   * @async
    * @memberOf MailTime
-   * @name ___send
-   * @param ready {Function} - See JoSk NPM package
-   * @returns {void}
+   * @name ping
+   * @description Check package readiness and connection to Storage
+   * @returns {Promise<object>}
+   * @throws {mix}
    */
-  ___send(ready) {
-    const cursor = this.collection.find({
-      isSent: false,
-      sendAt: {
-        $lte: new Date()
-      },
-      tries: {
-        $lt: this.maxTries
-      }
-    }, {
-      projection: {
-        _id: 1,
-        tries: 1,
-        template: 1,
-        transport: 1,
-        mailOptions: 1,
-        concatSubject: 1
-      }
-    });
-
-    cursor.forEach(async (task) => {
-      try {
-        await this.collection.updateOne({
-          _id: task._id
-        }, {
-          $set: {
-            isSent: true
-          },
-          $inc: {
-            tries: 1
-          }
-        });
-
-        let transport;
-        let transportIndex;
-        if (this.strategy === 'balancer') {
-          this.transport = this.transport + 1;
-          if (this.transport >= this.transports.length) {
-            this.transport = 0;
-          }
-          transportIndex = this.transport;
-          transport = this.transports[transportIndex];
-        } else {
-          transportIndex = task.transport;
-          transport = this.transports[transportIndex];
-        }
-
-        const _mailOpts = this.___compileMailOpts(transport, task);
-
-        _debug(this.debug, '[sendMail] [sending] To:', _mailOpts.to);
-        transport.sendMail(_mailOpts, (error, info) => {
-          if (error) {
-            this.___handleError(task, error, info);
-            return;
-          }
-
-          if (info.accepted && !info.accepted.length) {
-            this.___handleError(task, 'Message not accepted or Greeting never received', info);
-            return;
-          }
-
-          _debug(this.debug, `email successfully sent, attempts: #${task.tries}, transport #${transportIndex} to: `, _mailOpts.to);
-
-          if (!this.keepHistory) {
-            this.collection.deleteOne({
-              _id: task._id
-            }).catch(mongoErrorHandler);
-          }
-
-          this.___triggerCallbacks(void 0, task, info);
-          return;
-        });
-      } catch (e) {
-        _logError('Exception during runtime:', e);
-        this.___handleError(task, e, {});
-      }
-    }).catch((forEachError) => {
-      _logError('[___send] [forEach] [forEachError]', forEachError);
-    }).finally(() => {
-      ready();
-      cursor.close();
-    });
+  async ping() {
+    this._debug('[ping]');
+    const schedulerPing = await this.scheduler.ping();
+    if (schedulerPing.status !== 'OK') {
+      return schedulerPing;
+    }
+    return await this.queue.ping();
   }
 
   /**
    * @memberOf MailTime
    * @name send
    * @description alias of `sendMail`
-   * @returns {void}
+   * @returns {Promise<string>} uuid of the email
    */
-  send(opts, callback) {
-    this.sendMail(opts, callback);
+  async send(opts) {
+    this._debug('[send]', opts);
+    return await this.sendMail(opts);
   }
 
   /**
+   * @async
    * @memberOf MailTime
    * @name sendMail
-   * @param opts          {Object}   - Letter options with next properties:
-   * @param opts.sendAt   {Date}     - When email should be sent
-   * @param opts.template {String}   - Template string
-   * @param opts[key]     {mix}      - Other MailOptions according to NodeMailer lib documentation
-   * @param callback      {Function} - [OPTIONAL] Callback function
-   * @returns {void}
+   * @description add email to the queue or append to existing letter if {concatEmails: true}
+   * @param opts {object} - email options
+   * @param opts.sendAt {Date|number}  - When email should be sent
+   * @param opts.template {string} - Email-specific template
+   * @param opts[key] {mix} - Other NodeMailer's options
+   * @returns {Promise<string>} uuid of the email
+   * @throws {Error}
    */
-  sendMail(opts = {}, callback = noop) {
-    _debug(this.debug, '[sendMail] [attempt] To:', opts.to);
+  async sendMail(opts = {}) {
+    this._debug('[sendMail]', opts);
     if (!opts.html && !opts.text) {
       throw new Error('`html` nor `text` field is presented, at least one of those fields is required');
     }
 
-    if (!opts.sendAt || Object.prototype.toString.call(opts.sendAt) !== '[object Date]') {
-      opts.sendAt = new Date();
+    let sendAt = opts.sendAt;
+    if (!sendAt) {
+      sendAt = Date.now();
     }
 
-    if (typeof opts.template !== 'string') {
-      opts.template = false;
+    if (sendAt instanceof Date) {
+      sendAt = +sendAt;
     }
 
-    if (typeof opts.concatSubject !== 'string') {
-      opts.concatSubject = false;
+    if (typeof sendAt !== 'number') {
+      sendAt = Date.now();
     }
 
-    let _sendAt = opts.sendAt;
-    const _template = opts.template;
-    const _concatSubject = opts.concatSubject;
-    delete opts.sendAt;
-    delete opts.template;
-    delete opts.concatSubject;
+    let template = opts.template;
+    if (typeof template !== 'string') {
+      template = false;
+    }
 
-    if (typeof opts.to !== 'string' && (!(opts.to instanceof Array) || !opts.to.length)) {
+    let concatSubject = opts.concatSubject;
+    if (typeof concatSubject !== 'string') {
+      concatSubject = false;
+    }
+
+    const mailOptions = { ...opts };
+    delete mailOptions.sendAt;
+    delete mailOptions.template;
+    delete mailOptions.concatSubject;
+
+    if (typeof mailOptions.to !== 'string' && (!(mailOptions.to instanceof Array) || !mailOptions.to.length)) {
       throw new Error('[mail-time] `mailOptions.to` is required and must be a string or non-empty Array');
     }
 
     if (this.concatEmails) {
-      _sendAt = new Date(+_sendAt + this.concatThrottling);
-      this.collection.findOne({
-        to: opts.to,
-        isSent: false,
-        sendAt: {
-          $lte: _sendAt
-        }
-      }, {
-        projection: {
-          _id: 1,
-          mailOptions: 1
-        }
-      }).then((task) => {
-        if (task) {
-          const queue = task.mailOptions || [];
+      sendAt = sendAt + this.concatDelay;
+      const task = await this.queue.getPendingTo(mailOptions.to, sendAt);
 
-          for (let i = 0; i < queue.length; i++) {
-            if (equals(queue[i], opts)) {
-              return;
-            }
+      if (task) {
+        const pendingMailOptions = task.mailOptions || [];
+
+        for (let i = 0; i < pendingMailOptions.length; i++) {
+          if (equals(pendingMailOptions[i], mailOptions)) {
+            return task.uuid;
           }
-
-          queue.push(opts);
-          this.collection.updateOne({
-            _id: task._id
-          }, {
-            $set: {
-              mailOptions: queue
-            }
-          }).then(() => {
-            const _id = task._id.toHexString();
-            if (!this.callbacks[_id]) {
-              this.callbacks[_id] = [];
-            }
-            this.callbacks[_id].push(callback);
-          }).catch(mongoErrorHandler);
-          return;
         }
 
-        this.___addToQueue({
-          sendAt: _sendAt,
-          template: _template,
-          mailOptions: opts,
-          concatSubject: _concatSubject
-        }, callback);
-      }).catch(mongoErrorHandler);
-
-      return;
+        pendingMailOptions.push(opts);
+        await this.queue.update(task, {
+          mailOptions: pendingMailOptions
+        });
+        return task.uuid;
+      }
     }
 
-    this.___addToQueue({
-      sendAt: _sendAt,
-      template: _template,
-      mailOptions: opts,
-      concatSubject: _concatSubject
-    }, callback);
-
-    return;
+    return await this.___addToQueue({
+      sendAt,
+      template,
+      concatSubject,
+      mailOptions: mailOptions,
+    });
   }
 
   /**
    * @memberOf MailTime
-   * @name ___handleError
-   * @param task  {Object} - Email task record form Mongo
-   * @param error {mix}    - Error String/Object/Error
-   * @param info  {Object} - Info object returned from nodemailer
-   * @returns {void}
+   * @name cancel
+   * @description alias of `cancelMail`
+   * @returns {Promise<boolean>} returns `true` if cancelled or `false` if not found was sent or was cancelled previously
    */
-  ___handleError(task, error, info) {
+  async cancel(uuid) {
+    this._debug('[cancel]', uuid);
+    return await this.cancelMail(uuid);
+  }
+
+  /**
+   * @async
+   * @memberOf MailTime
+   * @name cancelMail
+   * @description remove email from the queue or mark as `isCancelled`
+   * @param uuid {string|Promise<string>} - uuid returned from `send` or `sendMail`
+   * @returns {Promise<boolean>} returns `true` if cancelled or `false` if not found was sent or was cancelled previously
+   */
+  async cancelMail(uuid) {
+    this._debug('[cancelMail]', uuid);
+    if (typeof uuid === 'object' && uuid instanceof Promise) {
+      return await this.queue.cancel(await uuid);
+    }
+    return await this.queue.cancel(uuid);
+  }
+
+  /**
+   * @async
+   * @memberOf MailTime
+   * @name ___handleError
+   * @description Handle runtime errors and pass to `onError` callback
+   * @param task {object} - Email task record form Storage
+   * @param error {mix} - Error String/Object/Error
+   * @param info {object} - Info object returned from nodemailer
+   * @returns {Promise<void 0>}
+   */
+  async ___handleError(task, error, info) {
+    this._debug('[private handleError]', { task, error, info });
     if (!task) {
       return;
     }
 
     if (task.tries >= this.maxTries) {
+      task.isSent = false;
+      task.isFailed = true;
+
       if (!this.keepHistory) {
-        this.collection.deleteOne({
-          _id: task._id
-        }).catch(mongoErrorHandler);
+        await this.queue.remove(task);
+      } else {
+        await this.queue.update(task, {
+          isSent: task.isSent,
+          isFailed: task.isFailed,
+        });
       }
 
-      _debug(this.debug, `Giving up trying send email after ${task.tries} attempts to: `, task.mailOptions[0].to, error);
-      this.___triggerCallbacks(error, task, info);
+      this._debug(`[private handleError] Giving up trying send email after ${task.tries} attempts to: `, task.mailOptions[0].to, error);
+      this.onError(error, task, info);
       return;
     }
 
@@ -557,61 +1053,57 @@ class MailTime {
       }
     }
 
-    this.collection.updateOne({
-      _id: task._id
-    }, {
-      $set: {
-        isSent: false,
-        sendAt: new Date(Date.now() + this.interval),
-        transport: transportIndex
-      }
-    }).catch(mongoErrorHandler);
+    await this.queue.update(task, {
+      isSent: false,
+      sendAt: Date.now() + this.retryDelay,
+      transport: transportIndex,
+    });
 
-    _debug(this.debug, `Next re-send attempt at ${new Date(Date.now() + this.interval)}: #${task.tries}/${this.maxTries}, transport #${transportIndex} to: `, task.mailOptions[0].to, error);
+    this._debug(`[private handleError] Next re-send attempt at ${new Date(Date.now() + this.retryDelay)}: #${task.tries}/${this.maxTries}, transport #${transportIndex} to: `, task.mailOptions[0].to, error);
   }
 
   /**
+   * @async
    * @memberOf MailTime
    * @name ___addToQueue
-   * @param opts               {Object}   - Letter options with next properties:
-   * @param opts.sendAt        {Date}     - When email should be sent
-   * @param opts.template      {String}   - Email template
-   * @param opts.mailOptions   {Object}   - MailOptions according to NodeMailer lib
-   * @param opts.concatSubject {String}   - Email subject used when sending multiple concatenated emails
-   * @param callback           {Function} - [OPTIONAL] Callback function
-   * @returns {void}
+   * @description Prepare task's object and push to the queue
+   * @param opts {object} - Email options with next properties:
+   * @param opts.sendAt {number} - When email should be sent
+   * @param opts.template {string} - Email-specific template
+   * @param opts.mailOptions {object} - MailOptions according to NodeMailer lib
+   * @param opts.concatSubject {string} - Email subject used when sending concatenated email
+   * @returns {Promise<string>} message uuid
    */
-  ___addToQueue(opts, callback) {
-    _debug(this.debug, '[sendMail] [adding to queue] To:', opts.mailOptions.to);
+  async ___addToQueue(opts) {
+    this._debug('[private addToQueue]', opts);
     const task = {
+      uuid: crypto.randomUUID(),
       tries: 0,
       isSent: false,
       sendAt: opts.sendAt,
+      isFailed: false,
       template: opts.template,
       transport: this.transport,
+      isCancelled: false,
       mailOptions: [opts.mailOptions],
-      concatSubject: opts.concatSubject
+      concatSubject: opts.concatSubject,
     };
 
     if (this.concatEmails) {
       task.to = opts.mailOptions.to;
     }
 
-    this.collection.insertOne(task).then((r) => {
-      const _id = r.insertedId.toHexString();
-      if (!this.callbacks[_id]) {
-        this.callbacks[_id] = [];
-      }
-      this.callbacks[_id].push(callback);
-    }).catch(mongoErrorHandler);
+    await this.queue.push(task);
+    return task.uuid;
   }
 
   /**
    * @memberOf MailTime
    * @name ___render
-   * @param string       {String} - Template with Spacebars/Blaze/Mustache-like placeholders
-   * @param replacements {Object} - Blaze/Mustache-like helpers Object
-   * @returns {String}
+   * @description Render templates
+   * @param string {string} - Template with Mustache-like placeholders
+   * @param replacements {object} - Blaze/Mustache-like helpers Object
+   * @returns {string}
    */
   ___render(_string, replacements) {
     let i;
@@ -638,21 +1130,156 @@ class MailTime {
 
   /**
    * @memberOf MailTime
-   * @name ___triggerCallbacks
-   * @param error  {mix}    - Error thrown during sending email
-   * @param task   {Object} - Task record from mongodb
-   * @param info   {Object} - Info object returned from NodeMailer's `sendMail` method
+   * @name ___compileMailOpts
+   * @description Run various checks, compile options, and render template
+   * @param transport {object} - Current transport
+   * @param info {object} - Info object returned from NodeMailer's `sendMail` method
    * @returns {void 0}
    */
-  ___triggerCallbacks(error, task, info) {
-    const _id = task._id.toHexString();
-    if (this.callbacks[_id] && this.callbacks[_id].length) {
-      this.callbacks[_id].forEach((cb, i) => {
-        cb(error, info, task?.mailOptions?.[i]);
-      });
+  ___compileMailOpts(transport, task) {
+    let compiledOpts = {};
+
+    if (!transport) {
+      throw new Error('[mail-time] [sendMail] [___compileMailOpts] {transport} is not available or misconfigured!');
     }
-    delete this.callbacks[_id];
+
+    if (transport._options && typeof transport._options === 'object' && transport._options !== null && transport._options.mailOptions) {
+      compiledOpts = merge(compiledOpts, transport._options.mailOptions);
+    }
+
+    if (transport.options && typeof transport.options === 'object' && transport.options !== null && transport.options.mailOptions) {
+      compiledOpts = merge(compiledOpts, transport.options.mailOptions);
+    }
+
+    compiledOpts = merge(compiledOpts, {
+      html: '',
+      text: '',
+      subject: ''
+    });
+
+    for (let i = 0; i < task.mailOptions.length; i++) {
+      if (task.mailOptions[i].html) {
+        if (task.mailOptions.length > 1) {
+          compiledOpts.html += this.___render(this.concatDelimiter, task.mailOptions[i]) + this.___render(task.mailOptions[i].html, task.mailOptions[i]);
+        } else {
+          compiledOpts.html = this.___render(task.mailOptions[i].html, task.mailOptions[i]);
+        }
+        delete task.mailOptions[i].html;
+      }
+
+      if (task.mailOptions[i].text) {
+        if (task.mailOptions.length > 1) {
+          compiledOpts.text += '\r\n' + this.___render(task.mailOptions[i].text, task.mailOptions[i]);
+        } else {
+          compiledOpts.text = this.___render(task.mailOptions[i].text, task.mailOptions[i]);
+        }
+        delete task.mailOptions[i].text;
+      }
+
+      compiledOpts = merge(compiledOpts, task.mailOptions[i]);
+    }
+
+    if (compiledOpts.html && (task.template || this.template)) {
+      compiledOpts.html = this.___render((task.template || this.template), compiledOpts);
+    }
+
+    if (task.mailOptions.length > 1) {
+      compiledOpts.subject = task.concatSubject || this.concatSubject || compiledOpts.subject;
+    }
+
+    if (!compiledOpts.from && this.from) {
+      compiledOpts.from = this.from(transport);
+    }
+
+    return compiledOpts;
+  }
+
+  /**
+   * @async
+   * @memberOf MailTime
+   * @name ___send
+   * @description send email using nodemailer's transport
+   * @param task {object} - email's task object from Storage
+   * @returns {Promise<void 0>}
+   */
+  async ___send(task) {
+    this._debug('[private send]', task);
+    try {
+      if (task.isSent === true || task.isFailed === true || task.isCancelled === true) {
+        return;
+      }
+
+      task.tries++;
+      const isUpdated = await this.queue.update(task, {
+        isSent: true,
+        tries: task.tries
+      });
+
+      if (!isUpdated) {
+        logError('[private send] [queue.update] Not updated!');
+        return;
+      }
+
+      let transport;
+      let transportIndex;
+      if (this.strategy === 'balancer') {
+        this.transport = this.transport + 1;
+        if (this.transport >= this.transports.length) {
+          this.transport = 0;
+        }
+        transportIndex = this.transport;
+        transport = this.transports[transportIndex];
+      } else {
+        transportIndex = task.transport;
+        transport = this.transports[transportIndex];
+      }
+
+      const compiledOpts = this.___compileMailOpts(transport, task);
+
+      await new Promise((resolve) => {
+        transport.sendMail(compiledOpts, async (error, info) => {
+          this._debug('[private send] [sending]', { error, info });
+          if (error) {
+            await this.___handleError(task, error, info);
+            resolve();
+            return;
+          }
+
+          if (info.accepted && !info.accepted.length) {
+            await this.___handleError(task, new Error('Message not accepted or Greeting never received'), info);
+            resolve();
+            return;
+          }
+
+          this._debug(`email successfully sent, attempts: #${task.tries}, transport #${transportIndex} to: `, compiledOpts.to);
+
+          if (!this.keepHistory) {
+            await this.queue.remove(task);
+          }
+
+          task.isSent = true;
+          this.onSent(task, info);
+          resolve();
+        });
+      });
+    } catch (e) {
+      logError('Exception during runtime:', e);
+      this.___handleError(task, e, {});
+    }
+  }
+
+  /**
+   * @memberOf MailTime
+   * @name ___iterate
+   * @description Iterate over queued tasks
+   * @returns {Promise}
+   */
+  async ___iterate() {
+    this._debug('[private iterate]');
+    return await this.queue.iterate();
   }
 }
 
-module.exports = MailTime;
+exports.MailTime = MailTime;
+exports.MongoQueue = MongoQueue;
+exports.RedisQueue = RedisQueue;
