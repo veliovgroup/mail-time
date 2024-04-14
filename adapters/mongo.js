@@ -74,6 +74,7 @@ class MongoQueue {
 
     // MongoDB Collection Schema:
     // _id
+    // uuid        {string}
     // to          {string|[string]}
     // tries       {number}  - qty of send attempts
     // sendAt      {number}  - When letter should be sent
@@ -85,7 +86,6 @@ class MongoQueue {
     // concatSubject {string|boolean} - Email concatenation subject
     // ---
     // mailOptions         {[object]}  - Array of nodeMailer's `mailOptions`
-    // mailOptions.uuid    {string} - [REQUIRED]
     // mailOptions.to      {string|[string]} - [REQUIRED]
     // mailOptions.from    {string}
     // mailOptions.text    {string|boolean}
