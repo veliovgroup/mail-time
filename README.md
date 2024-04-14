@@ -173,9 +173,9 @@ See steps 1-4 below to learn about different parts of *MailTime* library and how
 1. Require package
 2. Create NodeMailer's transports
 3. Initiate `mail-time` *server*
-  a. Connect to Redis; Or
-  b. Connect to MongoDB
-3.1. [*optionally*] initiate `mail-time` as *client*
+  - a. Connect to Redis; Or
+  - b. Connect to MongoDB
+  - c. [*optionally*] initiate `mail-time` as *client*
 4. Start sending emails
 
 #### 1. Require package
@@ -252,7 +252,9 @@ export { transports };
 
 Create new instance of *MailTime* in the *Server* mode, — it will be able to __send__ and __add__ emails to the queue.
 
-3a. Connecting to Redis before initiating `new MailTime` instance:
+##### 3a. Initiate and connect to Redis
+
+Connecting to Redis before initiating `new MailTime` instance:
 
 ```js
 import { MailTime, RedisQueue } from 'mail-time';
@@ -290,7 +292,9 @@ const mailQueue = new MailTime({
 export { mailQueue };
 ```
 
-3b. Connecting to MongoDB before initiating `new MailTime` instance:
+##### 3b. Initiate and connect to MongoDB
+
+Connecting to MongoDB before initiating `new MailTime` instance:
 
 ```js
 import { MailTime, MongoQueue } from 'mail-time';
@@ -328,7 +332,7 @@ const mailQueue = new MailTime({
 export { mailQueue };
 ```
 
-#### 3.1 Optionally create *Client* type of *MailTime*
+#### 3c. Optionally create *Client* type of *MailTime*
 
 Only __one__ `MailTime` *Server* instance required to send email. In the other parts of an app (like UI units or in sub-apps) use `mail-time` in the *Client* mode to __add__ emails to queue
 
