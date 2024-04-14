@@ -14,7 +14,7 @@ Install [Atmosphere `ostrio:mailer` package](https://atmospherejs.com/ostrio/mai
 meteor add ostrio:mailer
 ```
 
-Import `'meteor/ostrio:mailer'` package
+Import `meteor/ostrio:mailer` package
 
 ```js
 import { MailTime, MongoQueue, RedisQueue } from 'meteor/ostrio:mailer';
@@ -56,8 +56,8 @@ export { transports };
 *MailTime* uses separate storage for Queue management and Scheduler. In the example below MongoDB is used for both
 
 ```js
-import { MongoInternals } from 'meteor/mongo';
 import { MailTime, MongoQueue } from 'meteor/ostrio:mailer';
+import { MongoInternals } from 'meteor/mongo';
 import { transports } from './transports.js';
 
 const mailQueue = new MailTime({
@@ -90,8 +90,8 @@ const mailQueue = new MailTime({
 *MailTime* uses separate storage for Queue management and Scheduler. In the example below MongoDB is used for queue and Redis is used for scheduler
 
 ```js
-import { MongoInternals } from 'meteor/mongo';
 import { MailTime, MongoQueue } from 'meteor/ostrio:mailer';
+import { MongoInternals } from 'meteor/mongo';
 import { createClient } from 'redis';
 import { transports } from './transports.js';
 
@@ -117,8 +117,8 @@ const mailQueue = new MailTime({
 *MailTime* uses separate storage for Queue management and Scheduler. In the example below Redis is used for queue and MongoDB is used for scheduler
 
 ```js
-import { MongoInternals } from 'meteor/mongo';
 import { MailTime, RedisQueue } from 'meteor/ostrio:mailer';
+import { MongoInternals } from 'meteor/mongo';
 import { createClient } from 'redis';
 import { transports } from './transports.js';
 
@@ -144,8 +144,8 @@ const mailQueue = new MailTime({
 *MailTime* uses separate storage for Queue management and Scheduler. In the example below Redis is used for both
 
 ```js
-import { MongoInternals } from 'meteor/mongo';
 import { MailTime, RedisQueue } from 'meteor/ostrio:mailer';
+import { MongoInternals } from 'meteor/mongo';
 import { createClient } from 'redis';
 import { transports } from './transports.js';
 
@@ -184,7 +184,7 @@ REDIS_URL="redis://127.0.0.1:6379" meteor test-packages ./ --driver-package=mete
 EMAIL_DOMAIN="example.com" REDIS_URL="redis://127.0.0.1:6379" meteor test-packages ./ --driver-package=meteortesting:mocha
 
 # In case of the errors, — enable DEBUG for detailed output
-DEBUG="true"  REDIS_URL="redis://127.0.0.1:6379" meteor test-packages ./ --driver-package=meteortesting:mocha
+DEBUG="true" REDIS_URL="redis://127.0.0.1:6379" meteor test-packages ./ --driver-package=meteortesting:mocha
 
 # With custom port
 REDIS_URL="redis://127.0.0.1:6379" meteor test-packages ./ --driver-package=meteortesting:mocha --port 8888

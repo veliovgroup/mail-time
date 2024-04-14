@@ -21,12 +21,20 @@ The main difference between *Server* and *Client* `type` is that the *Server* ha
 - [Installation](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#installation)
 - [Meteor.js usage](https://github.com/veliovgroup/mail-time/blob/master/docs/meteor.md)
 - [Usage example](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#basic-usage)
-  - [Initiate with MongoDB for queue and scheduler](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#using-mongodb-for-queue-and-scheduler)
-  - [Initiate with MongoDB for queue and Redis for scheduler](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#using-mongodb-for-queue-and-redis-for-scheduler)
-  - [Initiate with Redis for queue and MongoDB for scheduler](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#using-redis-for-queue-and-mongodb-for-scheduler)
-  - [Initiate with Redis for queue and scheduler](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#using-redis-for-queue-and-scheduler)
+  - [Require/Import `mail-time`](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#1-require-package)
+  - [Create NodeMailer's transports](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#2-create-nodemailers-transports)
+  - [Initiate `mail-time`](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#3-initiate-mail-time)
+    - [Connect to Redis](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#3a-initiate-and-connect-to-redis)
+    - [Connect to MongoDB](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#3b-initiate-and-connect-to-mongodb)
+    - [Initiate as *Client* instance](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#3c-optionally-create-client-type-of-mailtime)
   - [Initiate two `MailTime` instances within the single app](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#two-mailtime-instances-usage-example)
+
   - [Use templates](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#passing-variables-to-the-template)
+  - Different storage configurations:
+    - [Use MongoDB for queue and scheduler](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#using-mongodb-for-queue-and-scheduler)
+    - [Use MongoDB for queue and Redis for scheduler](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#using-mongodb-for-queue-and-redis-for-scheduler)
+    - [Use Redis for queue and MongoDB for scheduler](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#using-redis-for-queue-and-mongodb-for-scheduler)
+    - [Use Redis for queue and scheduler](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#using-redis-for-queue-and-scheduler)
 - [API](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#api)
   - [`new MailTime` *Constructor*](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#new-mailtimeopts-constructor)
   - [`new RedisQueue` *Constructor*](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#new-redisqueueopts-constructor)
@@ -379,8 +387,8 @@ await mailQueue.sendMail({
 *MailTime* uses separate storage for Queue management and Scheduler. In the example below MongoDB is used for both
 
 ```js
-import { MongoClient } from 'mongodb';
 import { MailTime, MongoQueue } from 'mail-time';
+import { MongoClient } from 'mongodb';
 import { transports } from './transports.js';
 
 const db = (await MongoClient.connect('mongodb://url')).db('database');
@@ -408,8 +416,8 @@ const mailQueue = new MailTime({
 *MailTime* uses separate storage for Queue management and Scheduler. In the example below MongoDB is used for queue and Redis is used for scheduler
 
 ```js
-import { MongoClient } from 'mongodb';
 import { MailTime, MongoQueue } from 'mail-time';
+import { MongoClient } from 'mongodb';
 import { createClient } from 'redis';
 import { transports } from './transports.js';
 
@@ -435,8 +443,8 @@ const mailQueue = new MailTime({
 *MailTime* uses separate storage for Queue management and Scheduler. In the example below Redis is used for queue and MongoDB is used for scheduler
 
 ```js
-import { MongoClient } from 'mongodb';
 import { MailTime, RedisQueue } from 'mail-time';
+import { MongoClient } from 'mongodb';
 import { createClient } from 'redis';
 import { transports } from './transports.js';
 
@@ -462,8 +470,8 @@ const mailQueue = new MailTime({
 *MailTime* uses separate storage for Queue management and Scheduler. In the example below Redis is used for both
 
 ```js
-import { MongoClient } from 'mongodb';
 import { MailTime, RedisQueue } from 'mail-time';
+import { MongoClient } from 'mongodb';
 import { createClient } from 'redis';
 import { transports } from './transports.js';
 
@@ -718,6 +726,19 @@ new MongoQueue({
 *Remove email from queue.* Returns `Promise<boolean>` — `true` if cancelled or `false` if not found was sent or was cancelled previously. Throws *Error*
 
 - `uuid` {*string|promise*} — email's `uuid` returned from `.sendEmail()` method
+
+```js
+import { mailQueue } from './mail-queue.js';
+
+const uuid = await mailQueue.sendMail({
+  to: 'johndoe@example.com',
+  subject: 'Email subject',
+  text: 'You have got email!',
+  html: '<p>You have got email!</p>',
+});
+
+await mailQueue.cancelMail(uuid);
+```
 
 ### `static MailTime.Template`
 
