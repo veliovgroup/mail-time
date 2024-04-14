@@ -5,9 +5,9 @@
 
 # MailTime
 
-"Mail-Time" is a micro-service package for mail queue, with *Server* and *Client* APIs. Build on top of the [`nodemailer`](https://github.com/nodemailer/nodemailer) package. Mail-Time made for single-server and horizontally scaled multi-server setups in mind.
+"Mail-Time" is NPM package for mail queue management. Build on top of the [`nodemailer`](https://github.com/nodemailer/nodemailer) package. Mail-Time made for single-server and horizontally scaled multi-server setups in mind.
 
-Every `MailTime` instance can have `type` configured as *Server* or *Client*.
+Every `MailTime` instance can have `type` configured as *Server* or *Client*. *Server* type of `MailTime` is great for creating an emailing micro-service app.
 
 The main difference between *Server* and *Client* `type` is that the *Server* handles the queue and __sends__ email. While the *Client* only __adds__ emails into the queue.
 
@@ -16,11 +16,17 @@ The main difference between *Server* and *Client* `type` is that the *Server* ha
 - [How it works?](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#how-it-works)
   - [With single SMTP](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#single-point-of-failure)
   - [With multiple SMTP](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#multiple-smtp-providers)
-  - [For Clusters](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#sending-emails-from-cluster-of-servers)
+  - [For horizontally-scaled apps](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#sending-emails-from-cluster-of-servers)
 - [Features](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#features)
 - [Installation](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#installation)
 - [Meteor.js usage](https://github.com/veliovgroup/mail-time/blob/master/docs/meteor.md)
 - [Usage example](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#basic-usage)
+  - [Initiate with MongoDB for queue and scheduler](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#using-mongodb-for-queue-and-scheduler)
+  - [Initiate with MongoDB for queue and Redis for scheduler](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#using-mongodb-for-queue-and-redis-for-scheduler)
+  - [Initiate with Redis for queue and MongoDB for scheduler](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#using-redis-for-queue-and-mongodb-for-scheduler)
+  - [Initiate with Redis for queue and scheduler](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#using-redis-for-queue-and-scheduler)
+  - [Initiate two `MailTime` instances within the single app](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#two-mailtime-instances-usage-example)
+  - [Use templates](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#passing-variables-to-the-template)
 - [API](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#api)
   - [`new MailTime` *Constructor*](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#new-mailtimeopts-constructor)
   - [`new RedisQueue` *Constructor*](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#new-redisqueueopts-constructor)
@@ -94,9 +100,9 @@ Rotate email transports by using multiple SMTP providers. *MailTime* support two
 
 It is common to have horizontally scaled "Cluster" of servers for load-balancing and for durability.
 
-Most modern application has scheduled or recurring emails. For example, once a day — with recent news and updates. It won't be an issue with a single server setup — the server would send emails at a daily interval via timer or CRON. But in "Cluster" implementation — each server will attempt to send the same email. MailTime built to avoid sending the same email multiple times to a user from horizontally scaled applications.
+Most modern application has scheduled or recurring emails. For example, once a day — with recent news and updates. It won't be an issue with a single server setup — the server would send emails at a daily interval via timer or CRON. But in "Cluster" implementation — each server will attempt to send the same email. *MailTime* built to avoid sending the same email multiple times to a user from horizontally scaled applications.
 
-For the maximum durability and agility each Application Server can run MailTime in the "Server" mode:
+For the maximum durability and agility each Application Server can run *MailTime* in the "Server" mode:
 
 ```ascii
 |===================THE=CLUSTER===================| |=QUEUE=|
@@ -106,7 +112,7 @@ For the maximum durability and agility each Application Server can run MailTime 
 | |-----\----|     |----\-----|     |----\-----|  | |       |                |-------------|
 |        \---------------\----------------\---------->      |   |--------|   |     ^_^     |
 |                                                 | |       |-->| SMTP 2 |-->| Happy users |
-| Each "App Server" or "Cluster Node"             | |       |   |--------|   |-------------|
+| Each "App Server"                               | |       |   |--------|   |-------------|
 | runs MailTime as a "Server"                     | |       |                    /
 | for the maximum durability                      | |       |   |--------|      /
 |                                                 | |       |-->| SMTP 3 |-----/
@@ -114,7 +120,7 @@ For the maximum durability and agility each Application Server can run MailTime 
 |=================================================| |=======|
 ```
 
-To split roles MailTime can run on a dedicated machine as micro-service. This case is great for private email servers with implemented authentication via rDNS and PTR records:
+To split roles *MailTime* can run on a dedicated machine as micro-service. This case is great for private email servers with implemented authentication via rDNS and PTR records:
 
 ```ascii
 |===================THE=CLUSTER===================| |=QUEUE=| |===Mail=Time===|
@@ -134,16 +140,16 @@ To split roles MailTime can run on a dedicated machine as micro-service. This ca
 
 ## Features
 
-- __Email Queue__ - Managed via MongoDB, will survive server reboots and failures
-- __Support for horizontally scaled multi-server setups__ - "Cluster", multiple node.js instances, load balancing solutions, and similar. Great solution for applications scaled on a single machine, or multiple virtual or "bare metal" servers, or single or cross-border/worldwide across multiple data centers
-- __Email concatenation__ - Reduce amount of sent emails to a single user with concatenation, and avoid mistakenly doubled emails. When concatenation is enabled the same emails (*checked by addressee and content*) won't be sent twice, if for any reason, due to bad logic or application failure emails are sent twice or more times - "email concatenation" is the solution to solve such annoying behavior
-- __Multiple nodemailer/SMTP transports__ — Support for multiple SMPT transports implemented in two modes - `backup` and `balancing`. This feature allows to reduce the cost of SMTP services and add extra layer of durability. If one of the transports is failing to send an email `mail-time` will switch to the next one
-- __Sending retries__ for network and other failures
-- __Templating__ with [Mustache](https://mustache.github.io/)-like placeholders
+- __Email Queue__ - Managed via MongoDB, Redis, or [Custom Queue](https://github.com/veliovgroup/mail-time/blob/master/docs/queue-api.md). Storage-based queue will survive server reboots and failures
+- __Made for horizontally scaled multi-server setups__ - *MailTime* is made to run in multi-server environments, like "Clusters", multiple app instances, load balanced solutions, and replications. *MailTime* is the perfect fit for applications scaled on a single machine, multiple virtual servers, multiple "bare metal" servers, within single or multiple data centers
+- __Email concatenation__ - Reduce amount of sent emails to a single user with concatenation, and avoid mistakenly duplicated emails. When "email concatenation" is enabled the same emails (*checked by addressee and content*) won't be sent twice. If emails are sent multiple times, due to issues in logic or application failures, - enable "email concatenation" to solve this behavior
+- __Multiple NodeMailer/SMTP transports__ — Support for multiple SMPT transports implemented in two modes - `backup` and `balancing`. Use this feature to reduce the cost of SMTP services and add extra layer of durability. When one of the transports is failing to send an email — `mail-time` will switch to the next one
+- __Sending retries__ — Built-in retries for failed to send emails due to network or other failures
+- __Templating__ — Built with support of [Mustache](https://mustache.github.io/)-like placeholders, see [templating docs](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#passing-variables-to-the-template)
 
 ## Installation
 
-To implement Server functionality — as a first step install `nodemailer`, although this package meant to be used with `nodemailer`, it's not added as the dependency, as `nodemailer` not needed by Client, and you're free to choose `nodemailer`'s version to fit your project needs:
+To implement Server functionality — begin with installing `nodemailer`, although this package meant to be used with `nodemailer`, it's not added as the dependency, as `nodemailer` not needed by Client, and to give freedom to choose `nodemailer`'s version to fit every project needs:
 
 ```shell
 npm install --save nodemailer
@@ -170,13 +176,13 @@ Setup Nodemailer's transports, Queue storage, and *MailTime* instance
 
 See steps 1-4 below to learn about different parts of *MailTime* library and how it can get used. From configuration options to sending email
 
-1. Require package
-2. Create NodeMailer's transports
-3. Initiate `mail-time` *server*
-   - a. Connect to Redis; Or
-   - b. Connect to MongoDB
-   - c. [*optionally*] initiate `mail-time` as *client*
-4. Start sending emails
+1. [Require `mail-time` package](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#1-require-package)
+2. [Create NodeMailer's transports](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#2-create-nodemailers-transports)
+3. [Initiate `mail-time` *server*](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#3-initiate-mail-time)
+   - a. [Connect to Redis](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#3a-initiate-and-connect-to-redis); Or
+   - b. [Connect to MongoDB](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#3b-initiate-and-connect-to-mongodb); And
+   - c. [*optionally*] [initiate `mail-time` as *client*](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#3c-optionally-create-client-type-of-mailtime)
+4. [Start sending emails](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#4-send-email)
 
 #### 1. Require package
 
@@ -184,7 +190,7 @@ See steps 1-4 below to learn about different parts of *MailTime* library and how
 // import as ES Module
 import { MailTime, MongoQueue, RedisQueue } from 'mail-time';
 
-// requires as CommonJS
+// require as CommonJS
 const { MailTime, MongoQueue, RedisQueue } = require('mail-time');
 ```
 
@@ -252,11 +258,12 @@ export { transports };
 
 Create new instance of *MailTime* in the *Server* mode, — it will be able to __send__ and __add__ emails to the queue.
 
-##### 3a. Initiate and connect to Redis
+#### 3a. Initiate and connect to Redis
 
 Connecting to Redis before initiating `new MailTime` instance:
 
 ```js
+// mail-queue.js
 import { MailTime, RedisQueue } from 'mail-time';
 import { createClient } from 'redis';
 import { transports } from './transports.js';
@@ -292,11 +299,12 @@ const mailQueue = new MailTime({
 export { mailQueue };
 ```
 
-##### 3b. Initiate and connect to MongoDB
+#### 3b. Initiate and connect to MongoDB
 
 Connecting to MongoDB before initiating `new MailTime` instance:
 
 ```js
+// mail-queue.js
 import { MailTime, MongoQueue } from 'mail-time';
 import { MongoClient } from 'mongodb';
 import { transports } from './transports.js';
@@ -352,6 +360,8 @@ export { mailQueue };
 ```
 
 #### 4. Send email
+
+Import created `mailQueue` where needed and call `.sendMail()` method. See [NodeMailer's message configuration documentation](https://nodemailer.com/message/) for details
 
 ```js
 import { mailQueue } from './mail-queue.js';
@@ -698,14 +708,14 @@ new MongoQueue({
 *Add email to the queue.* Returns `Promise<string>` unique email's `uuid`
 
 - `opts` {*object*} - Configuration object
-- `opts.sendAt` {*Date*} - When email should be sent, default - `Date.now()`; *Use with caution on multi-server setup at different location with the different time-zones*
+- `opts.sendAt` {*number*} - When email should be sent, default - `Date.now()`
 - `opts.template` - Email specific template, this will override default template passed to `MailTime` constructor
 - `opts.concatSubject` - Email specific concatenation subject, this will override default concatenation subject passed to `MailTime` constructor
-- `opts[key]` {*mix*} - Other custom and NodeMailer specific options, like `text`, `html` and `to`, [learn more here](https://github.com/nodemailer/nodemailer/tree/v2#e-mail-message-fields). Note `attachments` should work only via `path`, and file must exists on all micro-services servers
+- `opts[key]` {*mix*} - Other custom and NodeMailer specific options, like `text`, `html` and `to`, [learn more here](https://nodemailer.com/message/). __Note:__ if [`attachments`](https://nodemailer.com/message/attachments/) are used via `path` — file must exists on all micro-services servers
 
 ### `cancelMail(uuid)`
 
-*Removes email from queue.* Returns `Promise<boolean>` — `true` if cancelled or `false` if not found was sent or was cancelled previously. Throws *Error*
+*Remove email from queue.* Returns `Promise<boolean>` — `true` if cancelled or `false` if not found was sent or was cancelled previously. Throws *Error*
 
 - `uuid` {*string|promise*} — email's `uuid` returned from `.sendEmail()` method
 
@@ -747,17 +757,16 @@ mailQueue.sendMail({
 ## Testing
 
 1. Clone this package
-2. In Terminal (*Console*) go to directory where package is cloned
-3. Then run:
-
-Test NPM package:
+2. Start local or obtain URLs for remote MongoDB and Redis servers
+3. In Terminal (*Console*) go to directory where package was cloned
+4. Then run:
 
 ```shell
-# Before run tests make sure NODE_ENV === development
+# Before running tests make sure NODE_ENV === development
 # Install NPM dependencies
 npm install --save-dev
 
-# Before run tests you need to have running MongoDB and Redis
+# DEFAULT RUN
 REDIS_URL="redis://127.0.0.1:6379" MONGO_URL="mongodb://127.0.0.1:27017/npm-mail-time-test-001" npm test
 
 # OPTIONALLY RUN WITH CUSTOM DOMAIN
