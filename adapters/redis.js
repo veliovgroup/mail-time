@@ -29,6 +29,7 @@ class RedisQueue {
 
     // Stored JSON structure:
     // to          {string|[string]}
+    // uuid        {string}
     // tries       {number}  - qty of send attempts
     // sendAt      {number}  - When letter should be sent
     // isSent      {boolean} - Email status
@@ -39,7 +40,6 @@ class RedisQueue {
     // concatSubject {string|boolean} - Email concatenation subject
     // ---
     // mailOptions         {[object]}  - Array of nodeMailer's `mailOptions`
-    // mailOptions.uuid    {string} - [REQUIRED]
     // mailOptions.to      {string|[string]} - [REQUIRED]
     // mailOptions.from    {string}
     // mailOptions.text    {string|boolean}
