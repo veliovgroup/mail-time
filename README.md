@@ -185,6 +185,7 @@ const { MailTime, MongoQueue, RedisQueue } = require('mail-time');
 For details and full list of options available in `.createTransport()` see [`nodemailer` docs](https://nodemailer.com/smtp/)
 
 ```js
+// transports.js
 import nodemailer from 'nodemailer';
 // Use DIRECT transport
 // and enable sending email from localhost
@@ -233,6 +234,8 @@ transports.push(nodemailer.createTransport({
     pass: 'xxx'
   },
 }));
+
+export { transports };
 ```
 
 #### 3. Initiate `mail-time`
@@ -244,6 +247,7 @@ Create new instance of *MailTime* in the *Server* mode, — it will be able to _
 ```js
 import { MailTime, RedisQueue } from 'mail-time';
 import { createClient } from 'redis';
+import { transports } from './transports.js';
 
 // Use REDIS_URL environment variable to store connection string to MongoDB
 // example: "REDIS_URL=redis://127.0.0.1:6379/myapp node mail-micro-service.js"
@@ -272,13 +276,16 @@ const mailQueue = new MailTime({
     console.log(`Email "${email.mailOptions.subject}" successfully sent to ${email.mailOptions.to}`, details);
   },
 });
+
+export { mailQueue };
 ```
 
 3b. Connecting to MongoDB before initiating `new MailTime` instance:
 
 ```js
 import { MailTime, MongoQueue } from 'mail-time';
-import { MongoClient } from 'mongodb'
+import { MongoClient } from 'mongodb';
+import { transports } from './transports.js';
 
 // Use MONGO_URL environment variable to store connection string to MongoDB
 // example: "MONGO_URL=mongodb://127.0.0.1:27017/myapp node mail-micro-service.js"
@@ -307,11 +314,14 @@ const mailQueue = new MailTime({
     console.log(`Email "${email.mailOptions.subject}" successfully sent to ${email.mailOptions.to}`, details);
   },
 });
+
+export { mailQueue };
 ```
 
 #### 3.1 Only __one__ `MailTime` *Server* instance required to send email. In the other parts of an app (like UI units or in sub-apps) use `mail-time` in the *Client* mode to __add__ emails to queue:
 
 ```js
+// mail-queue.js
 import { MailTime, RedisQueue } from 'mail-time';
 import { createClient } from 'redis';
 
@@ -321,16 +331,131 @@ const mailQueue = new MailTime({
     client: await createClient({ url: 'redis://url' }).connect()
   }),
 });
+
+export { mailQueue };
 ```
 
 #### 4. Send email
 
 ```js
+import { mailQueue } from './mail-queue.js';
+
 await mailQueue.sendMail({
   to: 'user@gmail.com',
   subject: 'You\'ve got an email!',
   text: 'Plain text message',
   html: '<h1>HTML</h1><p>Styled message</p>'
+});
+```
+
+### Using MongoDB for queue and scheduler
+
+*MailTime* uses separate storage for Queue management and Scheduler. In the example below MongoDB is used for both
+
+```js
+import { MongoClient } from 'mongodb';
+import { MailTime, MongoQueue } from 'mail-time';
+import { transports } from './transports.js';
+
+const db = (await MongoClient.connect('mongodb://url')).db('database');
+const mailQueue = new MailTime({
+  queue: new MongoQueue({
+    db: db,
+  }),
+  josk: {
+    adapter: {
+      type: 'mongo',
+      db: db,
+    }
+  },
+  transports,
+  from(transport) {
+    // To pass spam-filters `from` field should be correctly set
+    // for each transport, check `transport` object for more options
+    return `"Awesome App" <${transport.options.from}>`;
+  }
+});
+```
+
+### Using MongoDB for queue and Redis for scheduler
+
+*MailTime* uses separate storage for Queue management and Scheduler. In the example below MongoDB is used for queue and Redis is used for scheduler
+
+```js
+import { MongoClient } from 'mongodb';
+import { MailTime, MongoQueue } from 'mail-time';
+import { createClient } from 'redis';
+import { transports } from './transports.js';
+
+const mailQueue = new MailTime({
+  queue: new MongoQueue({
+    db: (await MongoClient.connect('mongodb://url')).db('database'),
+  }),
+  josk: {
+    adapter: {
+      type: 'redis',
+      client: await createClient({ url: 'redis://url' }).connect(),
+    }
+  },
+  transports,
+  from(transport) {
+    return `"Awesome App" <${transport.options.from}>`;
+  }
+});
+```
+
+### Using Redis for queue and MongoDB for scheduler
+
+*MailTime* uses separate storage for Queue management and Scheduler. In the example below Redis is used for queue and MongoDB is used for scheduler
+
+```js
+import { MongoClient } from 'mongodb';
+import { MailTime, RedisQueue } from 'mail-time';
+import { createClient } from 'redis';
+import { transports } from './transports.js';
+
+const mailQueue = new MailTime({
+  queue: new RedisQueue({
+    client: await createClient({ url: 'redis://url' }).connect(),
+  }),
+  josk: {
+    adapter: {
+      type: 'mongo',
+      db: (await MongoClient.connect('mongodb://url')).db('database'),
+    }
+  },
+  transports,
+  from(transport) {
+    return `"Awesome App" <${transport.options.from}>`;
+  }
+});
+```
+
+### Using Redis for queue and scheduler
+
+*MailTime* uses separate storage for Queue management and Scheduler. In the example below Redis is used for both
+
+```js
+import { MongoClient } from 'mongodb';
+import { MailTime, RedisQueue } from 'mail-time';
+import { createClient } from 'redis';
+import { transports } from './transports.js';
+
+const redisClient = await createClient({ url: 'redis://url' }).connect();
+const mailQueue = new MailTime({
+  queue: new RedisQueue({
+    client: redisClient,
+  }),
+  josk: {
+    adapter: {
+      type: 'redis',
+      client: redisClient,
+    }
+  },
+  transports,
+  from(transport) {
+    return `"Awesome App" <${transport.options.from}>`;
+  }
 });
 ```
 
@@ -341,6 +466,7 @@ Create two `MailTime` instances with different settings. One for urgent (*e.g. "
 ```js
 import { MailTime, RedisQueue } from 'mail-time';
 import { createClient } from 'redis';
+import { transports } from './transports.js';
 const redisClient = await createClient({ url: 'redis://url' }).connect();
 
 // CREATE mailQueue FOR NON-URGENT EMAILS WHICH IS OKAY TO CONCATENATE
@@ -348,6 +474,7 @@ const mailQueue = new MailTime({
   queue: new RedisQueue({
     client: redisClient,
   }),
+  transports,
   strategy: 'backup',
   failsToNext: 1,
   concatEmails: true,
@@ -366,6 +493,7 @@ const mailInstantQueue = new MailTime({
     client: redisClient,
     prefix: 'instant'
   }),
+  transports,
   prefix: 'instant',
   retryDelay: 2000,
   strategy: 'backup',
@@ -465,7 +593,7 @@ import { MailTime, MongoQueue, RedisQueue } from 'mail-time';
 import nodemailer from 'nodemailer';
 import { createClient } from 'redis';
 
-const redisClient = await createClient({ url: 'redis://url' }).connect()
+const redisClient = await createClient({ url: 'redis://url' }).connect();
 
 const mailQueue = new MailTime({
   type: 'server',
@@ -493,6 +621,8 @@ const mailQueue = new MailTime({
     }
   },
   from(transport) {
+    // To pass spam-filters `from` field should be correctly set
+    // for each transport, check `transport` object for more options
     return `"App Name" <${transport.options.from}>`;
   },
   onError(error, email, details) {
