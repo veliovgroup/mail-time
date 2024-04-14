@@ -173,9 +173,9 @@ See steps 1-4 below to learn about different parts of *MailTime* library and how
 1. Require package
 2. Create NodeMailer's transports
 3. Initiate `mail-time` *server*
-  - a. Connect to Redis; Or
-  - b. Connect to MongoDB
-  - c. [*optionally*] initiate `mail-time` as *client*
+   - a. Connect to Redis; Or
+   - b. Connect to MongoDB
+   - c. [*optionally*] initiate `mail-time` as *client*
 4. Start sending emails
 
 #### 1. Require package
