@@ -170,6 +170,14 @@ Setup Nodemailer's transports, Queue storage, and *MailTime* instance
 
 See steps 1-4 below to learn about different parts of *MailTime* library and how it can get used. From configuration options to sending email
 
+1. Require package
+2. Create NodeMailer's transports
+3. Initiate `mail-time` *server*
+  a. Connect to Redis; Or
+  b. Connect to MongoDB
+3.1. [*optionally*] initiate `mail-time` as *client*
+4. Start sending emails
+
 #### 1. Require package
 
 ```js
@@ -180,7 +188,9 @@ import { MailTime, MongoQueue, RedisQueue } from 'mail-time';
 const { MailTime, MongoQueue, RedisQueue } = require('mail-time');
 ```
 
-#### 2. Create nodemailer's transports
+#### 2. Create NodeMailer's transports
+
+For compatibility and flexibility *MailTime* has no dependency on `nodemailer` it should be installed and imported manually. Create one or more "SMTP transports" before initializing new *MailTime* instance.
 
 For details and full list of options available in `.createTransport()` see [`nodemailer` docs](https://nodemailer.com/smtp/)
 
@@ -318,7 +328,9 @@ const mailQueue = new MailTime({
 export { mailQueue };
 ```
 
-#### 3.1 Only __one__ `MailTime` *Server* instance required to send email. In the other parts of an app (like UI units or in sub-apps) use `mail-time` in the *Client* mode to __add__ emails to queue:
+#### 3.1 Optionally create *Client* type of *MailTime*
+
+Only __one__ `MailTime` *Server* instance required to send email. In the other parts of an app (like UI units or in sub-apps) use `mail-time` in the *Client* mode to __add__ emails to queue
 
 ```js
 // mail-queue.js
