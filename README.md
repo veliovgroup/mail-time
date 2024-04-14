@@ -20,7 +20,7 @@ The main difference between *Server* and *Client* `type` is that the *Server* ha
 - [Features](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#features)
 - [Installation](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#installation)
 - [Meteor.js usage](https://github.com/veliovgroup/mail-time/blob/master/docs/meteor.md)
-- [Usage example](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#basic-usage)
+- [Usage examples](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#basic-usage)
   - [Require/Import `mail-time`](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#1-require-package)
   - [Create NodeMailer's transports](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#2-create-nodemailers-transports)
   - [Initiate `mail-time`](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#3-initiate-mail-time)
@@ -28,7 +28,6 @@ The main difference between *Server* and *Client* `type` is that the *Server* ha
     - [Connect to MongoDB](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#3b-initiate-and-connect-to-mongodb)
     - [Initiate as *Client* instance](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#3c-optionally-create-client-type-of-mailtime)
   - [Initiate two `MailTime` instances within the single app](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#two-mailtime-instances-usage-example)
-
   - [Use templates](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#passing-variables-to-the-template)
   - Different storage configurations:
     - [Use MongoDB for queue and scheduler](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#using-mongodb-for-queue-and-scheduler)
@@ -717,15 +716,15 @@ new MongoQueue({
 
 - `opts` {*object*} - Configuration object
 - `opts.sendAt` {*number*} - When email should be sent, default - `Date.now()`
-- `opts.template` - Email specific template, this will override default template passed to `MailTime` constructor
-- `opts.concatSubject` - Email specific concatenation subject, this will override default concatenation subject passed to `MailTime` constructor
+- `opts.template` {*string*} - Email specific template, this will override default template passed to `MailTime` constructor
+- `opts.concatSubject` {*string*} - Email specific concatenation subject, this will override default concatenation subject passed to `MailTime` constructor
 - `opts[key]` {*mix*} - Other custom and NodeMailer specific options, like `text`, `html` and `to`, [learn more here](https://nodemailer.com/message/). __Note:__ if [`attachments`](https://nodemailer.com/message/attachments/) are used via `path` — file must exists on all micro-services servers
 
 ### `cancelMail(uuid)`
 
-*Remove email from queue.* Returns `Promise<boolean>` — `true` if cancelled or `false` if not found was sent or was cancelled previously. Throws *Error*
+*Remove email from queue.* Returns `Promise<boolean>` — `true` if cancelled or `false` if not found, was sent, or was cancelled previously. Throws *Error*
 
-- `uuid` {*string|promise*} — email's `uuid` returned from `.sendEmail()` method
+- `uuid` {*string*|*promise*} — email's `uuid` returned from `.sendEmail()` method
 
 ```js
 import { mailQueue } from './mail-queue.js';
