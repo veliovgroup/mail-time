@@ -40,6 +40,7 @@ The main difference between *Server* and *Client* `type` is that the *Server* ha
   - [`new MongoQueue` *Constructor*](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#new-mongoqueueopts-constructor)
   - [`.sendMail()`](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#sendmailopts)
   - [`.cancelMail()`](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#cancelmailuuid)
+  - [`.ping()`](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#ping)
   - [Default Template](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#static-mailtimetemplate)
 - [Custom Templates](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#template-example)
 - [Running tests](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#testing)
@@ -737,6 +738,33 @@ const uuid = await mailQueue.sendMail({
 });
 
 await mailQueue.cancelMail(uuid);
+```
+
+### `ping()`
+
+*Ping MailTime instance, its scheduler, and its queue.* Returns `Promise<object>`
+
+```js
+const mailQueue = new MailTime({ /* ... */ });
+
+const pingResult = await mailQueue.ping();
+console.log(pingResult)
+/**
+In case of the successful response
+{
+  status: 'OK',
+  code: 200,
+  statusCode: 200,
+}
+
+Failed response
+{
+  status: 'Error reason',
+  code: 500,
+  statusCode: 500,
+  error: ErrorObject
+}
+*/
 ```
 
 ### `static MailTime.Template`
