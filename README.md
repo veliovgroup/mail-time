@@ -277,7 +277,7 @@ import { createClient } from 'redis';
 import { transports } from './transports.js';
 
 // Use REDIS_URL environment variable to store connection string to MongoDB
-// example: "REDIS_URL=redis://127.0.0.1:6379/myapp node mail-micro-service.js"
+// example: "REDIS_URL=redis://127.0.0.1:6379 node mail-micro-service.js"
 const redisClient = await createClient({ url: process.env.REDIS_URL }).connect();
 const mailQueue = new MailTime({
   transports,
