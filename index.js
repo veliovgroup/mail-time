@@ -145,7 +145,7 @@ class MailTime {
     if (typeof opts.retries === 'number') {
       this.maxTries = opts.retries + 1;
     } else if (typeof opts.maxTries === 'number') {
-      this.maxTries = (opts.maxTries < 1) ? 1 : 0;
+      this.maxTries = (opts.maxTries < 1) ? 1 : opts.maxTries;
     } else {
       this.maxTries = 60;
     }
@@ -200,7 +200,7 @@ class MailTime {
     this._debug(`INITIALIZING [strategy: ${this.strategy}]`);
     this._debug(`INITIALIZING [josk.adapter: ${opts?.josk?.adapter}]`);
     this._debug(`INITIALIZING [prefix: ${this.prefix}]`);
-    this._debug(`INITIALIZING [retries: ${this.retries}]`);
+    this._debug(`INITIALIZING [retries: ${this.maxTries - 1}]`);
     this._debug(`INITIALIZING [failsToNext: ${this.failsToNext}]`);
     this._debug(`INITIALIZING [onError: ${this.onError}]`);
     this._debug(`INITIALIZING [onSent: ${this.onSent}]`);
