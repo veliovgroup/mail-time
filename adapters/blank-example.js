@@ -86,7 +86,7 @@ class BlankQueue {
    * @memberOf BlankQueue
    * @name iterate
    * @description iterate over queued emails passing to `mailTimeInstance.___send` method
-   * @returns {void 0}
+   * @returns {Promise<void>}
    */
   async iterate() {
     // GET EMAILS WITHIN this.uniqueName SCOPE!
@@ -216,14 +216,24 @@ class BlankQueue {
    * @returns {Promise<boolean>} returns `true` if updated or `false` if not found or no changes was made
    */
   async update(email, updateObj) {
-    if (typeof email !== 'object' || typeof email.uuid !== 'string' || typeof updateObj !== 'object') {
+    if (!email || typeof email !== 'object' || typeof email.uuid !== 'string' || !updateObj || typeof updateObj !== 'object') {
       return false;
     }
 
-    const updatedEmail = { ...email, ...updateObj };
-    return await this.requiredOption.update({
+    const query = {
       uuid: email.uuid
-    }, updatedEmail);
+    };
+    if (updateObj.isSent === true && typeof updateObj.tries === 'number') {
+      Object.assign(query, {
+        isSent: false,
+        isFailed: false,
+        isCancelled: false,
+        tries: email.tries
+      });
+    }
+
+    const updatedEmail = { ...email, ...updateObj };
+    return await this.requiredOption.update(query, updatedEmail);
   }
 }
 
