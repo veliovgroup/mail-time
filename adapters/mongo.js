@@ -1,5 +1,33 @@
 import { logError } from '../helpers.js';
 
+const isSendClaimUpdate = (updateObj) => {
+  return updateObj.isSent === true && typeof updateObj.tries === 'number';
+};
+
+/**
+ * @typedef {object} MongoCollection
+ * @property {(keys: object, opts?: object) => Promise<unknown>} createIndex
+ * @property {() => Promise<{ name: string, key: Record<string, unknown> }[]>} indexes
+ * @property {(name: string) => Promise<unknown>} dropIndex
+ * @property {(query: object, opts?: object) => unknown} find
+ * @property {(query: object, opts?: object) => Promise<object|null>} findOne
+ * @property {(doc: object) => Promise<unknown>} insertOne
+ * @property {(query: object) => Promise<{ deletedCount?: number }>} deleteOne
+ * @property {(query: object, update: object) => Promise<{ modifiedCount?: number }>} updateOne
+ */
+
+/**
+ * @typedef {object} Db
+ * @property {(name: string) => MongoCollection} collection
+ * @property {(cmd: object) => Promise<{ ok?: number }>} command
+ */
+
+/**
+ * @typedef {object} MongoQueueOption
+ * @property {Db} db
+ * @property {string} [prefix]
+ */
+
 /**
  * Ensure (create) index on MongoDB collection, catch and log exception if thrown
  * @function ensureIndex
@@ -51,9 +79,7 @@ const ensureIndex = async (collection, keys, opts) => {
 class MongoQueue {
   /**
    * Create a MongoQueue instance
-   * @param {object} opts - configuration object
-   * @param {Db} opts.db - Required, Mongo's `Db` instance, like one returned from `MongoClient#db()` method
-   * @param {string} [opts.prefix] - Optional prefix for scope isolation; use when creating multiple MailTime instances within the single application
+   * @param {MongoQueueOption} opts - configuration object
    */
   constructor (opts) {
     this.name = 'mongo-queue';
@@ -68,9 +94,11 @@ class MongoQueue {
     this.prefix = (typeof opts.prefix === 'string') ? opts.prefix : '';
     this.db = opts.db;
     this.collection = opts.db.collection(`__mailTimeQueue__${this.prefix}`);
-    ensureIndex(this.collection, { uuid: 1 }, { background: false });
-    ensureIndex(this.collection, { isSent: 1, isFailed: 1, isCancelled: 1, to: 1, sendAt: 1 }, { background: false });
-    ensureIndex(this.collection, { isSent: 1, isFailed: 1, isCancelled: 1, sendAt: 1, tries: 1 }, { background: false });
+    this.__readyPromise = Promise.all([
+      ensureIndex(this.collection, { uuid: 1 }, { background: false }),
+      ensureIndex(this.collection, { isSent: 1, isFailed: 1, isCancelled: 1, to: 1, sendAt: 1 }, { background: false }),
+      ensureIndex(this.collection, { isSent: 1, isFailed: 1, isCancelled: 1, sendAt: 1, tries: 1 }, { background: false })
+    ]).then(() => void 0);
 
     // MongoDB Collection Schema:
     // _id
@@ -92,6 +120,17 @@ class MongoQueue {
     // mailOptions.html    {string}
     // mailOptions.subject {string}
     // mailOptions.Other nodeMailer `sendMail` options...
+  }
+
+  /**
+   * @async
+   * @memberOf MongoQueue
+   * @name ready
+   * @description Wait until indexes are created
+   * @returns {Promise<void 0>}
+   */
+  async ready() {
+    await this.__readyPromise;
   }
 
   /**
@@ -141,7 +180,7 @@ class MongoQueue {
    * @memberOf MongoQueue
    * @name iterate
    * @description iterate over queued tasks passing to `mailTimeInstance.___send` method
-   * @returns {void 0}
+   * @returns {Promise<void>}
    */
   async iterate() {
     try {
@@ -224,7 +263,7 @@ class MongoQueue {
    * @returns {Promise<void 0>}
    */
   async push(task) {
-    if (typeof task !== 'object') {
+    if (!task || typeof task !== 'object') {
       return;
     }
 
@@ -278,7 +317,7 @@ class MongoQueue {
    * @returns {Promise<boolean>} returns `true` if removed or `false` if not found
    */
   async remove(task) {
-    if (typeof task !== 'object') {
+    if (!task || typeof task !== 'object') {
       return false;
     }
 
@@ -295,13 +334,24 @@ class MongoQueue {
    * @returns {Promise<boolean>} returns `true` if updated or `false` if not found or no changes was made
    */
   async update(task, updateObj) {
-    if (typeof task !== 'object' || typeof updateObj !== 'object') {
+    if (!task || typeof task !== 'object' || !updateObj || typeof updateObj !== 'object') {
       return false;
     }
 
-    return (await this.collection.updateOne({
+    const query = {
       _id: task._id
-    }, {
+    };
+
+    if (isSendClaimUpdate(updateObj)) {
+      Object.assign(query, {
+        isSent: false,
+        isFailed: false,
+        isCancelled: false,
+        tries: task.tries
+      });
+    }
+
+    return (await this.collection.updateOne(query, {
       $set: updateObj
     }))?.modifiedCount >= 1;
   }
