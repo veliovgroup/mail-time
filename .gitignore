@@ -3,3 +3,5 @@
 .eslintcache
 node_modules
 npm-debug.log*
+coverage
+.types-tmp

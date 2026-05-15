@@ -1,10 +1,8 @@
 import { MailTime, MongoQueue } from '../index.js';
-import nodemailer from 'nodemailer';
-import directTransport from 'nodemailer-direct-transport';
 import { MongoClient } from 'mongodb';
 import { createClient } from 'redis';
 import { assert } from 'chai';
-import { it, describe, before } from 'mocha';
+import { it, describe, before, after } from 'mocha';
 
 if (!process.env.MONGO_URL) {
   throw new Error('MONGO_URL env.var is not defined! Please run test with MONGO_URL, like `MONGO_URL=mongodb://127.0.0.1:27017/dbname npm test`');
@@ -21,6 +19,26 @@ const DEBUG      = process.env.DEBUG === 'true' ? true : false;
 const domain     = process.env.EMAIL_DOMAIN || 'example.com';
 const TEST_TITLE = 'mail-time-test-suite-mongo-redis';
 
+const createTransport = (options) => ({
+  options,
+  sendMail(mail, done) {
+    const to = Array.isArray(mail.to) ? mail.to[0] : mail.to;
+    if (typeof to === 'string' && to.endsWith(`@${domain}`)) {
+      done(null, {
+        accepted: [to],
+        rejected: [],
+        response: 'OK',
+      });
+      return;
+    }
+
+    done(new Error('Sending failed'), {
+      accepted: [],
+      rejected: [to],
+    });
+  }
+});
+
 let db;
 let client;
 let redisClient;
@@ -28,6 +46,8 @@ const mailTimes = {};
 const callbacks = {};
 
 before(async function () {
+  this.timeout(20000);
+
   redisClient = await createClient({
     url: process.env.REDIS_URL
   }).connect();
@@ -66,15 +86,15 @@ before(async function () {
     dnsTimeout: 1500,
   };
 
-  transports.push(nodemailer.createTransport(directTransport({
+  transports.push(createTransport({
     ...transportDefaults,
     from: `no-reply@${domain}`,
-  })));
+  }));
 
-  transports.push(nodemailer.createTransport(directTransport({
+  transports.push(createTransport({
     ...transportDefaults,
     from: `no-reply@${domain}`,
-  })));
+  }));
 
   const defaultQueueOptions = {
     retries: 0,
@@ -108,6 +128,7 @@ before(async function () {
     concatEmails: false,
     prefix: `${TEST_TITLE}WithoutConcatenation`,
   });
+  await mailTimes.WithoutConcatenation.ready();
   await mailTimes.WithoutConcatenation.queue.collection.deleteMany({});
 
   mailTimes.WithConcatenation = new MailTime({
@@ -119,6 +140,7 @@ before(async function () {
     concatEmails: true,
     prefix: `${TEST_TITLE}WithConcatenation`,
   });
+  await mailTimes.WithConcatenation.ready();
   await mailTimes.WithConcatenation.queue.collection.deleteMany({});
 
   mailTimes.WithHistory = new MailTime({
@@ -132,7 +154,25 @@ before(async function () {
     concatEmails: false,
     prefix: `${TEST_TITLE}WithHistory`,
   });
+  await mailTimes.WithHistory.ready();
   await mailTimes.WithHistory.queue.collection.deleteMany({});
+});
+
+after(async function () {
+  this.timeout(10000);
+
+  for (const mailTime of Object.values(mailTimes)) {
+    await mailTime.ready().catch(() => void 0);
+    mailTime.destroy();
+  }
+
+  if (redisClient) {
+    await redisClient.quit();
+  }
+
+  if (client) {
+    await client.close();
+  }
 });
 
 
