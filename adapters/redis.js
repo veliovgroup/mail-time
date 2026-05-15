@@ -1,12 +1,41 @@
 import { logError } from '../helpers.js';
 
+/**
+ * @typedef {object} RedisClient
+ * @property {(key: string) => Promise<number>} exists
+ * @property {(key: string) => Promise<string|null>} get
+ * @property {(key: string, value: string, options?: object) => Promise<unknown>} set
+ * @property {(key: string|string[]) => Promise<number>} del
+ * @property {() => Promise<string>} ping
+ * @property {(options: object) => AsyncIterable<string|string[]>} scanIterator
+ * @property {(key: string) => Promise<unknown>} [watch]
+ * @property {() => Promise<unknown>} [unwatch]
+ * @property {() => object} [multi]
+ */
+
+/**
+ * @typedef {object} RedisQueueOption
+ * @property {RedisClient} client
+ * @property {string} [prefix]
+ */
+
+const isSendClaimUpdate = (updateObj) => {
+  return updateObj.isSent === true && typeof updateObj.tries === 'number';
+};
+
+const canClaimTask = (currentTask, task) => {
+  return currentTask &&
+    currentTask.isSent !== true &&
+    currentTask.isFailed !== true &&
+    currentTask.isCancelled !== true &&
+    currentTask.tries === task.tries;
+};
+
 /** Class representing Redis Queue for MailTime */
 class RedisQueue {
   /**
    * Create a RedisQueue instance
-   * @param {object} opts - configuration object
-   * @param {RedisClient} opts.client - Required, Redis'es `RedisClient` instance, like one returned from `await redis.createClient().connect()` method
-   * @param {string} [opts.prefix] - Optional prefix for scope isolation; use when creating multiple MailTime instances within the single application
+   * @param {RedisQueueOption} opts - configuration object
    */
   constructor (opts) {
     this.name = 'redis-queue';
@@ -46,6 +75,17 @@ class RedisQueue {
     // mailOptions.html    {string}
     // mailOptions.subject {string}
     // mailOptions.Other nodeMailer `sendMail` options...
+  }
+
+  /**
+   * @async
+   * @memberOf RedisQueue
+   * @name ready
+   * @description Storage adapter has no async setup
+   * @returns {Promise<void 0>}
+   */
+  async ready() {
+    return void 0;
   }
 
   /**
@@ -95,7 +135,7 @@ class RedisQueue {
    * @memberOf RedisQueue
    * @name iterate
    * @description iterate over queued tasks passing to `mailTimeInstance.___send` method
-   * @returns {void 0}
+   * @returns {Promise<void>}
    */
   async iterate() {
     try {
@@ -106,9 +146,15 @@ class RedisQueue {
         COUNT: 9999,
       });
 
-      for await (const sendatKey of cursor) {
-        if (parseInt(await this.client.get(sendatKey)) <= now) {
-          await this.mailTimeInstance.___send(JSON.parse(await this.client.get(this.__getKey(sendatKey.split(':')[3]))));
+      for await (const cursorValue of cursor) {
+        const sendatKeys = Array.isArray(cursorValue) ? cursorValue : [cursorValue];
+        for (const sendatKey of sendatKeys) {
+          if (parseInt(await this.client.get(sendatKey)) <= now) {
+            const taskJSON = await this.client.get(this.__getKey(sendatKey.split(':')[3]));
+            if (taskJSON) {
+              await this.mailTimeInstance.___send(JSON.parse(taskJSON));
+            }
+          }
         }
       }
     } catch (iterateError) {
@@ -144,7 +190,7 @@ class RedisQueue {
     }
 
     const task = JSON.parse(await this.client.get(letterKey));
-    if (!task || task.isSent === true || task.isCancelled === true || task.isFailed === true) {
+    if (!task || task.isSent === true || task.isCancelled === true || task.isFailed === true || task.sendAt > sendAt) {
       return null;
     }
 
@@ -160,7 +206,7 @@ class RedisQueue {
    * @returns {Promise<void 0>}
    */
   async push(task) {
-    if (typeof task !== 'object') {
+    if (!task || typeof task !== 'object') {
       return;
     }
 
@@ -220,7 +266,7 @@ class RedisQueue {
    * @returns {Promise<boolean>} returns `true` if removed or `false` if not found
    */
   async remove(task) {
-    if (typeof task !== 'object' || typeof task.uuid !== 'string') {
+    if (!task || typeof task !== 'object' || typeof task.uuid !== 'string') {
       return false;
     }
 
@@ -234,6 +280,9 @@ class RedisQueue {
       letterKey,
       this.__getKey(task.uuid, 'sendat'),
     ]);
+    if (task.to) {
+      await this.client.del(this.__getKey(task.to, 'concatletter'));
+    }
     return true;
   }
 
@@ -247,25 +296,59 @@ class RedisQueue {
    * @returns {Promise<boolean>} returns `true` if updated or `false` if not found or no changes was made
    */
   async update(task, updateObj) {
-    if (typeof task !== 'object' || typeof task.uuid !== 'string' || typeof updateObj !== 'object') {
+    if (!task || typeof task !== 'object' || typeof task.uuid !== 'string' || !updateObj || typeof updateObj !== 'object') {
       return false;
     }
 
     const letterKey = this.__getKey(task.uuid, 'letter');
+    const sendatKey = this.__getKey(task.uuid, 'sendat');
+    const isClaim = isSendClaimUpdate(updateObj);
 
     try {
-      const exists = await this.client.exists(letterKey);
-      if (!exists) {
+      if (isClaim && typeof this.client.watch === 'function' && typeof this.client.multi === 'function') {
+        await this.client.watch(letterKey);
+        const taskJSON = await this.client.get(letterKey);
+        if (!taskJSON) {
+          await this.client.unwatch?.();
+          return false;
+        }
+
+        const currentTask = JSON.parse(taskJSON);
+        if (!canClaimTask(currentTask, task)) {
+          await this.client.unwatch?.();
+          return false;
+        }
+
+        const updatedTask = { ...currentTask, ...updateObj };
+        const multi = this.client.multi();
+        multi.set(letterKey, JSON.stringify(updatedTask));
+        if (updatedTask.isSent === true || updatedTask.isFailed === true || updatedTask.isCancelled === true) {
+          multi.del(sendatKey);
+        } else if (updatedTask.sendAt) {
+          multi.set(sendatKey, `${+updatedTask.sendAt}`);
+        }
+
+        const result = await multi.exec();
+        return result !== null;
+      }
+
+      const taskJSON = await this.client.get(letterKey);
+      if (!taskJSON) {
         return false;
       }
-      const updatedTask = { ...task, ...updateObj };
+
+      const currentTask = JSON.parse(taskJSON);
+      if (isClaim && !canClaimTask(currentTask, task)) {
+        return false;
+      }
+
+      const updatedTask = { ...currentTask, ...updateObj };
       await this.client.set(letterKey, JSON.stringify(updatedTask));
 
-      const sendatKey = this.__getKey(task.uuid, 'sendat');
       if (updatedTask.isSent === true || updatedTask.isFailed === true || updatedTask.isCancelled === true) {
         await this.client.del(sendatKey);
-      } else if (task.sendAt) {
-        await this.client.set(sendatKey, `${+task.sendAt}`);
+      } else if (updatedTask.sendAt) {
+        await this.client.set(sendatKey, `${+updatedTask.sendAt}`);
       }
       return true;
     } catch (opError) {
