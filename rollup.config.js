@@ -7,5 +7,5 @@ export default {
       constBindings: true,
     },
   },
-  external: ['josk', 'deepmerge'],
+  external: ['josk', 'node:crypto'],
 };
