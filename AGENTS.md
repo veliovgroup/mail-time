@@ -1,28 +1,29 @@
 # AGENTS.md
 
-`mail-time` NPM library. Manages and distributes sending emails within scaled apps (clusters, multi-server, multi-DC). Syncs email queue via Redis/Mongo/Postgres/custom adapter. Built on top of `josk` NPM library.
+`mail-time` NPM library. Email queue + sender for horizontally scaled Node.js & Bun apps. Synchronizes the queue across processes via Redis / MongoDB / PostgreSQL / custom adapter. Built on top of [`josk`](https://github.com/veliovgroup/josk).
 
 ## Mission
-Send and queue emails in horizontally scaled Node.js. Bulletproof. High perf. Storage agnostic. Easy adapters. Two modes as "server" and "client" with option to have multiple servers and clients in a cluster.
+Send and queue emails in horizontally scaled Node.js. Bulletproof. High perf. Storage agnostic. Two roles: `server` (drains + sends) and `client` (enqueues). Many clients + many servers behind one `prefix`.
 
 ## Structure
-- `index.js`: core ESM (MailTime + adapters). Edit this.
-- `index.cjs`: generated via `prepublishOnly: rollup index.js --file index.cjs --format cjs` (npm publish runs it). CJS bundle for "require". Never edit directly. Regenerate before publish.
-- `adapters/`: postgres.js (pg Pool/tables/indexes/locks), mongo.js, redis.js, blank-example.js + .d.ts. Implement Adapter.
-- `test/`: npm-*.js (mocha+chai), meteor.js.
-- `*.d.ts`: Generated from JSDoc in `index.js` + adapters via `tsc --emitDeclarationOnly` on `prepublishOnly`. Do not edit manually.
-- `docs/queue-api.md`: full queue adapter contract.
-- README.md, CHANGELOG.md, package.json (exports map, types, prepublishOnly now includes tsc).
+- `index.js` — core ESM. **Edit this**.
+- `index.cjs` — generated via Rollup on `prepublishOnly`. CJS bundle for `require`. Never edit directly.
+- `helpers.js` — shared helpers (`debug`, `logError`, `isPlainObject`, `deepMerge`, `equals`).
+- `adapters/{mongo,redis,postgres,blank-example}.js` — queue adapter implementations. `blank-example.js` is the scaffold for custom adapters.
+- `*.d.ts` / `*.d.cts` — generated from JSDoc on `prepublishOnly`. Internal `__` / `___` members are stripped by `scripts/strip-internal-dts.mjs`. **Never edit manually.**
+- `scripts/strip-internal-dts.mjs` — post-processor that removes private members from generated .d.ts files.
+- `test/` — Jest unit tests (`test/jest/*.test.js`) + Mocha integration tests against real DBs (`test/npm-*.js`) + TS declaration tests (`test/types/*.{ts,cts}`).
+- `skills/mail-time/SKILL.md` + `skills/mail-time/references/` — distributable Claude Code skill (`npx skills` layout).
+- `docs/queue-api.md` — custom queue contract.
 
 ## Code Style
-- **Indentation:** 2 spaces.
-- Use **single quotes** for strings.
+- 2-space indentation. Single quotes. Semicolons.
 - **Prefer simple ES classes** for cohesive state/services when they clarify lifecycle (e.g. a small data service with start/stop).
+- Public methods get JSDoc. Internal helpers prefixed with `__` or `___`.
 - Use **small pure functions** for transforms, formatting, and validation.
-- **Performance**: favor O(n) single passes, avoid repeated work and heavy loops, cache derived values when dependencies are narrow.
-- Always end line with semicolon `;`.
-- Prefer `void 0` to `undefined` where applicable, like `return void 0`.
-- Prefer functions defined as variable to "named functions" where applicable.
+- Prefer O(n) single-pass loops; cache derived values.
+- Prefer `void 0` to `undefined` where applicable.
+- Prefer arrow functions assigned to `const` over named `function`.
 
 ### JS Style Example
 
@@ -64,39 +65,53 @@ const sayName = (name) => {
 ```
 
 ## Standards
-- ESM primary. JSDoc on public API.
-- Strict validation in ctors. Throw on missing adapter/client/db.
-- Private: __ prefix. Use joskInstance.__errorHandler, __execute.
 - Terse. No obvious comments. Exact adapter API compliance.
+- ESM primary; JSDoc on public API; CJS generated. Node ≥ 20.9.0, Bun ≥ 1.1.0.
+- JSDoc on source drives `.d.ts`. Mark internal methods with the `___`/`__` prefix; they get stripped.
+- Strict validation in constructors. Throw with `[mail-time] [<scope>]` prefix.
+- One runtime dep: `josk`. **Don't add deps** without strong reason — the package's selling points are "tiny, no fluff".
 - Update: README (examples/prereqs), all .d.ts, tests, CHANGELOG.md, package version on change.
-- Errors: onError hook preferred over throw. ready() or returned Promise controls completion.
-- TS: JSDoc in source drives declarations. Adapter required in JoSkOption. Run `npm run prepublishOnly` after changes to `index.js`/adapters.
 - Never edit `index.cjs` or any `.d.ts`. Always edit source, regenerate before publish.
 - Follow terse response rule: drop articles/fillers. [subject] [verb] [reason]. [next].
 
+
 ## Testing
+
+This package ships with tests tailored to Node.js, Bun.js, and Meteor.js.
+
+### NPM tests
 ```sh
-# Full (Redis+Mongo+PG)
-npm install --save-dev
-# DEFAULT RUN
-REDIS_URL=redis://127.0.0.1:6379 MONGO_URL=mongodb://127.0.0.1:27017/test PG_URL=postgres://... npm test
+npm install
+REDIS_URL=redis://127.0.0.1:6379 MONGO_URL=mongodb://127.0.0.1:27017/test PG_URL=postgres://127.0.0.1:5432/postgres npm test
 ```
 
-- Requires running DBs.
-- Add test for any change. Target 99%+.
+### Bun tests
+```sh
+bun install
+REDIS_URL=redis://127.0.0.1:6379 MONGO_URL=mongodb://127.0.0.1:27017/test PG_URL=postgres://127.0.0.1:5432/postgres bun test
+```
+
+### Meteor tests
+```sh
+meteor npm install
+REDIS_URL=redis://127.0.0.1:6379 MONGO_URL=mongodb://127.0.0.1:27017/test PG_URL=postgres://127.0.0.1:5432/postgres meteor test-packages ./ --driver-package=meteortesting:mocha
+```
+
+- Jest threshold: 85% statements/branches/functions/lines. Don't drop it.
+- Add tests for any change. Cover both happy path and at least one failure path.
+- Bun: `bun test ./test/jest` runs the Jest suite under Bun's runner.
 
 ## Guidelines
-- Read queue-api.md + existing adapters + tests before edit.
-- New adapter: copy blank-example, add .d.ts, test/*.js, update README/index.js/TS/CHANGELOG.
-- Bug: reproduce in test. Fix + regression test.
-- Feature: update docs/TS/tests first. Maintain 2s min interval, jitter note.
-- PR: full test suite, lint clean, update CHANGELOG.
-- Use MongoDB skills only on query/index/schema. PG similar. Frontend skill never. Always read files first.
+- Read `docs/queue-api.md` + existing adapters + tests before touching `adapters/`.
+- New adapter: copy `adapters/blank-example.js`, add an entry to `README.md` storage matrix, write Jest unit tests, regenerate types.
+- Bug fix: reproduce in a Jest test, fix, leave the regression test in place.
+- Feature: update tests first, then code, then docs. The interface is in JSDoc on `index.js` — the .d.ts is downstream.
+- JoSk knobs (`zombieTime`, `execute`, `concurrency`, `lockOwnerId`, `onError`) are pass-through. Don't override JoSk defaults silently — document any non-passthrough.
+- Custom queue's `update` must atomically guard the send claim. Returning `true` from a stale claim causes duplicate sends.
 
 ## Edit rules and flow
-- Introduce changes, validate, run tests.
-- Update TS definitions if absolutely necessary after introduced changes.
-- Update documentation if necessary adding new features or changing old ones.
-- In case of major updates — Add migration instructions to package documentation.
+- Make the change. Run Jest. Run TS checks.
+- If JSDoc on `index.js` or any adapter changed: `npm run prepublishOnly` to refresh `index.cjs` + all `.d.ts` / `.d.cts`.
+- For major API changes add a migration note to `CHANGELOG.md`.
 
 Update this AGENTS.md on major refactors.
