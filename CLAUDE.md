@@ -1,10 +1,10 @@
 # CLAUDE.md
 
-This file is Claude Code's working brief for the `mail-time` repository. It complements `AGENTS.md` (general agent guidelines) and `skill/SKILL.md` (the distributable user-facing skill).
+This file is Claude Code's working brief for the `mail-time` repository. It complements `AGENTS.md` (general agent guidelines) and `skills/mail-time/SKILL.md` (the distributable user-facing skill).
 
 ## What this repo is
 
-`mail-time` is an NPM package that queues and sends emails across horizontally scaled Node.js / Bun apps. It uses Mongo / Redis / Postgres (or a custom adapter) for queue storage and the [`josk`](https://github.com/veliovgroup/josk) library for cluster-aware scheduling.
+`mail-time` is an NPM package that queues and sends emails (via `nodemailer` transports) across horizontally scaled Node.js / Bun apps. It uses Mongo / Redis / Postgres (or a custom adapter) for queue storage and the [`josk`](https://github.com/veliovgroup/josk) library for cluster-aware scheduling.
 
 ## Where to look first
 
@@ -13,6 +13,7 @@ This file is Claude Code's working brief for the `mail-time` repository. It comp
 - **Testing?** → `test/jest/*.test.js` is the fast unit suite (no live DB). `test/npm-*.js` is the integration suite that needs `REDIS_URL` / `MONGO_URL` / `PG_URL`.
 - **TS types?** → JSDoc lives in `index.js` and `adapters/*.js`. The .d.ts is generated. To strip private members, `scripts/strip-internal-dts.mjs` runs as part of `prepublishOnly`.
 - **User docs?** → `README.md` (public) and `skill/SKILL.md` (Claude-facing).
+- **AI instructions and guidelines?** → `AGENTS.md` and this file `CLAUDE.md` (Claude-facing).
 
 ## Mental model for changes
 
@@ -50,4 +51,4 @@ npm run prepublishOnly
 
 ## When working on the skill
 
-`skills/mail-time/SKILL.md` is the distributable Claude-facing knowledge bundle. The layout follows the `npx skills` convention: a top-level `skills/` directory with each skill in its own subfolder. Keep `SKILL.md` under ~500 lines; push deep detail into `skills/mail-time/references/{api,adapters,recipes}.md`. The frontmatter `description` is the trigger — it should be specific enough that Claude reaches for the skill *without* the user naming MailTime explicitly. When user-visible API changes, update both `README.md` and `skills/mail-time/references/api.md` so the skill stays accurate.
+`skills/mail-time/SKILL.md` is the distributable Claude-facing knowledge bundle. The layout follows the `npx skills` convention: a top-level `skills/` directory with each skill in its own subfolder. Keep `SKILL.md` under ~500 lines; push deep detail into `skills/mail-time/references/{api,adapters,recipes,tuning}.md`. The frontmatter `description` is the trigger — it should be specific enough that Claude reaches for the skill *without* the user naming MailTime explicitly. When user-visible API changes, update both `README.md` and `skills/mail-time/references/api.md` so the skill stays accurate.
