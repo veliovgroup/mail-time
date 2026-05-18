@@ -26,9 +26,13 @@ export class BlankQueue {
      * @memberOf BlankQueue
      * @name iterate
      * @description iterate over queued emails passing to `mailTimeInstance.___send` method
+     * @param {{ limit?: number, sendingTimeout?: number }} [opts] - iteration options. Honor `opts.limit` (stop after that many dispatches) for `mode: 'one'`, and use `opts.sendingTimeout` (ms) to reclaim rows whose worker died mid-send.
      * @returns {Promise<void>}
      */
-    iterate(): Promise<void>;
+    iterate(opts?: {
+        limit?: number;
+        sendingTimeout?: number;
+    }): Promise<void>;
     /**
      * @async
      * @memberOf BlankQueue

@@ -27,9 +27,11 @@ class BlankQueue {
     // to          {string|[string]}
     // tries       {number}  - qty of send attempts
     // sendAt      {number}  - When letter should be sent
-    // isSent      {boolean} - Email status
+    // isSent      {boolean} - `true` once delivery has fully completed
     // isCancelled {boolean} - `true` if email was cancelled before it was sent
     // isFailed    {boolean} - `true` if email has failed to send
+    // isSending   {boolean} - `true` while one worker is performing the SMTP roundtrip; released back to `false` on success/retry/failure
+    // sendingAt   {number}  - Timestamp when `isSending` was set; older than `now - sendingTimeout` means the row is recoverable
     // template    {string}  - Template for this email
     // transport   {number}  - Last used transport
     // concatSubject {string|boolean} - Email concatenation subject
@@ -86,24 +88,46 @@ class BlankQueue {
    * @memberOf BlankQueue
    * @name iterate
    * @description iterate over queued emails passing to `mailTimeInstance.___send` method
+   * @param {{ limit?: number, sendingTimeout?: number }} [opts] - iteration options. Honor `opts.limit` (stop after that many dispatches) for `mode: 'one'`, and use `opts.sendingTimeout` (ms) to reclaim rows whose worker died mid-send.
    * @returns {Promise<void>}
    */
-  async iterate() {
+  async iterate(opts) {
     // GET EMAILS WITHIN this.uniqueName SCOPE!
-    // AND ONLY WHERE sendAt <= now
-    // RUN ONE BY ONE VIA this.mailTimeInstance.___send() METHOD
+    // PREDICATE:
+    //   isSent      = false
+    //   isFailed    = false
+    //   isCancelled = false
+    //   sendAt      <= now
+    //   (isSending  = false OR sendingAt <= now - sendingTimeout)  -- include stale-locked rows for recovery
+    // STOP AFTER opts.limit dispatches when opts.limit is set (mode: 'one' passes 1).
+    const now = Date.now();
+    const sendingTimeout = (opts && typeof opts.sendingTimeout === 'number' && opts.sendingTimeout > 0) ? opts.sendingTimeout : 300000;
+    const limit = (opts && typeof opts.limit === 'number' && Number.isFinite(opts.limit) && opts.limit > 0) ? Math.floor(opts.limit) : 0;
+
     const cursorWithEmails = this.requiredOption.getEmails({
       scope: this.uniqueName,
       isSent: false,
       isFailed: false,
       isCancelled: false,
       sendAt: {
-        $lte: Date.now() // Number (timestamp)
-      }
+        $lte: now
+      },
+      $or: [
+        { isSending: { $ne: true } },
+        { sendingAt: { $lte: now - sendingTimeout } }
+      ]
     });
 
+    let dispatched = 0;
     for await (const emailObj of cursorWithEmails) {
-      await this.mailTimeInstance.___send(emailObj);
+      // ___dispatch returns once a pool slot is acquired and the send has started.
+      // The SMTP roundtrip continues in the background, so this `for await` releases
+      // the JoSk lease as soon as the scan completes.
+      await this.mailTimeInstance.___dispatch(emailObj);
+      dispatched++;
+      if (limit > 0 && dispatched >= limit) {
+        break;
+      }
     }
   }
 
@@ -223,12 +247,21 @@ class BlankQueue {
     const query = {
       uuid: email.uuid
     };
-    if (updateObj.isSent === true && typeof updateObj.tries === 'number') {
+    // CLAIM GUARD: when the caller sets `isSending: true` with a new `tries` value,
+    // this is the atomic-claim update. The storage layer MUST honor the predicate
+    // below so two workers can never simultaneously claim the same row.
+    if (updateObj.isSending === true && typeof updateObj.tries === 'number') {
+      const now = typeof updateObj.sendingAt === 'number' ? updateObj.sendingAt : Date.now();
+      const sendingTimeout = this.mailTimeInstance?.sendingTimeout || 300000;
       Object.assign(query, {
         isSent: false,
         isFailed: false,
         isCancelled: false,
-        tries: email.tries
+        tries: email.tries,
+        $or: [
+          { isSending: { $ne: true } },
+          { sendingAt: { $lte: now - sendingTimeout } }
+        ]
       });
     }
 
