@@ -1,22 +1,39 @@
 {
   "name": "mail-time",
-  "version": "3.0.0",
-  "description": "📮 Email queue extending NodeMailer with multi SMTP transports and horizontally scaled apps support",
+  "version": "4.0.0",
+  "description": "📮 Email queue extending NodeMailer with multi-SMTP transports and horizontally scaled apps support",
   "main": "index.js",
+  "types": "./index.d.ts",
   "type": "module",
   "exports": {
-    "import": "./index.js",
-    "require": "./index.cjs"
+    ".": {
+      "import": {
+        "types": "./index.d.ts",
+        "default": "./index.js"
+      },
+      "require": {
+        "types": "./index.d.cts",
+        "default": "./index.cjs"
+      }
+    }
   },
   "scripts": {
-    "prepublishOnly": "rollup --config rollup.config.js",
-    "test": "mocha ./test/npm.js"
+    "prepublishOnly": "rollup --config rollup.config.js && rm -rf ./.types-tmp && tsc --emitDeclarationOnly --declaration --outDir ./.types-tmp --rootDir ./ && node ./scripts/strip-internal-dts.mjs ./.types-tmp/index.d.ts ./.types-tmp/presets.d.ts ./.types-tmp/adapters/mongo.d.ts ./.types-tmp/adapters/redis.d.ts ./.types-tmp/adapters/postgres.d.ts && cp ./.types-tmp/index.d.ts ./index.d.ts && cp ./.types-tmp/index.d.ts ./index.d.cts && cp ./.types-tmp/presets.d.ts ./presets.d.ts && cp ./.types-tmp/adapters/*.d.ts ./adapters/ && rm -rf ./.types-tmp",
+    "test": "npm run test:jest && npm run test:mocha && npm run test:types",
+    "test:jest": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --config jest.config.mjs",
+    "test:mocha": "mocha ./test/npm.js",
+    "test:types": "tsc -p ./tsconfig.types.json",
+    "test:redis": "mocha ./test/npm-redis-redis.js",
+    "test:mongo": "mocha ./test/npm-mongo-mongo.js",
+    "test:postgres": "mocha ./test/npm-postgres.js",
+    "test:bun": "bun test ./test/jest"
   },
   "keywords": [
     "backup",
     "balanced",
     "balancer",
     "bulletproof",
+    "bun",
     "cluster",
     "email",
     "highload",
@@ -29,7 +46,9 @@
     "microservice",
     "micro-service",
     "nodemailer",
+    "postgres",
     "queue",
+    "scheduler",
     "template"
   ],
   "tags": [
@@ -37,6 +56,7 @@
     "balanced",
     "balancer",
     "bulletproof",
+    "bun",
     "cluster",
     "email",
     "highload",
@@ -49,7 +69,9 @@
     "microservice",
     "micro-service",
     "nodemailer",
+    "postgres",
     "queue",
+    "scheduler",
     "template"
   ],
   "repository": {
@@ -63,20 +85,22 @@
   "author": "dr.dimitru (https://veliovgroup.com)",
   "license": "BSD-3-Clause",
   "engines": {
-    "node": ">=14.20.0"
+    "node": ">=20.9.0"
   },
   "dependencies": {
-    "deepmerge": "^4.3.1",
-    "josk": "^5.0.0"
+    "josk": "^6.0.0"
   },
   "devDependencies": {
-    "bson": "^6.6.0",
-    "bson-ext": "^4.0.3",
-    "chai": "^5.1.0",
-    "mocha": "^10.4.0",
-    "mongodb": "^6.5.0",
-    "nodemailer": "^8.0.5",
-    "nodemailer-direct-transport": "^3.3.2",
-    "redis": "^4.6.13"
+    "@jest/globals": "^30.4.1",
+    "@types/node": "^25.8.0",
+    "chai": "^6.2.2",
+    "jest": "^30.4.2",
+    "mocha": "^11.7.5",
+    "mongodb": "^6.21.0",
+    "nodemailer": "^8.0.7",
+    "pg": "^8.20.0",
+    "redis": "^5.12.1",
+    "rollup": "^4.60.4",
+    "typescript": "^6.0.3"
   }
 }
