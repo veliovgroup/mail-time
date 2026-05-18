@@ -1,49 +1,75 @@
 # MailTime Custom Queue API
 
-MailTime library supports 3rd party Queue drivers. By default MailTime ships with MongoDB, Redis, and PostgreSQL support (official `mongodb`, `redis`, and `pg` NPM drivers). This document intended for developers of custom 3rd party "MailTime Queue Drivers".
+MailTime library supports 3rd party Queue drivers. By default MailTime ships with MongoDB, Redis, and PostgreSQL support (official `mongodb`, `redis`, and `pg` NPM drivers). This document is intended for developers of custom 3rd party "MailTime Queue Drivers".
 
 ## Create a new Queue
 
-Start with copy of Queue's boilerplate [`blank-queue.js`](https://github.com/veliovgroup/mail-time/blob/master/adapters/blank-example.js).
+Start with copy of Queue's boilerplate [`blank-example.js`](https://github.com/veliovgroup/mail-time/blob/master/adapters/blank-example.js).
 
 ## Queue Class API
 
-List of required methods and its arguments
+List of required methods and their arguments.
 
 - `new Queue(opts)` constructor
   - `{object} opts`
   - `{string} [opts.prefix]` — optional prefix for scope isolation; use when creating multiple MailTime instances within the single application
-  - `{mix} [opts.other]` - other options required for specific storage type
-- async `Queue#ready() - {Promise<void 0>}` - optional; MailTime awaits it before first `ping()`
-- async `Queue#ping() - {Promise<object>}`
-- async `Queue#iterate() - {Promise<void 0>}`
-- async `Queue#getPendingTo(to, sendAt) - {Promise<object|null>}`
-  - `{string} to` - Email address from `to` field
-  - `{number} sendAt` - Timestamp
-- async `Queue#push(email) - {Promise<void 0>}`
-  - `{object} email` - Unique ID of the task
-- async `Queue#cancel(uuid) - {Promise<boolean>}`
-  - `{string} uuid` - Email's uuid
-- async `Queue#remove(email) - {Promise<boolean>}`
-  - `{object} email` - Email's object
-- async `Queue#update(email, updateObj) - {Promise<boolean>}`
-  - `{object} email` - Email's object (*see its structure below*)
-  - `{object} updateObj` - Fields with new values to update
-  - When `updateObj` includes `{ isSent: true, tries: Number }`, MailTime is claiming a task for sending. This update must be atomic and must update only if stored task is still active (`isSent/isFailed/isCancelled` are `false`) and stored `tries` equals `email.tries`. Return `false` for stale claims so parallel server instances do not send same task twice.
+  - `{mix} [opts.other]` — other options required for specific storage type
+- async `Queue#ready() — {Promise<void 0>}` — optional; MailTime awaits it before first `ping()`
+- async `Queue#ping() — {Promise<object>}`
+- async `Queue#iterate(opts) — {Promise<void 0>}`
+  - `{object} [opts]` — iteration options provided by MailTime
+  - `{number} [opts.limit]` — when set (e.g. by `mode: 'one'`), stop after dispatching that many tasks per tick
+  - `{number} [opts.sendingTimeout]` — milliseconds after which an `isSending=true` row is considered a zombie and becomes eligible again
+- async `Queue#getPendingTo(to, sendAt) — {Promise<object|null>}`
+  - `{string} to` — email address from `to` field
+  - `{number} sendAt` — timestamp
+- async `Queue#push(email) — {Promise<void 0>}`
+  - `{object} email` — task object (see structure below). Persist `isSending` and `sendingAt` along with the other fields.
+- async `Queue#cancel(uuid) — {Promise<boolean>}`
+  - `{string} uuid` — email's uuid
+- async `Queue#remove(email) — {Promise<boolean>}`
+  - `{object} email` — email's object
+- async `Queue#update(email, updateObj) — {Promise<boolean>}`
+  - `{object} email` — email's object (*see its structure below*)
+  - `{object} updateObj` — fields with new values to update
+  - **Atomic claim guard.** When `updateObj` contains `{ isSending: true, tries: Number }`, MailTime is *claiming* a row for sending. This update **must be atomic** and must succeed only if all of the following hold for the stored row:
+    - `isSent === false`
+    - `isFailed === false`
+    - `isCancelled === false`
+    - `tries === email.tries` (caller's snapshot value, before the bump)
+    - `isSending === false` **OR** `sendingAt <= now - sendingTimeout` (stale-lock recovery)
+  - When the predicate fails, return `false` so the racing worker (in this process or another node) drops the row and JoSk picks up something else on the next tick. Return `true` only when the storage layer atomically flipped `isSending` to `true`.
 
-### Task object
+## Iterate predicate
 
-In order to process and send emails, "Queue" must call `this.mailTimeInstance.___send(email)` method inside `Queue#iterate` method, passed email's object is expected to have the next structure:
+`iterate(opts)` must enumerate rows where every condition below is true:
+
+- `isSent === false`
+- `isFailed === false`
+- `isCancelled === false`
+- `sendAt <= now`
+- `tries < mailTimeInstance.maxTries`
+- `isSending === false` **OR** `sendingAt <= now - opts.sendingTimeout`
+
+For each matching row, call `await this.mailTimeInstance.___dispatch(email)`. `___dispatch` performs the atomic claim, then hands the SMTP roundtrip off to MailTime's in-process worker pool (bounded by `concurrency`). It resolves as soon as the pool slot is acquired — **not** after the SMTP completes — which lets your `iterate` move on to the next due row and lets the surrounding JoSk lease be released quickly.
+
+If `opts.limit` is provided (MailTime sends `1` when `mode: 'one'`), stop the scan after that many dispatches.
+
+## Task object
+
+In order to process and send emails, `Queue#iterate` must call `await this.mailTimeInstance.___dispatch(email)` for each due row. The passed email object is expected to have the following structure:
 
 ```js
 ({
-  uuid: String, // unique task's ID
-  to: String,
-  tries: Number,
-  sendAt: Number,
-  isSent: Boolean,
-  isCancelled: Boolean,
-  isFailed: Boolean,
+  uuid: String,         // unique task ID
+  to: String,           // optional; primary recipient (used for `concatEmails`)
+  tries: Number,        // count of completed send attempts
+  sendAt: Number,       // timestamp the row becomes due
+  isSent: Boolean,      // true only when delivery is confirmed
+  isCancelled: Boolean, // true when the user cancelled the row
+  isFailed: Boolean,    // true after `maxTries` attempts have all failed
+  isSending: Boolean,   // true while a worker is performing the SMTP roundtrip
+  sendingAt: Number,    // timestamp when `isSending` was set; older than `now - sendingTimeout` means the row is recoverable
   template: String,
   transport: Number,
   concatSubject: String,
@@ -53,10 +79,14 @@ In order to process and send emails, "Queue" must call `this.mailTimeInstance.__
     text: String,
     html: String,
     subject: String,
-    // and other nodeMailer `sendMail` options...
+    accepted: [String],
+    rejected: [{ address: String, error: String }],
+    // and other nodeMailer `sendMail` options
     // or values for template placeholders
   }]
 })
 ```
 
-For inspiration take a look on [MongoDB, Redis, and PostgreSQL Queue implementations](https://github.com/veliovgroup/mail-time/tree/master/adapters).
+`isSending` + `sendingAt` are the two new fields that together act as a per-row lease. They replace the previous practice of re-purposing `isSent` as both an "in-flight" flag and a "delivered" flag.
+
+For inspiration take a look at the [MongoDB, Redis, and PostgreSQL Queue implementations](https://github.com/veliovgroup/mail-time/tree/master/adapters).
