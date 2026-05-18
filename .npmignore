@@ -1,5 +1,7 @@
 *.md
 .DS_Store
+.claude
+.cursor
 .eslintcache
 .eslintrc
 .github
@@ -16,9 +18,12 @@ coverage
 docs/
 docs/*
 jest.config.mjs
+local-testing.md
+local-testing.mjs
 node_modules
 npm-debug.log*
 package.js
+package-lock.json
 package-types.json
 rollup.config.js
 scripts/
