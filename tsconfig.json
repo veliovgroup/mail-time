@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "outDir": ".",
+    "rootDir": ".",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "allowJs": true,
+    "checkJs": false,
+    "declarationMap": false,
+    "stripInternal": true
+  },
+  "include": [
+    "index.js",
+    "presets.js",
+    "adapters/*.js"
+  ],
+  "exclude": [
+    ".types-tmp",
+    "coverage",
+    "node_modules",
+    "test",
+    "index.cjs",
+    "dist"
+  ]
+}
