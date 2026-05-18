@@ -1350,3 +1350,170 @@ describe('MailTime mode, concurrency, and isSending lifecycle', () => {
     expect(stored.sendingAt).toBe(0);
   });
 });
+
+describe('MailTime transport verification on ready()', () => {
+  const withVerify = (transport, verifyImpl) => {
+    transport.verify = verifyImpl;
+    return transport;
+  };
+
+  it('calls verify() on each transport during ready()', async () => {
+    const verifyA = jest.fn(async () => true);
+    const verifyB = jest.fn(async () => true);
+    const a = withVerify(createTransport(), verifyA);
+    const b = withVerify(createTransport(), verifyB);
+    const mailTime = createMailTime({ transports: [a, b] });
+
+    await expect(mailTime.ready()).resolves.toBe(mailTime);
+    expect(verifyA).toHaveBeenCalledTimes(1);
+    expect(verifyB).toHaveBeenCalledTimes(1);
+    expect(mailTime.__unhealthyTransports.size).toBe(0);
+  });
+
+  it('marks a failing transport unusable, fires onError with phase:"verify", and still resolves ready()', async () => {
+    const verifyA = jest.fn(async () => { throw new Error('bad creds'); });
+    const verifyB = jest.fn(async () => true);
+    const onError = jest.fn();
+    const mailTime = createMailTime({
+      transports: [withVerify(createTransport(), verifyA), withVerify(createTransport(), verifyB)],
+      onError
+    });
+
+    await expect(mailTime.ready()).resolves.toBe(mailTime);
+    expect(onError).toHaveBeenCalledTimes(1);
+    const [error, task, details] = onError.mock.calls[0];
+    expect(`${error}`).toMatch(/bad creds/);
+    expect(task).toBeNull();
+    expect(details).toMatchObject({ transportIndex: 0, phase: 'verify' });
+    expect(mailTime.__unhealthyTransports.has(0)).toBe(true);
+    expect(mailTime.__unhealthyTransports.has(1)).toBe(false);
+  });
+
+  it('throws from ready() when all transports fail verification', async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    const mailTime = createMailTime({
+      transports: [
+        withVerify(createTransport(), async () => { throw new Error('bad a'); }),
+        withVerify(createTransport(), async () => { throw new Error('bad b'); })
+      ]
+    });
+
+    await expect(mailTime.ready()).rejects.toThrow(/all .*transport/i);
+  });
+
+  it('treats transports without a verify() method as healthy', async () => {
+    const mailTime = createMailTime();
+    await expect(mailTime.ready()).resolves.toBe(mailTime);
+    expect(mailTime.__unhealthyTransports.size).toBe(0);
+  });
+
+  it('disables verification when verifyTransports: false', async () => {
+    const verify = jest.fn();
+    const mailTime = createMailTime({
+      transports: [withVerify(createTransport(), verify)],
+      verifyTransports: false
+    });
+
+    await expect(mailTime.ready()).resolves.toBe(mailTime);
+    expect(verify).not.toHaveBeenCalled();
+  });
+
+  it('backup strategy: reroutes from an unhealthy task.transport at send time without burning a try', async () => {
+    const goodSent = [];
+    const bad = createTransport(jest.fn((_mail, done) => done(new Error('should not be invoked'), { accepted: [] })));
+    const good = createTransport((mail, done) => {
+      goodSent.push(mail.to);
+      done(null, { accepted: [mail.to], response: 'ok' });
+    });
+    withVerify(bad, async () => { throw new Error('credentials'); });
+    const mailTime = createMailTime({
+      transports: [bad, good],
+      strategy: 'backup'
+    });
+    await mailTime.ready();
+
+    const uuid = await mailTime.sendMail({ to: 'user@example.com', text: 'x' });
+    const task = mailTime.queue.records.get(uuid);
+    expect(task.transport).toBe(1);
+
+    await mailTime.___send(task);
+
+    expect(bad.sendMail).not.toHaveBeenCalled();
+    expect(goodSent).toEqual(['user@example.com']);
+    expect(task.tries).toBe(1);
+    expect(mailTime.queue.records.has(uuid)).toBe(false);
+  });
+
+  it('balancer strategy: skips unhealthy transports when picking the next one', async () => {
+    const sent = [];
+    const make = (label) => createTransport((mail, done) => {
+      sent.push({ label, to: mail.to });
+      done(null, { accepted: [mail.to], response: 'ok' });
+    });
+    const a = make('a');
+    const b = make('b');
+    const c = make('c');
+    withVerify(b, async () => { throw new Error('bad b'); });
+
+    const mailTime = createMailTime({
+      transports: [a, b, c],
+      strategy: 'balancer'
+    });
+    await mailTime.ready();
+
+    for (const to of ['u1@example.com', 'u2@example.com', 'u3@example.com', 'u4@example.com']) {
+      const uuid = await mailTime.sendMail({ to, text: 'x' });
+      await mailTime.___send(mailTime.queue.records.get(uuid));
+    }
+
+    const labels = sent.map((s) => s.label);
+    expect(labels).not.toContain('b');
+    expect(new Set(labels)).toEqual(new Set(['a', 'c']));
+    expect(sent).toHaveLength(4);
+  });
+
+  it('backup strategy: failsToNext rotation skips unhealthy transports', async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    const bad0 = createTransport((_mail, done) => done(new Error('runtime fail'), { accepted: [] }));
+    const bad1 = createTransport(jest.fn());
+    const good = createTransport((mail, done) => done(null, { accepted: [mail.to], response: 'ok' }));
+    withVerify(bad1, async () => { throw new Error('verify fail'); });
+
+    const mailTime = createMailTime({
+      transports: [bad0, bad1, good],
+      strategy: 'backup',
+      failsToNext: 1,
+      retries: 5,
+      retryDelay: 10
+    });
+    await mailTime.ready();
+
+    const uuid = await mailTime.sendMail({ to: 'user@example.com', text: 'x' });
+    const task = mailTime.queue.records.get(uuid);
+    expect(task.transport).toBe(0);
+
+    await mailTime.___send(task);
+
+    expect(task.transport).toBe(2);
+    expect(bad1.sendMail).not.toHaveBeenCalled();
+  });
+
+  it('supports a sync verify() that returns true', async () => {
+    const verifyA = jest.fn(() => true);
+    const mailTime = createMailTime({
+      transports: [withVerify(createTransport(), verifyA)]
+    });
+
+    await expect(mailTime.ready()).resolves.toBe(mailTime);
+    expect(verifyA).toHaveBeenCalledTimes(1);
+    expect(mailTime.__unhealthyTransports.size).toBe(0);
+  });
+
+  it('skips verification for client-mode instances (no transports)', async () => {
+    const queue = createQueue();
+    const mailTime = new MailTime({ type: 'client', queue });
+    instances.push(mailTime);
+
+    await expect(mailTime.ready()).resolves.toBe(mailTime);
+  });
+});

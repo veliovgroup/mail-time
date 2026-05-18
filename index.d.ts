@@ -110,11 +110,12 @@ export type MailTimeOptions = {
     mode?: "one" | "batch";
     concurrency?: number;
     sendingTimeout?: number;
+    verifyTransports?: boolean;
     template?: string;
     prefix?: string;
     debug?: boolean;
     josk?: MailTimeJoSkOptions;
-    onError?: (error: unknown, email: MailTimeTask, details?: object) => void;
+    onError?: (error: unknown, email: MailTimeTask | null, details?: object) => void;
     onSent?: (email: MailTimeTask, details?: object) => void;
 };
 /**
@@ -160,7 +161,7 @@ export type MailTimeOptions = {
  * @typedef {{ subject?: string }} MailTimeConcatEmailsOptions
  */
 /**
- * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
+ * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, verifyTransports?: boolean, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask | null, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
  */
 /** Class of MailTime */
 export class MailTime {
@@ -181,7 +182,7 @@ export class MailTime {
     template: string;
     keepHistory: boolean;
     onSent: (email: MailTimeTask, details?: object) => void;
-    onError: (error: unknown, email: MailTimeTask, details?: object) => void;
+    onError: (error: unknown, email: MailTimeTask | null, details?: object) => void;
     revolvingInterval: number;
     mode: "one" | "batch";
     concurrency: number;
@@ -190,6 +191,7 @@ export class MailTime {
     strategy: "backup" | "balancer";
     transports: MailTimeTransport[];
     transport: number;
+    verifyTransports: boolean;
     from: boolean | ((transport: MailTimeTransport) => string);
     concatSubject: any;
     concatEmails: boolean;

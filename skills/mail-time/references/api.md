@@ -79,10 +79,11 @@ Constructor. The scheduler starts immediately when `opts.type === 'server'`.
 | `mode` | `'one' \| 'batch'` | `'batch'` | `'batch'`: drain every due-and-unclaimed row per tick. `'one'`: claim a single row per tick (fairness across cluster nodes). Mirrors JoSk's `execute`. |
 | `concurrency` | `number` | `1` | Parallel SMTPs per instance, gated by an internal worker pool. The CAS on `isSending` prevents duplicate delivery even when concurrency > 1. |
 | `sendingTimeout` | `number` (ms) | `300000` | How long an `isSending=true` row remains locked before it becomes eligible for recovery. Must exceed the worst-case SMTP roundtrip; lower only when sends are guaranteed to finish faster. |
+| `verifyTransports` | `boolean` | `true` | Probe each transport via `transport.verify()` once at `ready()`. Failing transports are marked unusable (skipped during rotation/fallback) and surfaced through `onError(err, null, { transportIndex, phase: 'verify' })`. `ready()` rejects if every transport fails. Transports without a `verify()` method are treated as healthy. Set to `false` to disable. |
 | `template` | `string` | `'{{{html}}}'` | Mustache-like default template wrapping every letter. |
 | `debug` | `boolean` | `false` | Verbose logs. |
 | `onSent` | `(email, details?) => void` | — | Called after a letter is handed to the SMTP server. |
-| `onError` | `(error, email, details?) => void` | — | Called after the final retry attempt fails. |
+| `onError` | `(error, email, details?) => void` | — | Called after the final retry attempt fails. Also fires once per transport that fails `verify()` at startup, with `email === null` and `details = { transportIndex, phase: 'verify' }`. |
 
 ### JoSk integration (`opts.josk`)
 
@@ -115,6 +116,13 @@ Pass-through to the underlying `JoSk` constructor. The most useful keys:
 | `type === 'server'` + missing `josk.adapter` | `[mail-time] {josk.adapter} option is required {object}` |
 | `josk.adapter.type === 'mongo'` + no `db` | `[mail-time] {josk.adapter.db} option required for {josk.adapter.type: "mongo"}` |
 | `josk.adapter.type === 'redis' \| 'postgres'` + no `client` | `[mail-time] {josk.adapter.client} option required for {josk.adapter.type: "<type>"}` |
+
+### Errors raised asynchronously by `ready()`
+
+| Trigger | Message |
+|---|---|
+| Storage `ping()` failed | `[mail-time] [MailTime#ready] can not connect to storage, make sure it is available and properly configured` (with `.cause`) |
+| Every transport failed `verify()` | `[mail-time] [MailTime#ready] all <N> transport(s) failed verification — nothing can be delivered` |
 
 ## Methods
 

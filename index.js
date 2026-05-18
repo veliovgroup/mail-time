@@ -171,7 +171,7 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
  */
 
 /**
- * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
+ * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, verifyTransports?: boolean, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask | null, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
  */
 
 /** Class of MailTime */
@@ -240,6 +240,8 @@ class MailTime {
     this.strategy = (opts.strategy === 'backup' || opts.strategy === 'balancer') ? opts.strategy : 'backup';
     this.transports = Array.isArray(opts.transports) ? opts.transports : [];
     this.transport = 0;
+    this.verifyTransports = opts.verifyTransports !== false;
+    this.__unhealthyTransports = new Set();
 
     if (typeof opts.from === 'string') {
       const fromStr = opts.from;
@@ -575,10 +577,7 @@ class MailTime {
     let transportIndex = task.transport;
 
     if (this.strategy === 'backup' && this.transports.length > 1 && (task.tries % this.failsToNext) === 0) {
-      transportIndex++;
-      if (transportIndex > this.transports.length - 1) {
-        transportIndex = 0;
-      }
+      transportIndex = this.___nextHealthyTransport(transportIndex);
     }
 
     await this.queue.update(task, {
@@ -874,14 +873,15 @@ class MailTime {
       let transportIndex;
       let transport;
       if (this.strategy === 'balancer') {
-        this.transport = this.transport + 1;
-        if (this.transport >= this.transports.length) {
-          this.transport = 0;
-        }
+        this.transport = this.___nextHealthyTransport(this.transport);
         transportIndex = this.transport;
         transport = this.transports[transportIndex];
       } else {
         transportIndex = task.transport;
+        if (!this.___isHealthyTransport(transportIndex)) {
+          transportIndex = this.___nextHealthyTransport(transportIndex);
+          task.transport = transportIndex;
+        }
         transport = this.transports[transportIndex];
       }
 
@@ -1029,7 +1029,85 @@ class MailTime {
       throw new Error('[mail-time] [MailTime#ready] can not connect to storage, make sure it is available and properly configured', { cause: pingResult.error });
     }
 
+    if (this.type === 'server' && this.verifyTransports && this.transports.length > 0) {
+      await this.___verifyTransports();
+    }
+
     return this;
+  }
+
+  /**
+   * @async
+   * @internal
+   * @memberOf MailTime
+   * @name ___verifyTransports
+   * @description Probe each transport's `verify()` once at startup. Failing transports are marked unusable and skipped during rotation; the failure is surfaced through `onError(error, null, { transportIndex, phase: 'verify' })`. Throws if every transport fails — there is nothing left that could deliver.
+   * @returns {Promise<void>}
+   */
+  async ___verifyTransports() {
+    this._debug('[private verifyTransports]');
+    const results = await Promise.all(this.transports.map(async (transport, index) => {
+      if (!transport || typeof transport.verify !== 'function') {
+        return { index, ok: true };
+      }
+      try {
+        await Promise.resolve(transport.verify());
+        return { index, ok: true };
+      } catch (error) {
+        return { index, ok: false, error };
+      }
+    }));
+
+    for (const r of results) {
+      if (r.ok) {
+        continue;
+      }
+      this.__unhealthyTransports.add(r.index);
+      logError(`[mail-time] [verifyTransports] transport #${r.index} failed verification`, r.error);
+      this.onError(r.error, null, { transportIndex: r.index, phase: 'verify' });
+    }
+
+    if (this.__unhealthyTransports.size === this.transports.length) {
+      throw new Error(`[mail-time] [MailTime#ready] all ${this.transports.length} transport(s) failed verification — nothing can be delivered`);
+    }
+
+    if (this.__unhealthyTransports.has(this.transport)) {
+      this.transport = this.___nextHealthyTransport(this.transport);
+    }
+  }
+
+  /**
+   * @internal
+   * @memberOf MailTime
+   * @name ___isHealthyTransport
+   * @description Return true when the transport at `index` has not been marked unusable by verification.
+   * @param {number} index
+   * @returns {boolean}
+   */
+  ___isHealthyTransport(index) {
+    return !this.__unhealthyTransports.has(index);
+  }
+
+  /**
+   * @internal
+   * @memberOf MailTime
+   * @name ___nextHealthyTransport
+   * @description Advance at least one position from `fromIdx` and return the next healthy transport index (wrapping). Falls back to `fromIdx` if no healthy transport exists.
+   * @param {number} fromIdx
+   * @returns {number}
+   */
+  ___nextHealthyTransport(fromIdx) {
+    if (this.transports.length === 0) {
+      return fromIdx;
+    }
+    let next = fromIdx;
+    for (let i = 0; i < this.transports.length; i++) {
+      next = (next + 1) % this.transports.length;
+      if (this.___isHealthyTransport(next)) {
+        return next;
+      }
+    }
+    return fromIdx;
   }
 }
 

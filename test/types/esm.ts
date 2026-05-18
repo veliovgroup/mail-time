@@ -78,7 +78,7 @@ const opts: MailTimeOptions = {
   queue,
   transports: [transport],
   josk: joskOpts,
-  onError(error: unknown, email: MailTimeTask, details?: object) {
+  onError(error: unknown, email: MailTimeTask | null, details?: object) {
     error;
     email;
     details;

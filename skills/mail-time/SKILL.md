@@ -100,6 +100,17 @@ The queue and scheduler **can** use different stores. Common pairings:
 
 `failsToNext` (default `4`) is how many consecutive failures of a single letter the `'backup'` strategy tolerates before rotating its transport choice for that letter.
 
+### Transport health check (default on)
+
+`ready()` probes every transport's `transport.verify()` once at startup (`verifyTransports: true` by default). Outcomes:
+
+- **All transports verify** → `ready()` resolves normally.
+- **Some transports fail** → each failure fires `onError(err, null, { transportIndex, phase: 'verify' })`, the bad transport is marked unusable, and rotation/fallback (both `'backup'` `failsToNext` and `'balancer'` round-robin) skips it. `ready()` still resolves.
+- **All transports fail** → `ready()` rejects with `[mail-time] [MailTime#ready] all <N> transport(s) failed verification`.
+- **Transport has no `.verify()`** (most custom / non-SMTP transports) → treated as healthy, no probe.
+
+Pass `verifyTransports: false` to disable the probe. Use this when `verify()` is expensive, unreliable, or your transports legitimately reject probes (some sandboxed SMTPs). Without verification, a misconfigured transport in `'backup'` mode silently consumes `failsToNext` failures per letter before rotating, and in `'balancer'` mode silently fails every Nth send.
+
 ## The full public surface
 
 Detailed signatures live in `references/api.md`. Quick map:
