@@ -514,8 +514,13 @@ describe('MailTime send and render behavior', () => {
           return false;
         }
 
-        if (updateObj.isSent === true && typeof updateObj.tries === 'number') {
+        if (updateObj.isSending === true && typeof updateObj.tries === 'number') {
+          const now = typeof updateObj.sendingAt === 'number' ? updateObj.sendingAt : Date.now();
+          const sendingTimeout = queue.mailTimeInstance?.sendingTimeout || 300000;
           if (current.isSent === true || current.isFailed === true || current.isCancelled === true || current.tries !== task.tries) {
+            return false;
+          }
+          if (current.isSending === true && (typeof current.sendingAt === 'number' ? current.sendingAt : 0) > now - sendingTimeout) {
             return false;
           }
         }
@@ -590,6 +595,7 @@ describe('MailTime send and render behavior', () => {
   });
 
   it('handles rejected transport compile path through error handler', async () => {
+    jest.spyOn(console, 'error').mockImplementation(() => {});
     const onError = jest.fn();
     const mailTime = createMailTime({
       retries: 0,
@@ -618,5 +624,614 @@ describe('MailTime send and render behavior', () => {
     const mailTime = createMailTime();
     mailTime.destroy();
     await expect(mailTime.___iterate()).resolves.toBeUndefined();
+  });
+
+  it('routes scheduler-side errors through default onError handler', async () => {
+    const captured = [];
+    const originalLog = console.error;
+    console.error = (...args) => captured.push(args);
+    try {
+      const mailTime = createMailTime({
+        josk: {
+          adapter: createSchedulerAdapter()
+        }
+      });
+      mailTime.josk.onError('Test scheduler title', { description: 'desc', error: new Error('boom'), uid: 'u' });
+      const flat = captured.flat().map(String).join(' ');
+      expect(flat).toContain('[scheduler] Test scheduler title');
+    } finally {
+      console.error = originalLog;
+    }
+  });
+
+  it('handles scheduler ping failure via MailTime#ping', async () => {
+    const mailTime = createMailTime();
+    mailTime.scheduler.ping = jest.fn(async () => ({ status: 'Error', code: 500, statusCode: 500 }));
+    await expect(mailTime.ping()).resolves.toMatchObject({ status: 'Error' });
+  });
+
+  it('coerces Date instance sendAt and falls back to now for NaN', async () => {
+    const mailTime = createMailTime({ type: 'client' });
+    const sendAtDate = new Date(Date.now() + 5000);
+    const uuid = await mailTime.sendMail({
+      to: 'user@example.com',
+      text: 'hi',
+      sendAt: sendAtDate
+    });
+    expect(typeof mailTime.queue.records.get(uuid).sendAt).toBe('number');
+
+    const uuid2 = await mailTime.sendMail({
+      to: 'user@example.com',
+      text: 'hi',
+      sendAt: Number.NaN
+    });
+    expect(typeof mailTime.queue.records.get(uuid2).sendAt).toBe('number');
+  });
+
+  it('wraps transport index on backup retry', async () => {
+    const failing = createTransport((_mail, done) => done(new Error('down'), { accepted: [] }));
+    const mailTime = createMailTime({
+      transports: [failing, failing],
+      strategy: 'backup',
+      failsToNext: 1,
+      retries: 5
+    });
+    const uuid = await mailTime.sendMail({ to: 'user@example.com', text: 'hi' });
+    const task = mailTime.queue.records.get(uuid);
+    task.transport = 1;
+    await mailTime.___send(task);
+    expect(task.transport).toBe(0);
+  });
+
+  it('wraps balancer index after reaching end of transports', async () => {
+    const mailTime = createMailTime({
+      transports: [createTransport(), createTransport()],
+      strategy: 'balancer'
+    });
+    mailTime.transport = 1;
+    const uuid = await mailTime.sendMail({ to: 'user@example.com', text: 'hi' });
+    const task = mailTime.queue.records.get(uuid);
+    await mailTime.___send(task);
+    expect(mailTime.transport).toBe(0);
+  });
+
+  it('routes scheduler unable to ping into MailTime#ready rejection cause', async () => {
+    const queue = createQueue();
+    queue.ping = async () => ({ status: 'FAIL', code: 500, statusCode: 500, error: new Error('storage') });
+    const mailTime = new MailTime({ type: 'client', queue });
+    instances.push(mailTime);
+    await expect(mailTime.ready()).rejects.toMatchObject({ message: expect.stringContaining('can not connect to storage') });
+  });
+
+  it('rejects empty array `to` and accepts string `to`', async () => {
+    const mailTime = createMailTime({ type: 'client' });
+    await expect(mailTime.sendMail({ to: [], text: 'x' })).rejects.toThrow('`mailOptions.to`');
+    const uuid = await mailTime.sendMail({ to: ['a@example.com', 'b@example.com'], text: 'x' });
+    expect(typeof uuid).toBe('string');
+  });
+
+  it('forwards optimal JoSk v6 defaults to the scheduler', () => {
+    const mailTime = createMailTime();
+    expect(mailTime.scheduler.execute).toBe('batch');
+    expect(mailTime.scheduler.concurrency).toBe(Infinity);
+    expect(mailTime.scheduler.zombieTime).toBe(60000);
+    expect(typeof mailTime.scheduler.lockOwnerId).toBe('string');
+    expect(mailTime.scheduler.lockOwnerId.length).toBeGreaterThan(0);
+  });
+
+  it('honors explicit JoSk overrides', () => {
+    const mailTime = createMailTime({
+      josk: {
+        adapter: createSchedulerAdapter(),
+        execute: 'one',
+        concurrency: 8,
+        zombieTime: 120000,
+        lockOwnerId: 'override-id',
+        autoClear: true
+      }
+    });
+    expect(mailTime.scheduler.execute).toBe('one');
+    expect(mailTime.scheduler.concurrency).toBe(8);
+    expect(mailTime.scheduler.zombieTime).toBe(120000);
+    expect(mailTime.scheduler.lockOwnerId).toBe('override-id');
+    expect(mailTime.scheduler.autoClear).toBe(true);
+  });
+});
+
+describe('MailTime per-recipient retry behavior', () => {
+  const createPartialTransport = (calls) => {
+    return createTransport((mail, done) => {
+      const tos = Array.isArray(mail.to) ? [...mail.to] : [mail.to];
+      calls.push(tos);
+      const accepted = tos.filter((addr) => !addr.startsWith('bad'));
+      const rejected = tos.filter((addr) => addr.startsWith('bad'));
+      const rejectedErrors = rejected.map((addr) => new Error(`rejected ${addr}`));
+      done(null, { accepted, rejected, rejectedErrors, response: 'mixed' });
+    });
+  };
+
+  it('records accepted recipients and reschedules retry with only rejected pending', async () => {
+    const calls = [];
+    const onSent = jest.fn();
+    const onError = jest.fn();
+    const mailTime = createMailTime({
+      transports: [createPartialTransport(calls)],
+      retries: 3,
+      retryDelay: 250,
+      onSent,
+      onError
+    });
+    const uuid = await mailTime.sendMail({
+      to: ['good-a@example.com', 'good-b@example.com', 'bad-c@example.com'],
+      subject: 'Partial',
+      text: 'Partial',
+      html: '<p>Partial</p>'
+    });
+    const task = mailTime.queue.records.get(uuid);
+    const before = Date.now();
+
+    await mailTime.___send(task);
+
+    expect(task.mailOptions[0].to).toEqual(['good-a@example.com', 'good-b@example.com', 'bad-c@example.com']);
+    expect(task.mailOptions[0].accepted).toEqual(expect.arrayContaining(['good-a@example.com', 'good-b@example.com']));
+    expect(task.mailOptions[0].accepted).toHaveLength(2);
+    expect(task.isSent).toBe(false);
+    expect(task.isFailed).toBe(false);
+    expect(task.sendAt).toBeGreaterThanOrEqual(before + 200);
+    expect(mailTime.queue.records.has(uuid)).toBe(true);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onSent).not.toHaveBeenCalled();
+  });
+
+  it('next attempt sends only to recipients that have not been accepted yet', async () => {
+    const calls = [];
+    let attempt = 0;
+    const transport = createTransport((mail, done) => {
+      attempt++;
+      const tos = Array.isArray(mail.to) ? [...mail.to] : [mail.to];
+      calls.push(tos);
+      if (attempt === 1) {
+        done(null, {
+          accepted: tos.filter((addr) => !addr.startsWith('bad')),
+          rejected: tos.filter((addr) => addr.startsWith('bad')),
+          response: 'partial'
+        });
+      } else {
+        done(null, { accepted: tos, rejected: [], response: 'ok' });
+      }
+    });
+    const onSent = jest.fn();
+    const mailTime = createMailTime({
+      transports: [transport],
+      retries: 3,
+      retryDelay: 25,
+      onSent
+    });
+    const uuid = await mailTime.sendMail({
+      to: ['good-a@example.com', 'good-b@example.com', 'bad-c@example.com'],
+      subject: 'Partial then full',
+      text: 'Partial then full'
+    });
+    const task = mailTime.queue.records.get(uuid);
+
+    await mailTime.___send(task);
+    task.sendAt = Date.now() - 1;
+    await mailTime.___send(task);
+
+    expect(calls[0]).toEqual(expect.arrayContaining(['good-a@example.com', 'good-b@example.com', 'bad-c@example.com']));
+    expect(calls[1]).toEqual(['bad-c@example.com']);
+    expect(mailTime.queue.records.has(uuid)).toBe(false);
+    expect(onSent).toHaveBeenCalledTimes(1);
+    const sentTask = onSent.mock.calls[0][0];
+    expect(sentTask.mailOptions[0].accepted).toEqual(expect.arrayContaining(['good-a@example.com', 'good-b@example.com', 'bad-c@example.com']));
+    expect(sentTask.mailOptions[0].accepted).toHaveLength(3);
+  });
+
+  it('records unaccepted recipients as rejected after maxTries and fires onError', async () => {
+    const calls = [];
+    const onError = jest.fn();
+    const onSent = jest.fn();
+    const mailTime = createMailTime({
+      transports: [createPartialTransport(calls)],
+      retries: 0,
+      retryDelay: 10,
+      keepHistory: true,
+      onError,
+      onSent
+    });
+    const uuid = await mailTime.sendMail({
+      to: ['good-a@example.com', 'bad-b@example.com'],
+      subject: 'Permanent rejection',
+      text: 'Permanent rejection'
+    });
+    const task = mailTime.queue.records.get(uuid);
+
+    await mailTime.___send(task);
+
+    expect(task.mailOptions[0].accepted).toEqual(['good-a@example.com']);
+    expect(task.mailOptions[0].rejected).toEqual([
+      expect.objectContaining({ address: 'bad-b@example.com', error: expect.any(String) })
+    ]);
+    expect(task.isFailed).toBe(true);
+    expect(task.isSent).toBe(false);
+    expect(onSent).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    const [error, errorTask] = onError.mock.calls[0];
+    expect(`${error}`).toMatch(/Recipients rejected/);
+    expect(errorTask.mailOptions[0].rejected).toHaveLength(1);
+  });
+
+  it('preserves original recipient list on cc and bcc and tracks them with accepted', async () => {
+    const calls = [];
+    const transport = createTransport((mail, done) => {
+      calls.push({
+        to: Array.isArray(mail.to) ? [...mail.to] : mail.to,
+        cc: Array.isArray(mail.cc) ? [...mail.cc] : mail.cc,
+        bcc: Array.isArray(mail.bcc) ? [...mail.bcc] : mail.bcc
+      });
+      const tos = [].concat(mail.to || [], mail.cc || [], mail.bcc || []);
+      done(null, { accepted: tos, rejected: [], response: 'ok' });
+    });
+    const onSent = jest.fn();
+    const mailTime = createMailTime({ transports: [transport], onSent });
+    const uuid = await mailTime.sendMail({
+      to: 'primary@example.com',
+      cc: ['cc-a@example.com', 'cc-b@example.com'],
+      bcc: 'bcc-z@example.com',
+      text: 'with cc/bcc'
+    });
+    const task = mailTime.queue.records.get(uuid);
+
+    await mailTime.___send(task);
+
+    expect(onSent).toHaveBeenCalledTimes(1);
+    const sentTask = onSent.mock.calls[0][0];
+    expect(sentTask.mailOptions[0].accepted).toEqual(expect.arrayContaining([
+      'primary@example.com',
+      'cc-a@example.com',
+      'cc-b@example.com',
+      'bcc-z@example.com'
+    ]));
+    expect(sentTask.mailOptions[0].accepted).toHaveLength(4);
+  });
+
+  it('tracks accepted on every concatEmails mailOption entry on full delivery', async () => {
+    const transport = createTransport((mail, done) => {
+      const tos = Array.isArray(mail.to) ? [...mail.to] : [mail.to];
+      done(null, { accepted: tos, rejected: [], response: 'ok' });
+    });
+    const onSent = jest.fn();
+    const mailTime = createMailTime({
+      transports: [transport],
+      concatEmails: true,
+      concatDelay: 5,
+      onSent
+    });
+
+    const first = await mailTime.sendMail({ to: 'concat@example.com', text: 'First' });
+    const second = await mailTime.sendMail({ to: 'concat@example.com', text: 'Second' });
+    expect(second).toBe(first);
+
+    const task = mailTime.queue.records.get(first);
+    expect(task.mailOptions).toHaveLength(2);
+    task.sendAt = Date.now() - 1;
+
+    await mailTime.___send(task);
+
+    expect(onSent).toHaveBeenCalledTimes(1);
+    const sentTask = onSent.mock.calls[0][0];
+    expect(sentTask.mailOptions[0].accepted).toEqual(['concat@example.com']);
+    expect(sentTask.mailOptions[1].accepted).toEqual(['concat@example.com']);
+    expect(mailTime.queue.records.has(first)).toBe(false);
+  });
+
+  it('removes the task on partial-rejection exhaustion when keepHistory is false', async () => {
+    const calls = [];
+    const onError = jest.fn();
+    const mailTime = createMailTime({
+      transports: [createPartialTransport(calls)],
+      retries: 0,
+      retryDelay: 10,
+      onError
+    });
+    const uuid = await mailTime.sendMail({
+      to: ['good-a@example.com', 'bad-b@example.com'],
+      text: 'Permanent rejection without history'
+    });
+    const task = mailTime.queue.records.get(uuid);
+
+    await mailTime.___send(task);
+
+    expect(mailTime.queue.records.has(uuid)).toBe(false);
+    expect(onError).toHaveBeenCalledTimes(1);
+    const [, errorTask] = onError.mock.calls[0];
+    expect(errorTask.mailOptions[0].accepted).toEqual(['good-a@example.com']);
+    expect(errorTask.mailOptions[0].rejected).toEqual([
+      expect.objectContaining({ address: 'bad-b@example.com' })
+    ]);
+  });
+
+  it('persists accepted recipients with keepHistory on full delivery', async () => {
+    const transport = createTransport((mail, done) => {
+      const tos = Array.isArray(mail.to) ? [...mail.to] : [mail.to];
+      done(null, { accepted: tos, rejected: [], response: 'ok' });
+    });
+    const mailTime = createMailTime({
+      transports: [transport],
+      keepHistory: true
+    });
+    const uuid = await mailTime.sendMail({
+      to: 'history@example.com',
+      text: 'history'
+    });
+    const task = mailTime.queue.records.get(uuid);
+
+    await mailTime.___send(task);
+
+    expect(mailTime.queue.records.has(uuid)).toBe(true);
+    const stored = mailTime.queue.records.get(uuid);
+    expect(stored.mailOptions[0].accepted).toEqual(['history@example.com']);
+  });
+
+  it('treats an empty info.accepted as full failure routed through ___handleError', async () => {
+    const transport = createTransport((mail, done) => {
+      const tos = Array.isArray(mail.to) ? mail.to : [mail.to];
+      done(null, { accepted: [], rejected: tos, response: 'all rejected' });
+    });
+    const onError = jest.fn();
+    const onSent = jest.fn();
+    const mailTime = createMailTime({
+      transports: [transport],
+      retries: 1,
+      retryDelay: 25,
+      onError,
+      onSent
+    });
+    const uuid = await mailTime.sendMail({
+      to: ['bad-a@example.com', 'bad-b@example.com'],
+      text: 'all-bad'
+    });
+    const task = mailTime.queue.records.get(uuid);
+
+    await mailTime.___send(task);
+
+    expect(task.isFailed).toBe(false);
+    expect(task.isSent).toBe(false);
+    expect(task.tries).toBe(1);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onSent).not.toHaveBeenCalled();
+  });
+});
+
+describe('MailTime mode, concurrency, and isSending lifecycle', () => {
+  const seedTask = (mailTime, overrides = {}) => {
+    const task = {
+      uuid: `task-${Math.random().toString(36).slice(2, 8)}`,
+      tries: 0,
+      isSent: false,
+      isFailed: false,
+      isCancelled: false,
+      isSending: false,
+      sendingAt: 0,
+      sendAt: Date.now() - 1,
+      template: false,
+      transport: 0,
+      concatSubject: false,
+      mailOptions: [{ to: 'user@example.com', text: 'hi' }],
+      ...overrides
+    };
+    mailTime.queue.records.set(task.uuid, { ...task });
+    return mailTime.queue.records.get(task.uuid);
+  };
+
+  it('defaults mode to batch and concurrency to 1', () => {
+    const mailTime = createMailTime();
+    expect(mailTime.mode).toBe('batch');
+    expect(mailTime.concurrency).toBe(1);
+    expect(mailTime.sendingTimeout).toBe(300000);
+  });
+
+  it('coerces invalid mode/concurrency/sendingTimeout to safe defaults', () => {
+    const mailTime = createMailTime({
+      mode: 'bogus',
+      concurrency: 0,
+      sendingTimeout: -5
+    });
+    expect(mailTime.mode).toBe('batch');
+    expect(mailTime.concurrency).toBe(1);
+    expect(mailTime.sendingTimeout).toBe(300000);
+
+    const tuned = createMailTime({
+      mode: 'one',
+      concurrency: 4,
+      sendingTimeout: 120000
+    });
+    expect(tuned.mode).toBe('one');
+    expect(tuned.concurrency).toBe(4);
+    expect(tuned.sendingTimeout).toBe(120000);
+  });
+
+  it('atomically claims and releases isSending across the full lifecycle', async () => {
+    const mailTime = createMailTime({ keepHistory: true });
+    const task = seedTask(mailTime);
+
+    await mailTime.___send(task);
+
+    const stored = mailTime.queue.records.get(task.uuid);
+    expect(stored.isSent).toBe(true);
+    expect(stored.isSending).toBe(false);
+    expect(stored.sendingAt).toBe(0);
+    expect(stored.tries).toBe(1);
+  });
+
+  it('mode "one" stops scanning after the first dispatch per tick', async () => {
+    const dispatches = [];
+    const mailTime = createMailTime({ mode: 'one' });
+    mailTime.___dispatch = jest.fn(async (task) => dispatches.push(task.uuid));
+
+    seedTask(mailTime, { uuid: 'a' });
+    seedTask(mailTime, { uuid: 'b' });
+    seedTask(mailTime, { uuid: 'c' });
+
+    await mailTime.___iterate();
+
+    expect(dispatches).toHaveLength(1);
+  });
+
+  it('mode "batch" drains every due, unclaimed row in one tick', async () => {
+    const dispatches = [];
+    const mailTime = createMailTime({ mode: 'batch' });
+    mailTime.___dispatch = jest.fn(async (task) => dispatches.push(task.uuid));
+
+    seedTask(mailTime, { uuid: 'a' });
+    seedTask(mailTime, { uuid: 'b' });
+    seedTask(mailTime, { uuid: 'c' });
+
+    await mailTime.___iterate();
+
+    expect(dispatches.sort()).toEqual(['a', 'b', 'c']);
+  });
+
+  it('iterate skips rows already locked by isSending until sendingTimeout elapses', async () => {
+    const dispatches = [];
+    const mailTime = createMailTime({ mode: 'batch', sendingTimeout: 1000 });
+    mailTime.___dispatch = jest.fn(async (task) => dispatches.push(task.uuid));
+
+    seedTask(mailTime, {
+      uuid: 'locked-fresh',
+      isSending: true,
+      sendingAt: Date.now()
+    });
+    seedTask(mailTime, {
+      uuid: 'locked-stale',
+      isSending: true,
+      sendingAt: Date.now() - 2000
+    });
+    seedTask(mailTime, {
+      uuid: 'unlocked',
+      isSending: false,
+      sendingAt: 0
+    });
+
+    await mailTime.___iterate();
+
+    expect(dispatches.sort()).toEqual(['locked-stale', 'unlocked']);
+  });
+
+  it('claim guard rejects a stale isSending claim within sendingTimeout', async () => {
+    const mailTime = createMailTime({ sendingTimeout: 60000 });
+    const task = seedTask(mailTime, {
+      isSending: true,
+      sendingAt: Date.now()
+    });
+
+    const claimed = await mailTime.queue.update(task, {
+      isSending: true,
+      sendingAt: Date.now(),
+      tries: task.tries + 1
+    });
+    expect(claimed).toBe(false);
+  });
+
+  it('claim guard accepts recovery of a stale isSending row past sendingTimeout', async () => {
+    const mailTime = createMailTime({ sendingTimeout: 1000 });
+    const task = seedTask(mailTime, {
+      isSending: true,
+      sendingAt: Date.now() - 5000
+    });
+
+    const claimed = await mailTime.queue.update(task, {
+      isSending: true,
+      sendingAt: Date.now(),
+      tries: task.tries + 1
+    });
+    expect(claimed).toBe(true);
+  });
+
+  it('___dispatch refuses to enqueue an already in-flight task on the same instance', async () => {
+    const mailTime = createMailTime({ concurrency: 2 });
+    let release;
+    const block = new Promise((resolve) => {
+      release = resolve;
+    });
+    mailTime.___send = jest.fn(async () => block);
+
+    const task = seedTask(mailTime);
+    await mailTime.___dispatch(task);
+    await mailTime.___dispatch(task);
+    await mailTime.___dispatch(task);
+
+    expect(mailTime.___send).toHaveBeenCalledTimes(1);
+    release();
+    await mailTime.drain();
+  });
+
+  it('___dispatch is a no-op after destroy and on terminal tasks', async () => {
+    const mailTime = createMailTime();
+    mailTime.___send = jest.fn();
+    mailTime.destroy();
+    await mailTime.___dispatch({ uuid: 'after-destroy', isSent: false, isFailed: false, isCancelled: false });
+    expect(mailTime.___send).not.toHaveBeenCalled();
+
+    const live = createMailTime();
+    live.___send = jest.fn();
+    await live.___dispatch({ uuid: 'done', isSent: true });
+    await live.___dispatch({ uuid: 'failed', isFailed: true });
+    await live.___dispatch({ uuid: 'cancelled', isCancelled: true });
+    expect(live.___send).not.toHaveBeenCalled();
+  });
+
+  it('concurrency > 1 runs sends in parallel; CAS guard prevents duplicate delivery', async () => {
+    const sent = [];
+    const release = [];
+    const transport = createTransport((mail, done) => {
+      release.push(() => done(null, { accepted: [mail.to], rejected: [], response: 'ok' }));
+      sent.push(mail.to);
+    });
+
+    const mailTime = createMailTime({
+      transports: [transport],
+      concurrency: 3,
+      mode: 'batch'
+    });
+
+    seedTask(mailTime, { uuid: 'p1', mailOptions: [{ to: 'p1@example.com', text: 'x' }] });
+    seedTask(mailTime, { uuid: 'p2', mailOptions: [{ to: 'p2@example.com', text: 'x' }] });
+    seedTask(mailTime, { uuid: 'p3', mailOptions: [{ to: 'p3@example.com', text: 'x' }] });
+
+    await mailTime.___iterate();
+
+    expect(sent).toHaveLength(3);
+    while (release.length > 0) {
+      release.shift()();
+    }
+    await mailTime.drain();
+    expect(mailTime.queue.records.size).toBe(0);
+  });
+
+  it('drain awaits in-flight dispatches before resolving', async () => {
+    const mailTime = createMailTime({ concurrency: 2 });
+    let released = false;
+    const block = new Promise((resolve) => {
+      setTimeout(() => {
+        released = true;
+        resolve();
+      }, 30);
+    });
+    mailTime.___send = jest.fn(async () => block);
+
+    const task = seedTask(mailTime);
+    await mailTime.___dispatch(task);
+    expect(released).toBe(false);
+    await mailTime.drain();
+    expect(released).toBe(true);
+  });
+
+  it('newly queued tasks carry isSending=false and sendingAt=0', async () => {
+    const mailTime = createMailTime();
+    const uuid = await mailTime.sendMail({ to: 'user@example.com', text: 'hi' });
+    const stored = mailTime.queue.records.get(uuid);
+    expect(stored.isSending).toBe(false);
+    expect(stored.sendingAt).toBe(0);
   });
 });

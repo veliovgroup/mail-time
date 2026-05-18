@@ -11,10 +11,29 @@ export const createQueue = () => {
         statusCode: 200
       };
     },
-    async iterate() {
+    async iterate(opts) {
+      const now = Date.now();
+      const sendingTimeout = (opts && typeof opts.sendingTimeout === 'number' && opts.sendingTimeout > 0)
+        ? opts.sendingTimeout
+        : 300000;
+      const limit = (opts && typeof opts.limit === 'number' && Number.isFinite(opts.limit) && opts.limit > 0)
+        ? Math.floor(opts.limit)
+        : 0;
+      let dispatched = 0;
       for (const task of records.values()) {
-        if (task.isSent === false && task.isFailed === false && task.isCancelled === false && task.sendAt <= Date.now()) {
-          await queue.mailTimeInstance.___send(task);
+        if (task.isSent === true || task.isFailed === true || task.isCancelled === true) {
+          continue;
+        }
+        if (task.sendAt > now) {
+          continue;
+        }
+        if (task.isSending === true && (typeof task.sendingAt === 'number' ? task.sendingAt : 0) > now - sendingTimeout) {
+          continue;
+        }
+        await queue.mailTimeInstance.___dispatch(task);
+        dispatched++;
+        if (limit > 0 && dispatched >= limit) {
+          break;
         }
       }
     },
@@ -48,6 +67,16 @@ export const createQueue = () => {
       const current = records.get(task.uuid);
       if (!current) {
         return false;
+      }
+      if (updateObj.isSending === true && typeof updateObj.tries === 'number') {
+        const now = typeof updateObj.sendingAt === 'number' ? updateObj.sendingAt : Date.now();
+        const sendingTimeout = queue.mailTimeInstance?.sendingTimeout || 300000;
+        if (current.isSent === true || current.isFailed === true || current.isCancelled === true || current.tries !== task.tries) {
+          return false;
+        }
+        if (current.isSending === true && (typeof current.sendingAt === 'number' ? current.sendingAt : 0) > now - sendingTimeout) {
+          return false;
+        }
       }
       Object.assign(current, updateObj);
       Object.assign(task, updateObj);

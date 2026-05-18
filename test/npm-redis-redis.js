@@ -199,7 +199,7 @@ describe('Redis - Redis', function () {
           assert.equal(mailTimes[type].revolvingInterval, 1536, 'mailTimes[type] has revolvingInterval');
           assert.equal(mailTimes[type].josk.minRevolvingDelay, 512, 'mailTimes[type] has minRevolvingDelay');
           assert.equal(mailTimes[type].josk.maxRevolvingDelay, 2048, 'mailTimes[type] has maxRevolvingDelay');
-          assert.equal(mailTimes[type].josk.zombieTime, 32786, 'mailTimes[type] has zombieTime');
+          assert.equal(mailTimes[type].josk.zombieTime, 60000, 'mailTimes[type] has zombieTime');
         });
       });
 

@@ -20,3 +20,8 @@ const client = new mailTime.MailTime({
 client.ping();
 void mailTime.MongoQueue;
 void mailTime.RedisQueue;
+
+const marketingPreset = mailTime.mailTimePreset('marketing');
+void marketingPreset;
+void mailTime.presets.newsletter;
+void mailTime.presetNames;

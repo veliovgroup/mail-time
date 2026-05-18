@@ -7,6 +7,7 @@ export default {
   collectCoverage: true,
   collectCoverageFrom: [
     'index.js',
+    'presets.js',
     'adapters/*.js',
     '!adapters/blank-example.js'
   ],
