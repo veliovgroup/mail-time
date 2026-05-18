@@ -1,196 +1,143 @@
-# Meteor.js
+# MailTime in Meteor.js
 
-We maintain a custom package build specifically for Meteor.js. Documentation from [NPM version of `mail-time`](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#basic-usage) is valid and applicable to usage within Meteor.js in the same way as it's used in Node.js. The only difference in using [Atmosphere](https://atmospherejs.com/ostrio/mailer)/[Packosphere](https://packosphere.com/ostrio/mailer) version is in the `import`/`require` statement.
+A custom build of `mail-time` is published to Atmosphere as [`ostrio:mailer`](https://atmospherejs.com/ostrio/mailer). Configuration, API, retries, multi-SMTP, templates, and queue semantics are identical to the NPM version — see the main [README](../README.md) for everything API-related. This page covers only the Meteor-specific bits.
 
-## Installation
+## Install
 
-Mail-Time package can be installed and used within Meteor.js via [NPM](https://www.npmjs.com/package/mail-time) or [Atmosphere](https://atmospherejs.com/ostrio/mailer)
+Via Atmosphere (recommended for Meteor projects):
 
-### Install and import via Atmosphere
-
-Install [Atmosphere `ostrio:mailer` package](https://atmospherejs.com/ostrio/mailer):
-
-```shell
+```sh
 meteor add ostrio:mailer
 ```
 
-Import `meteor/ostrio:mailer` package
+Via NPM (works inside Meteor too):
+
+```sh
+meteor npm install --save mail-time nodemailer
+```
+
+## Import
 
 ```js
-import { MailTime, MongoQueue, RedisQueue } from 'meteor/ostrio:mailer';
+// Atmosphere
+import { MailTime, MongoQueue, RedisQueue, PostgresQueue } from 'meteor/ostrio:mailer';
+
+// NPM (inside Meteor)
+import { MailTime, MongoQueue, RedisQueue, PostgresQueue } from 'mail-time';
+```
+
+The only difference between the two is the module specifier. Everything else — constructor, methods, options — is the same as documented in the main [README API section](../README.md#api).
+
+## Pulling Meteor's Mongo `db`
+
+Meteor exposes the underlying Mongo `Db` instance through `MongoInternals`. Use it directly with `MongoQueue` and the Mongo `JoSk` adapter — no extra connection.
+
+```js
+import { MongoInternals } from 'meteor/mongo';
+
+const db = MongoInternals.defaultRemoteCollectionDriver().mongo.db;
 ```
 
 ## Examples
 
-`mail-time` package usage examples in Meteor.js
+All examples below assume the transports are defined separately — see the [main README's transports section](../README.md#2-create-nodemailer-transports) for the shape `MailTime` expects.
 
-### Create NodeMailer transports
+### MongoDB queue + MongoDB scheduler
 
-For compatibility and flexibility *MailTime* has no dependency on `nodemailer` it should be installed and imported manually. Create one or more "SMTP transports" before initializing new *MailTime* instance
-
-```js
-// transports.js
-import nodemailer from 'nodemailer';
-// Use DIRECT transport
-// To enable sending email from localhost
-// install "nodemailer-direct-transport" NPM package:
-import directTransport from 'nodemailer-direct-transport';
-
-const transports = [];
-const directTransportOpts = {
-  pool: false,
-  direct: true,
-  name: 'mail.example.com',
-  from: 'no-reply@example.com',
-};
-transports.push(nodemailer.createTransport(directTransport(directTransportOpts)));
-// IMPORTANT: Add `.options` to a newly created transport,
-// this is necessary to make sure options are available to MailTime package:
-transports[0].options = directTransportOpts;
-
-export { transports };
-```
-
-### Using MongoDB for queue and scheduler
-
-*MailTime* uses separate storage for Queue management and Scheduler. In the example below MongoDB is used for both
+The most common Meteor setup — reuse the same Mongo connection Meteor already manages.
 
 ```js
+import { MongoInternals } from 'meteor/mongo';
 import { MailTime, MongoQueue } from 'meteor/ostrio:mailer';
-import { MongoInternals } from 'meteor/mongo';
 import { transports } from './transports.js';
 
+const db = MongoInternals.defaultRemoteCollectionDriver().mongo.db;
+
 const mailQueue = new MailTime({
-  queue: new MongoQueue({
-    db: MongoInternals.defaultRemoteCollectionDriver().mongo.db,
-  }),
+  type: 'server',
+  prefix: 'app',
+  queue: new MongoQueue({ db }),
   josk: {
-    adapter: {
-      type: 'mongo',
-      db: MongoInternals.defaultRemoteCollectionDriver().mongo.db,
-    }
+    adapter: { type: 'mongo', db },
   },
   transports,
-  from(transport) {
-    // To pass spam-filters `from` field should be correctly set
-    // for each transport, check `transport` object for more options
-    return `"Awesome App" <${transport.options.from}>`;
-  },
-  onError(error, email, details) {
-    console.log(`Email "${email.mailOptions.subject}" wasn't sent to ${email.mailOptions.to}`, error, details);
-  },
-  onSent(email, details) {
-    console.log(`Email "${email.mailOptions.subject}" successfully sent to ${email.mailOptions.to}`, details);
-  },
 });
+
+await mailQueue.ready();
+export { mailQueue };
 ```
 
-### Using MongoDB for queue and Redis for scheduler
+### MongoDB queue + Redis scheduler
 
-*MailTime* uses separate storage for Queue management and Scheduler. In the example below MongoDB is used for queue and Redis is used for scheduler
+Use Redis for tighter scheduler polling while keeping email storage in Meteor's Mongo:
 
 ```js
+import { MongoInternals } from 'meteor/mongo';
 import { MailTime, MongoQueue } from 'meteor/ostrio:mailer';
-import { MongoInternals } from 'meteor/mongo';
 import { createClient } from 'redis';
 import { transports } from './transports.js';
 
+const db = MongoInternals.defaultRemoteCollectionDriver().mongo.db;
+const redisClient = await createClient({ url: process.env.REDIS_URL }).connect();
+
 const mailQueue = new MailTime({
-  queue: new MongoQueue({
-    db: MongoInternals.defaultRemoteCollectionDriver().mongo.db,
-  }),
+  type: 'server',
+  prefix: 'app',
+  queue: new MongoQueue({ db }),
   josk: {
-    adapter: {
-      type: 'redis',
-      client: await createClient({ url: 'redis://url' }).connect(),
-    }
+    adapter: { type: 'redis', client: redisClient },
   },
   transports,
-  from(transport) {
-    return `"Awesome App" <${transport.options.from}>`;
-  }
 });
 ```
 
-### Using Redis for queue and MongoDB for scheduler
+### Redis or PostgreSQL queues
 
-*MailTime* uses separate storage for Queue management and Scheduler. In the example below Redis is used for queue and MongoDB is used for scheduler
+`RedisQueue` and `PostgresQueue` work the same in Meteor as outside — see the [Storage layouts](../README.md#storage-layouts) section of the main README. Pass connected clients exactly the same way.
+
+## Client-only mode
+
+For multi-app deployments where one Meteor service drains the queue and the others only enqueue:
 
 ```js
-import { MailTime, RedisQueue } from 'meteor/ostrio:mailer';
 import { MongoInternals } from 'meteor/mongo';
-import { createClient } from 'redis';
-import { transports } from './transports.js';
+import { MailTime, MongoQueue } from 'meteor/ostrio:mailer';
 
-const mailQueue = new MailTime({
-  queue: new RedisQueue({
-    client: await createClient({ url: 'redis://url' }).connect(),
-  }),
-  josk: {
-    adapter: {
-      type: 'mongo',
-      db: MongoInternals.defaultRemoteCollectionDriver().mongo.db,
-    }
-  },
-  transports,
-  from(transport) {
-    return `"Awesome App" <${transport.options.from}>`;
-  }
+const db = MongoInternals.defaultRemoteCollectionDriver().mongo.db;
+
+export const mailQueue = new MailTime({
+  type: 'client',
+  prefix: 'app',
+  queue: new MongoQueue({ db }),
 });
 ```
 
-### Using Redis for queue and scheduler
+No `transports`, no `josk` — the client only writes letters to the shared store.
 
-*MailTime* uses separate storage for Queue management and Scheduler. In the example below Redis is used for both
+## Shutdown
+
+Meteor doesn't always signal a clean shutdown to Node, but for tests and graceful redeploys call `destroy()`:
 
 ```js
-import { MailTime, RedisQueue } from 'meteor/ostrio:mailer';
-import { MongoInternals } from 'meteor/mongo';
-import { createClient } from 'redis';
-import { transports } from './transports.js';
-
-const redisClient = await createClient({ url: 'redis://url' }).connect();
-const mailQueue = new MailTime({
-  queue: new RedisQueue({
-    client: redisClient,
-  }),
-  josk: {
-    adapter: {
-      type: 'redis',
-      client: redisClient,
-    }
-  },
-  transports,
-  from(transport) {
-    return `"Awesome App" <${transport.options.from}>`;
-  }
-});
+process.on('SIGTERM', () => mailQueue.destroy());
 ```
 
 ## Testing
 
-Run automated tests
+The repository ships a `test/meteor.js` suite that exercises the package end-to-end inside Meteor:
 
-1. Clone this package
-2. In Terminal (*Console*) go to directory where package is cloned
-3. Get URL for Redis database (*local or remote*)
-4. Then run:
-
-```shell
-# Default
-REDIS_URL="redis://127.0.0.1:6379" meteor test-packages ./ --driver-package=meteortesting:mocha
-
-# Test with specific domain
-EMAIL_DOMAIN="example.com" REDIS_URL="redis://127.0.0.1:6379" meteor test-packages ./ --driver-package=meteortesting:mocha
-
-# In case of the errors, — enable DEBUG for detailed output
-DEBUG="true" REDIS_URL="redis://127.0.0.1:6379" meteor test-packages ./ --driver-package=meteortesting:mocha
-
-# With custom port
-REDIS_URL="redis://127.0.0.1:6379" meteor test-packages ./ --driver-package=meteortesting:mocha --port 8888
-
-# With local MongoDB
-MONGO_URL="mongodb://127.0.0.1:27017/meteor-mail-time-test-001" REDIS_URL="redis://127.0.0.1:6379" meteor test-packages ./ --driver-package=meteortesting:mocha
-
-# Be patient, tests are taking around 2 mins
+```sh
+meteor npm install
+REDIS_URL=redis://127.0.0.1:6379 \
+MONGO_URL=mongodb://127.0.0.1:27017/mail-time-test \
+PG_URL=postgres://127.0.0.1:5432/postgres \
+  meteor test-packages ./ --driver-package=meteortesting:mocha
 ```
+
+Provide whichever `*_URL` env vars match the queues you want to exercise; the suite skips combinations whose store isn't reachable. The test takes around two minutes.
+
+## See also
+
+- [Main README — full configuration & API](../README.md)
+- [Queue adapter contract (custom adapters)](./queue-api.md)
+- [JoSk — the underlying scheduler](https://github.com/veliovgroup/josk)
