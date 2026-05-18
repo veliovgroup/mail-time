@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    name: ${{ matrix.runtime }} ${{ matrix.runtime-version }} · redis-client ${{ matrix.redis-client }}
+    name: ${{ matrix.runtime }} ${{ matrix.runtime-version }} · redis ${{ matrix.redis-client }} · mongo ${{ matrix.mongo-version }}/mongodb ${{ matrix.mongo-client }} · pg ${{ matrix.pg-version }}/pg ${{ matrix.pg-client }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -18,7 +18,12 @@ jobs:
         runtime: [node]
         runtime-version: ['20.9', '22', 'lts/*']
         redis-client: ['^4', '^5']
+        mongo-version: ['8']
+        mongo-client: ['^7']
+        pg-version: ['18']
+        pg-client: ['^8']
         include:
+          # Bun runtime (latest server + driver of everything)
           - runtime: bun
             runtime-version: 'latest'
             redis-client: '^5'
@@ -35,7 +40,7 @@ jobs:
           --health-retries 5
 
       mongo:
-        image: mongo:7
+        image: mongo:${{ matrix.mongo-version }}
         ports:
           - 27017:27017
         options: >-
@@ -45,7 +50,7 @@ jobs:
           --health-retries 5
 
       postgres:
-        image: postgres:16-alpine
+        image: postgres:${{ matrix.pg-version }}-alpine
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -62,6 +67,10 @@ jobs:
       REDIS_URL: redis://127.0.0.1:6379
       MONGO_URL: mongodb://127.0.0.1:27017/npm-mail-time-test
       PG_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+      # Canonical row: latest of everything on Node lts/*.
+      # Jest (mocked, DB-version-independent) and tsc (no driver type refs) only run here
+      # to avoid 14x redundant work; mocha integration runs on every row.
+      IS_CANONICAL_ROW: ${{ matrix.runtime == 'node' && matrix.runtime-version == 'lts/*' && matrix.redis-client == '^5' && matrix.mongo-version == '8' && matrix.mongo-client == '^7' && matrix.pg-version == '18' && matrix.pg-client == '^8' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -95,16 +104,32 @@ jobs:
         if: matrix.runtime == 'bun'
         run: bun add --dev "redis@${{ matrix.redis-client }}"
 
-      - name: Jest (node)
+      - name: Pin mongodb driver to ${{ matrix.mongo-client }}
         if: matrix.runtime == 'node'
+        run: npm install --no-save "mongodb@${{ matrix.mongo-client }}"
+
+      - name: Pin mongodb driver to ${{ matrix.mongo-client }} (bun)
+        if: matrix.runtime == 'bun'
+        run: bun add --dev "mongodb@${{ matrix.mongo-client }}"
+
+      - name: Pin pg driver to ${{ matrix.pg-client }}
+        if: matrix.runtime == 'node'
+        run: npm install --no-save "pg@${{ matrix.pg-client }}"
+
+      - name: Pin pg driver to ${{ matrix.pg-client }} (bun)
+        if: matrix.runtime == 'bun'
+        run: bun add --dev "pg@${{ matrix.pg-client }}"
+
+      - name: Jest (node, canonical row only)
+        if: matrix.runtime == 'node' && env.IS_CANONICAL_ROW == 'true'
         run: npm run test:jest
 
       - name: Mocha integration (node)
         if: matrix.runtime == 'node'
         run: npm run test:mocha
 
-      - name: TypeScript declarations
-        if: matrix.runtime == 'node'
+      - name: TypeScript declarations (canonical row only)
+        if: matrix.runtime == 'node' && env.IS_CANONICAL_ROW == 'true'
         run: npm run test:types
 
       - name: Bun-runner jest suite
