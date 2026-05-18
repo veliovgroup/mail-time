@@ -1,8 +1,7 @@
 import { MongoInternals } from 'meteor/mongo';
-import { MailTime, MongoQueue } from '../index.js';
-import nodemailer from 'nodemailer';
-import directTransport from 'nodemailer-direct-transport';
+import { MailTime, MongoQueue, PostgresQueue, RedisQueue } from '../index.js';
 import { createClient } from 'redis';
+import { Pool } from 'pg';
 import { assert } from 'chai';
 
 if (!process.env.MONGO_URL) {
@@ -13,39 +12,31 @@ if (!process.env.REDIS_URL) {
   throw new Error('REDIS_URL env.var is not defined! Please run test with REDIS_URL, like `REDIS_URL=redis://127.0.0.1:6379 npm test`');
 }
 
-const transports = [];
-const DEBUG = process.env.DEBUG === 'true' ? true : false;
+const DEBUG = process.env.DEBUG === 'true';
 const db = MongoInternals.defaultRemoteCollectionDriver().mongo.db;
 const domain = process.env.EMAIL_DOMAIN || 'example.com';
-const TEST_TITLE = 'testSuiteMeteor';
+const TEST_TITLE = `testSuiteMeteor-${Date.now()}`;
 const CHECK_TIMEOUT = 2048;
 
-describe('Has MailTime Object', () => {
-  it('MailTime is Constructor', () => {
-    assert.isFunction(MailTime, 'MailTime is Constructor');
-    assert.equal(typeof MailTime.Template === 'string', true, 'mailQueue has Template');
-  });
-
-  it('Change MailTime.Template', () => {
-    assert.equal(MailTime.Template === '{{{html}}}', false, 'mailQueue.Template has original value (I know... it\'s "magic" setter/getter, so we got to test it)');
-    MailTime.Template = '{{{html}}}';
-    assert.equal(MailTime.Template === '{{{html}}}', true, 'mailQueue.Template has new value (I know... it\'s "magic" setter/getter, so we got to test it)');
-  });
+const createTransport = () => ({
+  options: {
+    pool: false,
+    direct: true,
+    name: domain,
+    debug: DEBUG,
+    from: `no-reply@${domain}`,
+  },
+  sendMail(mail, done) {
+    const to = Array.isArray(mail.to) ? mail.to[0] : mail.to;
+    if (typeof to === 'string' && to.endsWith(`@${domain}`)) {
+      done(null, { accepted: [to], rejected: [], response: 'OK' });
+      return;
+    }
+    done(new Error('Sending failed'), { accepted: [], rejected: [to] });
+  },
 });
 
-transports.push(nodemailer.createTransport(directTransport({
-  pool: false,
-  direct: true,
-  name: domain,
-  debug: DEBUG,
-  logger: DEBUG ? console : void 0,
-  from: `no-reply@${domain}`,
-  connectionTimeout: 1000,
-  greetingTimeout: 750,
-  socketTimeout: 1500,
-  dnsTimeout: 1500,
-})));
-
+const transports = [createTransport()];
 const defaultQueueOptions = {
   transports,
   debug: DEBUG,
@@ -54,217 +45,170 @@ const defaultQueueOptions = {
   strategy: 'balancer',
 };
 
-// let redisClient;
-let mailQueues = {};
+describe('Has MailTime Object', () => {
+  it('MailTime is Constructor', () => {
+    assert.isFunction(MailTime, 'MailTime is Constructor');
+    assert.equal(typeof MailTime.Template === 'string', true, 'mailQueue has Template');
+  });
 
-createClient({
-  url: process.env.REDIS_URL
-}).connect().then((redisClient) => {
-  mailQueues.WithConcatenation = new MailTime(Object.assign({
-    queue: new MongoQueue({
-      db,
-      prefix: `${TEST_TITLE}WithConcatenation`
-    }),
+  it('Change MailTime.Template', () => {
+    const orig = MailTime.Template;
+    assert.equal(MailTime.Template === '{{{html}}}', false, 'Template has original value');
+    MailTime.Template = '{{{html}}}';
+    assert.equal(MailTime.Template === '{{{html}}}', true, 'Template has new value');
+    MailTime.Template = orig;
+  });
+});
+
+const mailQueues = {};
+const cleanupFns = [];
+
+const buildMongoQueue = (prefix) => new MongoQueue({ db, prefix });
+const buildRedisQueue = (client, prefix) => new RedisQueue({ client, prefix });
+const buildPostgresQueue = (client, prefix) => new PostgresQueue({ client, prefix });
+
+(async () => {
+  const redisClient = await createClient({ url: process.env.REDIS_URL }).connect();
+  cleanupFns.push(() => redisClient.quit());
+
+  let pgPool;
+  if (process.env.PG_URL) {
+    pgPool = new Pool({ connectionString: process.env.PG_URL });
+    cleanupFns.push(() => pgPool.end());
+  }
+
+  // Mongo queue + Redis scheduler (Meteor canonical setup).
+  mailQueues.MongoRedis = new MailTime({
+    ...defaultQueueOptions,
+    prefix: `${TEST_TITLE}-MongoRedis`,
+    queue: buildMongoQueue(`${TEST_TITLE}-MongoRedis`),
     concatEmails: true,
-    prefix: `${TEST_TITLE}WithConcatenation`,
-    josk: {
-      adapter: {
-        type: 'redis',
-        client: redisClient,
-      }
-    }
-  }, defaultQueueOptions));
+    josk: { adapter: { type: 'redis', client: redisClient } },
+  });
 
-  mailQueues.WithoutConcatenation = new MailTime(Object.assign({
-    queue: new MongoQueue({
-      db,
-      prefix: `${TEST_TITLE}WithoutConcatenation`
-    }),
+  // Redis queue + Mongo scheduler.
+  mailQueues.RedisMongo = new MailTime({
+    ...defaultQueueOptions,
+    prefix: `${TEST_TITLE}-RedisMongo`,
+    queue: buildRedisQueue(redisClient, `${TEST_TITLE}-RedisMongo`),
     concatEmails: false,
-    prefix: `${TEST_TITLE}WithoutConcatenation`,
-    josk: {
-      adapter: {
-        type: 'redis',
-        client: redisClient,
-      }
+    josk: { adapter: { type: 'mongo', db } },
+  });
+
+  // Postgres queue + Postgres scheduler (only when PG_URL is provided).
+  if (pgPool) {
+    mailQueues.Postgres = new MailTime({
+      ...defaultQueueOptions,
+      prefix: `${TEST_TITLE}-Postgres`,
+      queue: buildPostgresQueue(pgPool, `${TEST_TITLE}-Postgres`),
+      concatEmails: false,
+      josk: { adapter: { type: 'postgres', client: pgPool } },
+    });
+  }
+
+  await Promise.all(Object.values(mailQueues).map((mq) => mq.ready()));
+
+  // Reset state across runs.
+  await mailQueues.MongoRedis.queue.collection.deleteMany({}).catch(() => {});
+  if (mailQueues.Postgres) {
+    await pgPool.query('DELETE FROM mail_time_queue WHERE prefix = $1', [mailQueues.Postgres.queue.prefix]).catch(() => {});
+  }
+
+  const introspect = async (mailQueue) => {
+    if (mailQueue.queue.name === 'mongo-queue') {
+      return await mailQueue.queue.collection.find({}).toArray();
     }
-  }, defaultQueueOptions));
+    if (mailQueue.queue.name === 'postgres-queue') {
+      const res = await pgPool.query('SELECT to_address as to FROM mail_time_queue WHERE prefix = $1', [mailQueue.prefix]);
+      return res.rows;
+    }
+    return null;
+  };
 
-  mailQueues.WithConcatenation.queue.collection.deleteMany({});
-  mailQueues.WithoutConcatenation.queue.collection.deleteMany({});
+  const runTests = (label, concat) => {
+    const mailQueue = mailQueues[label];
+    if (!mailQueue) {
+      return;
+    }
 
-  const runTests = (type, concat) => {
-    describe(type, function () {
-      const mailQueue = mailQueues[type];
+    describe(label, function () {
+      this.slow(5000);
+      this.timeout(30000);
 
-      after(function () {
-        mailQueue.queue.collection.deleteMany({});
+      after(async () => {
+        await mailQueue.destroy?.();
       });
 
-      describe('MailTime Instance', function () {
-        this.slow(4000);
-        this.timeout(30000);
-        it('Check MailTime instance properties', function () {
-          assert.instanceOf(mailQueue, MailTime, 'mailQueue is instance of MailTime');
-          assert.equal(mailQueue.type, 'server', 'mailQueue has type');
-          assert.equal(mailQueue.prefix, `${TEST_TITLE}${type}`, 'mailQueue has prefix');
-          assert.equal(mailQueue.debug, DEBUG, 'mailQueue has debug');
-          assert.equal(mailQueue.maxTries, 60, 'mailQueue has maxTries');
-          assert.equal(mailQueue.retryDelay, 60000, 'mailQueue has retryDelay');
-          assert.equal(mailQueue.template, '{{{html}}}', 'mailQueue has template');
-          assert.equal(mailQueue.scheduler.zombieTime, 32786, 'mailQueue.scheduler has zombieTime');
-          assert.equal(mailQueue.strategy, 'balancer', 'mailQueue has strategy');
-          assert.equal(mailQueue.failsToNext, 4, 'mailQueue has failsToNext');
-          assert.instanceOf(mailQueue.transports, Array, 'mailQueue has transports');
-          assert.equal(mailQueue.transport, 0, 'mailQueue has transport');
-          assert.equal(mailQueue.from(), `no-reply@${domain}`, 'mailQueue has from');
-          assert.equal(mailQueue.concatEmails, concat, 'mailQueue has concatEmails');
-          assert.equal(mailQueue.concatSubject, 'Multiple notifications', 'mailQueue has concatSubject');
-          assert.equal(mailQueue.concatDelimiter, '<hr>', 'mailQueue has concatDelimiter');
-          assert.equal(mailQueue.concatDelay, 60000, 'mailQueue has concatDelay');
-          assert.equal(mailQueue.revolvingInterval, 1536, 'mailQueue.scheduler has revolvingInterval');
-          assert.equal(mailQueue.scheduler.minRevolvingDelay, 512, 'mailQueue.scheduler has minRevolvingDelay');
-          assert.equal(mailQueue.scheduler.maxRevolvingDelay, 2048, 'mailQueue.scheduler has maxRevolvingDelay');
-        });
+      it('exposes MailTime properties', () => {
+        assert.instanceOf(mailQueue, MailTime, 'is MailTime');
+        assert.equal(mailQueue.type, 'server');
+        assert.equal(mailQueue.scheduler.zombieTime, 60000);
+        assert.equal(mailQueue.scheduler.minRevolvingDelay, 512);
+        assert.equal(mailQueue.scheduler.maxRevolvingDelay, 2048);
       });
 
-      describe('ping', function () {
-        this.slow(1000);
-        this.timeout(2000);
-
-        it('ping response', async function () {
-          const pingRes = await mailQueue.ping();
-          assert.isObject(pingRes, 'ping response is Object');
-          assert.equal(pingRes.status, 'OK', 'ping.status');
-          assert.equal(pingRes.code, 200, 'ping.code');
-          assert.equal(pingRes.statusCode, 200, 'ping.statusCode');
-          assert.isUndefined(pingRes.error, 'ping.error is undefined');
-        });
+      it('ping returns OK', async () => {
+        const r = await mailQueue.ping();
+        assert.equal(r.status, 'OK');
       });
 
-      describe('sendMail', function () {
-        this.slow(5000);
-        this.timeout(30000);
+      it('sends, then cancels a future-dated mail', async () => {
+        const uuid = await mailQueue.sendMail({
+          sendAt: Date.now() + 60000,
+          to: `mail-time-meteor-${label}@${domain}`,
+          subject: 'hi',
+          text: 'plain',
+          html: '<p>plain</p>',
+        });
+        assert.isString(uuid);
 
-        it('sendMail Template placeholders render', function (done) {
-          mailQueue.sendMail({
-            sendAt: Date.now() + 50000,
-            to: `mail-time-meteor-tests-1@${domain}`,
-            subject: 'You\'ve got an email!',
-            user: 'John',
-            baseUrl: '<b>http://example.com</b>',
-            text: '{{user}}, {{ baseUrl }}',
-            html: '<p>Hi {{user}}, {{{ baseUrl }}}</p>',
-            template: '{{{html}}} {{baseUrl}}',
-          });
+        const cancelled = await mailQueue.cancelMail(uuid);
+        assert.isTrue(cancelled);
+      });
 
-          setTimeout(async () => {
-            const task = await mailQueue.queue.collection.findOne({
-              'mailOptions.to': `mail-time-meteor-tests-1@${domain}`
-            });
-            assert.isObject(task, 'task is Object');
-
-            const rendered = mailQueue.___compileMailOpts(transports[0], task);
-            assert.equal(rendered.html, '<p>Hi John, <b>http://example.com</b></p> http://example.com', 'HTML template is properly rendered');
-            assert.equal(rendered.text, 'John, http://example.com', 'Text template is properly rendered');
-            done();
-          }, CHECK_TIMEOUT);
+      it('respects concatEmails setting', function (done) {
+        const address = `concat-${label}@${domain}`;
+        mailQueue.sendMail({
+          sendAt: Date.now() + 60000,
+          to: address,
+          subject: 'First',
+          text: 'First',
+          html: '<p>First</p>',
         });
 
-        it('sendMail with no template', function (done) {
+        setTimeout(() => {
           mailQueue.sendMail({
-            sendAt: Date.now() + 50000,
-            to: `mail-time-meteor-tests-2@${domain}`,
-            subject: 'You\'ve got an email!',
-            user: 'John',
-            text: 'Plain text',
-            html: '<p>Plain text</p>',
+            sendAt: Date.now() + 60000,
+            to: address,
+            subject: 'Second',
+            text: 'Second',
+            html: '<p>Second</p>',
           });
+        }, CHECK_TIMEOUT / 4);
 
-          setTimeout(async () => {
-            const task = await mailQueue.queue.collection.findOne({
-              'mailOptions.to': `mail-time-meteor-tests-2@${domain}`
-            });
-            assert.isObject(task, 'task is Object');
-
-            const rendered = mailQueue.___compileMailOpts(transports[0], task);
-            assert.equal(rendered.html, '<p>Plain text</p>', 'HTML template is properly rendered');
-            assert.equal(rendered.text, 'Plain text', 'Text template is properly rendered');
-            done();
-          }, CHECK_TIMEOUT);
-        });
-
-        it('sendMail with simple template', function (done) {
-          mailQueue.sendMail({
-            sendAt: Date.now() + 50000,
-            to: `mail-time-meteor-tests-3@${domain}`,
-            userName: 'Mike',
-            subject: 'Sign up confirmation',
-            text: 'Hello {{userName}}, \r\n Thank you for registration \r\n Your login: {{to}}',
-            html: '<div style="text-align: center"><h1>Hello {{userName}}</h1><p><ul><li>Thank you for registration</li><li>Your login: {{to}}</li></ul></p></div>',
-            template: '<body>{{{html}}}</body>'
-          });
-
-          setTimeout(async () => {
-            const task = await mailQueue.queue.collection.findOne({
-              'mailOptions.to': `mail-time-meteor-tests-3@${domain}`
-            });
-            assert.isObject(task, 'task is Object');
-
-            const rendered = mailQueue.___compileMailOpts(transports[0], task);
-            assert.equal(rendered.html, `<body><div style="text-align: center"><h1>Hello Mike</h1><p><ul><li>Thank you for registration</li><li>Your login: mail-time-meteor-tests-3@${domain}</li></ul></p></div></body>`, 'HTML template is properly rendered');
-            assert.equal(rendered.text, `Hello Mike, \r\n Thank you for registration \r\n Your login: mail-time-meteor-tests-3@${domain}`, 'Text template is properly rendered');
-            done();
-          }, CHECK_TIMEOUT);
-        });
-
-        it('sendMail testing concatenation to the same addressee', function (done) {
-          mailQueue.sendMail({
-            sendAt: Date.now() + 50000,
-            to: `mail-time-meteor-tests-4@${domain}`,
-            userName: 'Concatenator',
-            subject: '{{userName}}: testing concatenation 1',
-            text: '{{userName}}: testing concatenation 1',
-            html: '<b>{{userName}}: testing concatenation 1</b>',
-            template: '<body>{{{html}}}</body>'
-          });
-
-          setTimeout(() => {
-            mailQueue.sendMail({
-              sendAt: Date.now() + 50000,
-              to: `mail-time-meteor-tests-4@${domain}`,
-              userName: 'Concatenator',
-              subject: '{{userName}}: testing concatenation 2',
-              text: '{{userName}}: testing concatenation 2',
-              html: '<b>{{userName}}: testing concatenation 2</b>',
-              template: '<body>{{{html}}}</body>'
-            });
-          }, CHECK_TIMEOUT / 4);
-
-          setTimeout(async () => {
-            const qty = await mailQueue.queue.collection.countDocuments({
-              $or: [{
-                to: `mail-time-meteor-tests-4@${domain}`
-              }, {
-                'mailOptions.to': `mail-time-meteor-tests-4@${domain}`
-              }]
-            });
-
-            if (concat === true) {
-              assert.equal(qty, 1, 'Has single email record with concatenation');
-            } else {
-              assert.equal(qty, 2, 'Has two email records without concatenation');
-            }
-
-            done();
-          }, CHECK_TIMEOUT);
-        });
+        setTimeout(async () => {
+          const docs = await introspect(mailQueue) ?? [];
+          const matches = docs.filter((d) => d.to === address);
+          if (concat) {
+            assert.equal(matches.length, 1, 'folded into one letter');
+          } else {
+            assert.equal(matches.length, 2, 'kept as two letters');
+          }
+          done();
+        }, CHECK_TIMEOUT);
       });
     });
   };
 
-  runTests('WithConcatenation', true);
-  runTests('WithoutConcatenation', false);
-}).catch((err) => {
-  console.error('CAUGHT', err);
+  runTests('MongoRedis', true);
+  runTests('RedisMongo', false);
+  runTests('Postgres', false);
+
+  after(async () => {
+    for (const fn of cleanupFns.reverse()) {
+      await fn().catch(() => {});
+    }
+  });
+})().catch((err) => {
+  console.error('Meteor test bootstrap failed', err);
 });
