@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
 import { MailTime, mailTimePreset, presetNames, presets } from '../../index.js';
 import { createQueue, createSchedulerAdapter, createTransport } from './helpers.js';
@@ -73,6 +73,59 @@ describe('mailTimePreset', () => {
   it('pins mode to "batch" on every preset', () => {
     for (const name of presetNames) {
       expect(presets[name].mode).toBe('batch');
+    }
+  });
+
+  it('ships a default onError hook on every preset that tags logs with the instance prefix', () => {
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      for (const name of presetNames) {
+        expect(typeof presets[name].onError).toBe('function');
+      }
+
+      const cfg = mailTimePreset('transactional');
+      cfg.onError.call({ prefix: 'receipts' }, new Error('boom'), { id: 'task-1' }, { meta: true });
+      cfg.onError.call({}, new Error('boom'), { id: 'task-2' });
+
+      expect(errSpy).toHaveBeenCalledTimes(2);
+      expect(errSpy.mock.calls[0].some((arg) => typeof arg === 'string' && arg.includes('[receipts] [onError]'))).toBe(true);
+      expect(errSpy.mock.calls[1].some((arg) => typeof arg === 'string' && arg.includes('[default] [onError]'))).toBe(true);
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it('lets the caller replace the preset onError via overrides', () => {
+    const custom = jest.fn();
+    const cfg = mailTimePreset('alerts', { onError: custom });
+    expect(cfg.onError).toBe(custom);
+  });
+
+  it('binds the preset default onError to the MailTime instance so `this.prefix` is reliable', async () => {
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const mailTime = new MailTime(mailTimePreset('alerts', {
+        prefix: 'ops-alerts',
+        queue: createQueue(),
+        transports: [createTransport()],
+        josk: {
+          adapter: createSchedulerAdapter(),
+          minRevolvingDelay: 60_000,
+          maxRevolvingDelay: 60_000,
+        },
+      }));
+      instances.push(mailTime);
+      await mailTime.ready();
+
+      const detached = mailTime.onError;
+      detached(new Error('boom'), { id: 'task-x' }, { meta: true });
+
+      expect(errSpy).toHaveBeenCalledTimes(1);
+      expect(errSpy.mock.calls[0].some((arg) => typeof arg === 'string' && arg.includes('[ops-alerts] [onError]'))).toBe(true);
+    } finally {
+      errSpy.mockRestore();
     }
   });
 

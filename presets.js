@@ -1,4 +1,18 @@
-import { deepMerge, isPlainObject } from './helpers.js';
+import { deepMerge, isPlainObject, logError } from './helpers.js';
+
+/**
+ * Default `onError` hook used by every built-in preset. Logs via the
+ * shared `logError` helper and tags the line with the MailTime instance
+ * `prefix` (or `'default'` when unset) so multi-queue deployments can
+ * tell their streams apart. Defined as a regular function so `this`
+ * resolves to the MailTime instance at call time — `this.onError(...)`
+ * in `index.js` binds the receiver. Users override by passing their own
+ * `onError` through `mailTimePreset(name, { onError })` or the
+ * constructor.
+ */
+function defaultPresetOnError(error, email, info) {
+  logError(`[${this?.prefix || 'default'}] [onError]`, { error, email, info });
+}
 
 /**
  * @typedef {object} MailTimePresetConfig
@@ -11,6 +25,7 @@ import { deepMerge, isPlainObject } from './helpers.js';
  * @property {number} [sendingTimeout]
  * @property {'one' | 'batch'} [mode]
  * @property {number} [concurrency]
+ * @property {(error: unknown, email: object, details?: object) => void} [onError]
  * @property {object} [josk]
  */
 
@@ -48,6 +63,7 @@ const PRESETS = Object.freeze({
     retryDelay: 10_000,
     mode: 'batch',
     concurrency: 1,
+    onError: defaultPresetOnError,
     josk: Object.freeze({
       zombieTime: 120_000,
     }),
@@ -60,6 +76,7 @@ const PRESETS = Object.freeze({
     sendingTimeout: 60_000,
     mode: 'batch',
     concurrency: 4,
+    onError: defaultPresetOnError,
     josk: Object.freeze({
       minRevolvingDelay: 256,
       maxRevolvingDelay: 1024,
@@ -75,6 +92,7 @@ const PRESETS = Object.freeze({
     sendingTimeout: 600_000,
     mode: 'batch',
     concurrency: 2,
+    onError: defaultPresetOnError,
     josk: Object.freeze({
       zombieTime: 300_000,
     }),
@@ -85,6 +103,7 @@ const PRESETS = Object.freeze({
     retryDelay: 30_000,
     mode: 'batch',
     concurrency: 5,
+    onError: defaultPresetOnError,
     josk: Object.freeze({
       zombieTime: 180_000,
     }),
@@ -97,6 +116,7 @@ const PRESETS = Object.freeze({
     retryDelay: 30_000,
     mode: 'batch',
     concurrency: 3,
+    onError: defaultPresetOnError,
     josk: Object.freeze({
       zombieTime: 180_000,
     }),
@@ -109,6 +129,7 @@ const PRESETS = Object.freeze({
     sendingTimeout: 60_000,
     mode: 'batch',
     concurrency: 2,
+    onError: defaultPresetOnError,
     josk: Object.freeze({
       minRevolvingDelay: 256,
       maxRevolvingDelay: 1024,

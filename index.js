@@ -219,8 +219,8 @@ class MailTime {
 
     this.template = (typeof opts.template === 'string') ? opts.template : '{{{html}}}';
     this.keepHistory = opts.keepHistory === true;
-    this.onSent = (typeof opts.onSent === 'function') ? opts.onSent : noop;
-    this.onError = (typeof opts.onError === 'function') ? opts.onError : noop;
+    this.onSent = (typeof opts.onSent === 'function') ? opts.onSent.bind(this) : noop;
+    this.onError = (typeof opts.onError === 'function') ? opts.onError.bind(this) : noop;
 
     this.revolvingInterval = (typeof opts.revolvingInterval === 'number' && opts.revolvingInterval > 0) ? opts.revolvingInterval : 1536;
     this.mode = (opts.mode === 'one' || opts.mode === 'batch') ? opts.mode : 'batch';
