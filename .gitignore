@@ -5,3 +5,7 @@ node_modules
 npm-debug.log*
 coverage
 .types-tmp
+local-testing.md
+local-testing.mjs
+/.claude
+/.cursor
