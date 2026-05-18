@@ -38,7 +38,7 @@ export class PostgresQueue {
     /**
      * @memberOf PostgresQueue
      * @name iterate
-     * @description iterate over queued tasks passing to `mailTimeInstance.___send` method
+     * @description iterate over queued tasks passing each to `mailTimeInstance.___dispatch` (the bounded send pool). Postgres reads buffer the full result, so each tick is bounded by `opts.limit` (or 1000 when caller passes `Infinity` / no limit) to keep memory predictable; high-throughput deployments should shard prefixes.
      * @param {{ limit?: number, sendingTimeout?: number }} [opts] - iteration options
      * @returns {Promise<void>}
      */

@@ -173,7 +173,7 @@ class MongoQueue {
   /**
    * @memberOf MongoQueue
    * @name iterate
-   * @description iterate over queued tasks passing to `mailTimeInstance.___send` method
+   * @description iterate over queued tasks passing each to `mailTimeInstance.___dispatch` (the bounded send pool)
    * @param {{ limit?: number, sendingTimeout?: number }} [opts] - iteration options
    * @returns {Promise<void>}
    */

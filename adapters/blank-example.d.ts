@@ -25,7 +25,7 @@ export class BlankQueue {
     /**
      * @memberOf BlankQueue
      * @name iterate
-     * @description iterate over queued emails passing to `mailTimeInstance.___send` method
+     * @description iterate over queued emails passing each to `mailTimeInstance.___dispatch` (the bounded send pool); `___dispatch` returns once a pool slot is acquired so the scan can release the JoSk lease while the SMTP roundtrip continues in the background
      * @param {{ limit?: number, sendingTimeout?: number }} [opts] - iteration options. Honor `opts.limit` (stop after that many dispatches) for `mode: 'one'`, and use `opts.sendingTimeout` (ms) to reclaim rows whose worker died mid-send.
      * @returns {Promise<void>}
      */
