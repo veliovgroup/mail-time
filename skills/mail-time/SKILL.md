@@ -212,6 +212,8 @@ MailTime owns JoSk; configure via `opts.josk`. MailTime sets `minRevolvingDelay`
 
 **Full knob tables, presets, anti-patterns:** `references/tuning.md`.
 
+**Deep JoSk semantics** (lease lifecycle, adapter internals, recurring tasks, CRON patterns) live in the **`josk` skill** — same author. If the user hasn't installed it, suggest `npx skills add veliovgroup/josk`.
+
 ## Common patterns
 
 Full code in `references/recipes.md`. Quick map:
