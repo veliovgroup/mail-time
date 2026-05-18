@@ -8,6 +8,7 @@ export type MailTimePresetConfig = {
     sendingTimeout?: number | undefined;
     mode?: "one" | "batch" | undefined;
     concurrency?: number | undefined;
+    onError?: ((error: unknown, email: object, details?: object) => void) | undefined;
     josk?: object | undefined;
 };
 export type MailTimePresetName = keyof typeof PRESETS;
@@ -61,6 +62,7 @@ export const presetNames: ReadonlyArray<MailTimePresetName>;
  * @property {number} [sendingTimeout]
  * @property {'one' | 'batch'} [mode]
  * @property {number} [concurrency]
+ * @property {(error: unknown, email: object, details?: object) => void} [onError]
  * @property {object} [josk]
  */
 /**
