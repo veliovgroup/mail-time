@@ -27,6 +27,62 @@ jobs:
           - runtime: bun
             runtime-version: 'latest'
             redis-client: '^5'
+            mongo-version: '8'
+            mongo-client: '^7'
+            pg-version: '18'
+            pg-client: '^8'
+          # MongoDB server LTS coverage (mongo 7) against current driver
+          - runtime: node
+            runtime-version: 'lts/*'
+            redis-client: '^5'
+            mongo-version: '7'
+            mongo-client: '^7'
+            pg-version: '18'
+            pg-client: '^8'
+          # MongoDB driver LTS coverage (mongodb ^6) against current + LTS servers
+          - runtime: node
+            runtime-version: 'lts/*'
+            redis-client: '^5'
+            mongo-version: '8'
+            mongo-client: '^6'
+            pg-version: '18'
+            pg-client: '^8'
+          - runtime: node
+            runtime-version: 'lts/*'
+            redis-client: '^5'
+            mongo-version: '7'
+            mongo-client: '^6'
+            pg-version: '18'
+            pg-client: '^8'
+          # Postgres server LTS-and-up coverage (14, 15, 16, 17) against current driver
+          - runtime: node
+            runtime-version: 'lts/*'
+            redis-client: '^5'
+            mongo-version: '8'
+            mongo-client: '^7'
+            pg-version: '14'
+            pg-client: '^8'
+          - runtime: node
+            runtime-version: 'lts/*'
+            redis-client: '^5'
+            mongo-version: '8'
+            mongo-client: '^7'
+            pg-version: '15'
+            pg-client: '^8'
+          - runtime: node
+            runtime-version: 'lts/*'
+            redis-client: '^5'
+            mongo-version: '8'
+            mongo-client: '^7'
+            pg-version: '16'
+            pg-client: '^8'
+          - runtime: node
+            runtime-version: 'lts/*'
+            redis-client: '^5'
+            mongo-version: '8'
+            mongo-client: '^7'
+            pg-version: '17'
+            pg-client: '^8'
 
     services:
       redis:
