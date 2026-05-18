@@ -57,20 +57,7 @@ When the user is wiring MailTime for the first time, six things need to be in pl
 5. **`onSent` and `onError` callbacks** (strongly recommended). Without them, success/failure events are only visible in debug logs.
 6. **A shutdown path** that calls `mailTime.destroy()` before exit. Required in tests; strongly recommended in production for graceful shutdown.
 
-### Prefix is set in one place, inherited everywhere
-
-`opts.prefix` on the `MailTime` constructor flows to the queue adapter and to the JoSk adapter automatically. The queue inherits `MailTime.prefix` *lazily* — the first storage call (or `await queue.ready()`) reads it from `queue.mailTimeInstance.prefix` and applies it. An explicit `prefix` on the queue adapter's own config wins, so per-instance overrides still work. JoSk receives `mailTimeQueue<prefix>` (just `mailTimeQueue` when prefix is empty). Don't pass `prefix` to the queue adapter unless you want a different namespace there. The current shape is:
-
-```js
-new MailTime({
-  prefix: 'app',                                      // ← set here only
-  queue: new MongoQueue({ db }),                      // ← inherits 'app'
-  josk: { adapter: { type: 'mongo', db } },           // ← becomes 'mailTimeQueueapp'
-  /* ... */
-})
-```
-
-Older versions required passing `prefix` to the queue adapter and to `MailTime` separately; that's still supported (an explicit queue `prefix` wins) but redundant.
+Set `prefix` only on the `MailTime` constructor — it flows to the queue and JoSk adapters automatically. An explicit `prefix` on a sub-adapter's own config overrides the inherited one if you genuinely want a different namespace there.
 
 ## Pick the queue adapter
 
@@ -111,74 +98,15 @@ The queue and scheduler **can** use different stores. Common pairings:
 
 Pass `verifyTransports: false` to disable the probe. Use this when `verify()` is expensive, unreliable, or your transports legitimately reject probes (some sandboxed SMTPs). Without verification, a misconfigured transport in `'backup'` mode silently consumes `failsToNext` failures per letter before rotating, and in `'balancer'` mode silently fails every Nth send.
 
-## The full public surface
+## Public surface (cheat sheet)
 
-Detailed signatures live in `references/api.md`. Quick map:
+Full signatures, every option, every error, every default → `references/api.md`. The pieces to keep in mind here:
 
-### `new MailTime(opts)`
-
-Constructor. `opts.queue` is always required. `opts.type` defaults to `'server'`; when `'server'`, `opts.transports` and `opts.josk` are required. Common knobs:
-
-- `strategy`, `failsToNext` — multi-SMTP behavior.
-- `retries` (default `60`), `retryDelay` (default `60000` ms) — re-send attempts and spacing.
-- `mode` (`'one' | 'batch'`, default `'batch'`) — claim every due row per tick (`'batch'`) or one row per tick (`'one'`). Mirrors JoSk's `execute`.
-- `concurrency` (default `1`) — number of parallel SMTPs per MailTime instance. The atomic CAS on `isSending` keeps it safe.
-- `sendingTimeout` (default `300000` ms) — stale-lock recovery window. Must exceed worst-case SMTP roundtrip.
-- `concatEmails`, `concatDelay`, `concatSubject`, `concatDelimiter` — fold multiple emails to the same address into one. `concatEmails` accepts `true` *or* `{ subject: 'X {{count}} new notifications' }` — the inline `subject` overrides `concatSubject` and supports the `{{count}}` placeholder for the folded letter count.
-- `template` — Mustache-like default template applied to every letter.
-- `keepHistory` — keep sent / failed / cancelled rows in storage instead of deleting them.
-- `prefix` — isolate this instance's storage from sibling instances.
-- `from` — string or `(transport) => string`. Use for spam-passing `From:` formatting.
-- `onSent(email, details)`, `onError(error, email, details)` — wire to your real logger.
-
-### `mailTime.sendMail(opts)` → `Promise<string>` (uuid)
-
-Enqueue a letter. `opts.to` is required (string or non-empty array). Everything else is passed through to nodemailer (`subject`, `text`, `html`, `attachments`, custom headers, etc.) plus a few MailTime-specific options:
-
-- `sendAt` — `Date` or ms timestamp. Default: now.
-- `template` — per-letter template override.
-- `concatSubject` — per-letter concat subject override. Supports `{{count}}` for the folded letter count.
-
-Returns the email's stable `uuid`.
-
-**Per-recipient retries.** When `to`/`cc`/`bcc` contain multiple addresses and the SMTP server accepts some but rejects others, MailTime persists the delivered addresses on `task.mailOptions[i].accepted` and retries **only** the rejected ones on the next attempt — delivered recipients never receive a duplicate. After the retry budget (`retries` / `maxTries`) is exhausted with at least one address still un-accepted, the task finalizes as `isFailed`, `task.mailOptions[i].rejected` is populated with `{ address, error }` per un-delivered recipient, and `onError(err, task, info)` fires once. `onSent` fires once on full delivery. Original `mailOption.to` / `cc` / `bcc` are never mutated. Transports that don't expose `info.accepted` / `info.rejected` (some `sendmail`, JSON, in-memory transports) fall back to the existing "any-accepted = success / none-accepted = retry" behavior.
-
-### `mailTime.cancelMail(uuid)` → `Promise<boolean>`
-
-Cancel a queued letter. Accepts a string `uuid` or the `Promise<string>` returned from `sendMail`. Returns `true` if cancelled, `false` if already sent / cancelled / unknown. If `keepHistory: true`, the row is marked `isCancelled`; otherwise it's deleted.
-
-### `mailTime.ping()` → `Promise<{status, code, statusCode, error?}>`
-
-Healthcheck. Pings the scheduler (if server) then the queue. `code: 200` on success.
-
-### `mailTime.ready()` → `Promise<MailTime>`
-
-Awaits queue & scheduler readiness. Rejects with `[mail-time] [MailTime#ready] can not connect to storage` and a `.cause` if either store fails its initial ping. Call before sending if your startup must fail fast on storage problems.
-
-### `mailTime.destroy()` → `boolean`
-
-Stops the scheduler and prevents future iterations. Idempotent — returns `false` on subsequent calls. Always call before `process.exit()`. Pair with `drain()` for graceful shutdown.
-
-### `mailTime.drain()` → `Promise<void>`
-
-Resolves once every in-flight SMTP send finishes. Useful in graceful-shutdown paths (call before `destroy()`) and in tests that drive iterate via `___iterate` / `queue.iterate()` and need to wait for the bounded send pool to settle.
-
-### Aliases
-
-- `mailTime.send(opts)` ≡ `mailTime.sendMail(opts)`.
-- `mailTime.cancel(uuid)` ≡ `mailTime.cancelMail(uuid)`.
-
-### `MailTime.Template`
-
-Static get/set. The default HTML envelope template (a responsive, spam-friendly skeleton). Set globally or per-letter via `opts.template`.
-
-### Queue constructors
-
-- `new MongoQueue({ db, prefix? })`
-- `new RedisQueue({ client, prefix? })`
-- `new PostgresQueue({ client, prefix? })`
-
-`client` / `db` must be already-connected. `prefix` isolates schedules within the same store.
+- **Send / cancel.** `sendMail(opts) → Promise<uuid>` and `cancelMail(uuid) → Promise<boolean>`. `cancelMail` also accepts the `Promise<uuid>` returned from `sendMail`. Per-recipient retries are automatic — accepted addresses are recorded on `task.mailOptions[i].accepted`; only rejected ones are re-attempted; `onSent` fires once on full delivery, `onError` fires once after the retry budget exhausts with at least one address still un-accepted.
+- **Lifecycle.** `ready()` resolves once queue + scheduler ping cleanly (and probes every transport's `verify()` when `verifyTransports: true`). `ping()` is the runtime healthcheck. `drain()` waits for the in-flight send pool to settle; pair with `destroy()` for graceful shutdown.
+- **Aliases.** `send` ≡ `sendMail`, `cancel` ≡ `cancelMail`.
+- **Queue constructors.** `new MongoQueue({ db, prefix? })`, `new RedisQueue({ client, prefix? })`, `new PostgresQueue({ client, prefix? })`. `client` / `db` must already be connected; `prefix` is usually inherited from `MailTime` and only set here for a different namespace.
+- **`MailTime.Template`** is a static get/set for the default HTML envelope; override per-letter via `opts.template`.
 
 ## Settings presets
 

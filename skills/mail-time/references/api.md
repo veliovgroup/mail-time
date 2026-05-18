@@ -36,9 +36,15 @@ import type {
   MailTimePingResult,
   CustomQueue,
 } from 'mail-time';
+
+// ESM subpath imports (Node ≥ 20.9.0 / Bun ≥ 1.1.0)
+import { mailTimePreset } from 'mail-time/presets';
+import { MongoQueue } from 'mail-time/adapters/mongo';
+import { RedisQueue } from 'mail-time/adapters/redis';
+import { PostgresQueue } from 'mail-time/adapters/postgres';
 ```
 
-The package ships ESM (`index.js` + `index.d.ts`) and CJS (`index.cjs` + `index.d.cts`) entry points wired through the `exports` map.
+Subpath exports are ESM-only. CJS consumers import everything from the main entry (`require('mail-time')`), which bundles presets and all adapters.
 
 ## `new MailTime(opts)`
 
