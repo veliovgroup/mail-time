@@ -15,7 +15,32 @@
         "types": "./index.d.cts",
         "default": "./index.cjs"
       }
-    }
+    },
+    "./presets": {
+      "import": {
+        "types": "./presets.d.ts",
+        "default": "./presets.js"
+      }
+    },
+    "./adapters/mongo": {
+      "import": {
+        "types": "./adapters/mongo.d.ts",
+        "default": "./adapters/mongo.js"
+      }
+    },
+    "./adapters/redis": {
+      "import": {
+        "types": "./adapters/redis.d.ts",
+        "default": "./adapters/redis.js"
+      }
+    },
+    "./adapters/postgres": {
+      "import": {
+        "types": "./adapters/postgres.d.ts",
+        "default": "./adapters/postgres.js"
+      }
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
     "prepublishOnly": "rollup --config rollup.config.js && rm -rf ./.types-tmp && tsc --emitDeclarationOnly --declaration --outDir ./.types-tmp --rootDir ./ && node ./scripts/strip-internal-dts.mjs ./.types-tmp/index.d.ts ./.types-tmp/presets.d.ts ./.types-tmp/adapters/mongo.d.ts ./.types-tmp/adapters/redis.d.ts ./.types-tmp/adapters/postgres.d.ts && cp ./.types-tmp/index.d.ts ./index.d.ts && cp ./.types-tmp/index.d.ts ./index.d.cts && cp ./.types-tmp/presets.d.ts ./presets.d.ts && cp ./.types-tmp/adapters/*.d.ts ./adapters/ && rm -rf ./.types-tmp",
