@@ -1,4 +1,5 @@
 export type MongoCollection = {
+    collectionName?: string | undefined;
     createIndex: (keys: object, opts?: object) => Promise<unknown>;
     indexes: () => Promise<{
         name: string;
@@ -33,10 +34,9 @@ export class MongoQueue {
      */
     constructor(opts: MongoQueueOption);
     name: string;
-    prefix: string;
     db: Db;
-    collection: MongoCollection;
-    __readyPromise: Promise<undefined>;
+    prefix: any;
+    collection: MongoCollection | undefined;
     /**
      * @async
      * @memberOf MongoQueue
@@ -57,9 +57,13 @@ export class MongoQueue {
      * @memberOf MongoQueue
      * @name iterate
      * @description iterate over queued tasks passing to `mailTimeInstance.___send` method
+     * @param {{ limit?: number, sendingTimeout?: number }} [opts] - iteration options
      * @returns {Promise<void>}
      */
-    iterate(): Promise<void>;
+    iterate(opts?: {
+        limit?: number;
+        sendingTimeout?: number;
+    }): Promise<void>;
     /**
      * @async
      * @memberOf MongoQueue
@@ -101,7 +105,7 @@ export class MongoQueue {
      * @async
      * @memberOf MongoQueue
      * @name update
-     * @description remove task from queue
+     * @description update task in queue
      * @param task {object} - task's object
      * @param updateObj {object} - fields with new values to update
      * @returns {Promise<boolean>} returns `true` if updated or `false` if not found or no changes was made

@@ -1,11 +1,14 @@
-import { logError } from '../helpers.js';
+import { debug, logError } from '../helpers.js';
+
+const DEFAULT_PREFIX = '';
 
 const isSendClaimUpdate = (updateObj) => {
-  return updateObj.isSent === true && typeof updateObj.tries === 'number';
+  return updateObj.isSending === true && typeof updateObj.tries === 'number';
 };
 
 /**
  * @typedef {object} MongoCollection
+ * @property {string} [collectionName]
  * @property {(keys: object, opts?: object) => Promise<unknown>} createIndex
  * @property {() => Promise<{ name: string, key: Record<string, unknown> }[]>} indexes
  * @property {(name: string) => Promise<unknown>} dropIndex
@@ -28,38 +31,28 @@ const isSendClaimUpdate = (updateObj) => {
  * @property {string} [prefix]
  */
 
-/**
- * Ensure (create) index on MongoDB collection, catch and log exception if thrown
- * @function ensureIndex
- * @param {Collection} collection - Mongo's driver Collection instance
- * @param {object} keys - Field and value pairs where the field is the index key and the value describes the type of index for that field
- * @param {object} opts - Set of options that controls the creation of the index
- * @returns {void 0}
- */
+/** @internal */
 const ensureIndex = async (collection, keys, opts) => {
   try {
     await collection.createIndex(keys, opts);
   } catch (e) {
-    if (e.code === 85) {
+    if (e?.code === 85) {
       let indexName;
       const indexes = await collection.indexes();
+      const keyNames = Object.keys(keys);
       for (const index of indexes) {
-        let drop = true;
-        for (const indexKey of Object.keys(keys)) {
-          if (typeof index.key[indexKey] === 'undefined') {
-            drop = false;
+        const indexKeys = Object.keys(index.key);
+        if (indexKeys.length !== keyNames.length) {
+          continue;
+        }
+        let match = true;
+        for (const k of keyNames) {
+          if (typeof index.key[k] === 'undefined') {
+            match = false;
             break;
           }
         }
-
-        for (const indexKey of Object.keys(index.key)) {
-          if (typeof keys[indexKey] === 'undefined') {
-            drop = false;
-            break;
-          }
-        }
-
-        if (drop) {
+        if (match) {
           indexName = index.name;
           break;
         }
@@ -70,7 +63,7 @@ const ensureIndex = async (collection, keys, opts) => {
         await collection.createIndex(keys, opts);
       }
     } else {
-      logError(`[ensureIndex] Can not set ${Object.keys(keys).join(' + ')} index on "${collection._name || 'MongoDB'}" collection`, { keys, opts, details: e });
+      logError(`[ensureIndex] Can not set ${Object.keys(keys).join(' + ')} index on "${collection?.collectionName || 'MongoDB'}" collection`, { keys, opts, details: e });
     }
   }
 };
@@ -83,43 +76,41 @@ class MongoQueue {
    */
   constructor (opts) {
     this.name = 'mongo-queue';
-    if (!opts || typeof opts !== 'object' || opts === null) {
+    if (!opts || typeof opts !== 'object') {
       throw new TypeError('[mail-time] Configuration object must be passed into MongoQueue constructor');
     }
 
     if (!opts.db) {
-      throw new Error('[mail-time] [MongoQueue] requires MongoDB database {db} option, like returned from `MongoClient.connect`');
+      throw new Error('[mail-time] [MongoQueue] requires MongoDB database {db} option, like returned from `MongoClient#db()`');
     }
 
-    this.prefix = (typeof opts.prefix === 'string') ? opts.prefix : '';
     this.db = opts.db;
-    this.collection = opts.db.collection(`__mailTimeQueue__${this.prefix}`);
+    if (typeof opts.prefix === 'string') {
+      this.__applyPrefix(opts.prefix);
+    }
+  }
+
+  /** @internal */
+  __applyPrefix(prefix) {
+    this.prefix = prefix;
+    this.collection = this.db.collection(`__mailTimeQueue__${prefix}`);
     this.__readyPromise = Promise.all([
       ensureIndex(this.collection, { uuid: 1 }, { background: false }),
       ensureIndex(this.collection, { isSent: 1, isFailed: 1, isCancelled: 1, to: 1, sendAt: 1 }, { background: false }),
-      ensureIndex(this.collection, { isSent: 1, isFailed: 1, isCancelled: 1, sendAt: 1, tries: 1 }, { background: false })
+      ensureIndex(this.collection, { isSent: 1, isFailed: 1, isCancelled: 1, isSending: 1, sendingAt: 1, sendAt: 1, tries: 1 }, { background: false }),
     ]).then(() => void 0);
+  }
 
-    // MongoDB Collection Schema:
-    // _id
-    // uuid        {string}
-    // to          {string|[string]}
-    // tries       {number}  - qty of send attempts
-    // sendAt      {number}  - When letter should be sent
-    // isSent      {boolean} - Email status
-    // isCancelled {boolean} - `true` if email was cancelled before it was sent
-    // isFailed    {boolean} - `true` if email has failed to send
-    // template    {string}  - Template for this email
-    // transport   {number}  - Last used transport
-    // concatSubject {string|boolean} - Email concatenation subject
-    // ---
-    // mailOptions         {[object]}  - Array of nodeMailer's `mailOptions`
-    // mailOptions.to      {string|[string]} - [REQUIRED]
-    // mailOptions.from    {string}
-    // mailOptions.text    {string|boolean}
-    // mailOptions.html    {string}
-    // mailOptions.subject {string}
-    // mailOptions.Other nodeMailer `sendMail` options...
+  /** @internal */
+  __ensurePrefix() {
+    if (typeof this.prefix !== 'string') {
+      this.__applyPrefix(this.mailTimeInstance?.prefix || DEFAULT_PREFIX);
+    }
+  }
+
+  /** @internal */
+  __debug(...args) {
+    debug(this.mailTimeInstance?.debug === true, `[${this.name}]`, ...args);
   }
 
   /**
@@ -130,6 +121,8 @@ class MongoQueue {
    * @returns {Promise<void 0>}
    */
   async ready() {
+    this.__ensurePrefix();
+    this.__debug('[ready]');
     await this.__readyPromise;
   }
 
@@ -141,6 +134,7 @@ class MongoQueue {
    * @returns {Promise<object>}
    */
   async ping() {
+    this.__debug('[ping]');
     if (!this.mailTimeInstance) {
       return {
         status: 'Service Unavailable',
@@ -164,7 +158,7 @@ class MongoQueue {
         status: 'Internal Server Error',
         code: 500,
         statusCode: 500,
-        error: pingError
+        error: pingError,
       };
     }
 
@@ -172,7 +166,7 @@ class MongoQueue {
       status: 'Service Unavailable',
       code: 503,
       statusCode: 503,
-      error: new Error('Service Unavailable')
+      error: new Error('Service Unavailable'),
     };
   }
 
@@ -180,20 +174,35 @@ class MongoQueue {
    * @memberOf MongoQueue
    * @name iterate
    * @description iterate over queued tasks passing to `mailTimeInstance.___send` method
+   * @param {{ limit?: number, sendingTimeout?: number }} [opts] - iteration options
    * @returns {Promise<void>}
    */
-  async iterate() {
+  async iterate(opts) {
+    this.__debug('[iterate]', opts);
+    this.__ensurePrefix();
+    const now = Date.now();
+    const sendingTimeout = (opts && typeof opts.sendingTimeout === 'number' && opts.sendingTimeout > 0)
+      ? opts.sendingTimeout
+      : 300000;
+    const limit = (opts && typeof opts.limit === 'number' && Number.isFinite(opts.limit) && opts.limit > 0)
+      ? Math.floor(opts.limit)
+      : 0;
+
     try {
       const cursor = this.collection.find({
         isSent: false,
         isFailed: false,
         isCancelled: false,
         sendAt: {
-          $lte: Date.now()
+          $lte: now,
         },
         tries: {
-          $lt: this.mailTimeInstance.maxTries
-        }
+          $lt: this.mailTimeInstance.maxTries,
+        },
+        $or: [
+          { isSending: { $ne: true } },
+          { sendingAt: { $lte: now - sendingTimeout } },
+        ],
       }, {
         projection: {
           _id: 1,
@@ -204,13 +213,19 @@ class MongoQueue {
           isSent: 1,
           isFailed: 1,
           isCancelled: 1,
+          isSending: 1,
+          sendingAt: 1,
           mailOptions: 1,
           concatSubject: 1,
-        }
+        },
       });
 
+      if (limit > 0) {
+        cursor.limit(limit);
+      }
+
       while (await cursor.hasNext()) {
-        await this.mailTimeInstance.___send(await cursor.next());
+        await this.mailTimeInstance.___dispatch(await cursor.next());
       }
       await cursor.close();
     } catch (iterateError) {
@@ -228,18 +243,20 @@ class MongoQueue {
    * @returns {Promise<object|null>}
    */
   async getPendingTo(to, sendAt) {
+    this.__debug('[getPendingTo]', to, sendAt);
     if (typeof to !== 'string' || typeof sendAt !== 'number') {
       return null;
     }
+    this.__ensurePrefix();
 
     return await this.collection.findOne({
-      to: to,
+      to,
       isSent: false,
       isFailed: false,
       isCancelled: false,
       sendAt: {
-        $lte: sendAt
-      }
+        $lte: sendAt,
+      },
     }, {
       projection: {
         _id: 1,
@@ -250,7 +267,7 @@ class MongoQueue {
         isFailed: 1,
         isCancelled: 1,
         mailOptions: 1,
-      }
+      },
     });
   }
 
@@ -263,9 +280,11 @@ class MongoQueue {
    * @returns {Promise<void 0>}
    */
   async push(task) {
+    this.__debug('[push]', task?.uuid);
     if (!task || typeof task !== 'object') {
       return;
     }
+    this.__ensurePrefix();
 
     if (task.sendAt instanceof Date) {
       task.sendAt = +task.sendAt;
@@ -282,9 +301,11 @@ class MongoQueue {
    * @returns {Promise<boolean>} returns `true` if cancelled or `false` if not found, was sent, or was cancelled previously
    */
   async cancel(uuid) {
+    this.__debug('[cancel]', uuid);
     if (typeof uuid !== 'string') {
       return false;
     }
+    this.__ensurePrefix();
 
     const task = await this.collection.findOne({ uuid }, {
       projection: {
@@ -292,7 +313,7 @@ class MongoQueue {
         uuid: 1,
         isSent: 1,
         isCancelled: 1,
-      }
+      },
     });
 
     if (!task || task.isSent === true || task.isCancelled === true) {
@@ -317,43 +338,53 @@ class MongoQueue {
    * @returns {Promise<boolean>} returns `true` if removed or `false` if not found
    */
   async remove(task) {
+    this.__debug('[remove]', task?.uuid);
     if (!task || typeof task !== 'object') {
       return false;
     }
+    this.__ensurePrefix();
 
-    return (await this.collection.deleteOne({ _id: task._id }))?.deletedCount >= 1;
+    const res = await this.collection.deleteOne({ _id: task._id });
+    return (res?.deletedCount || 0) >= 1;
   }
 
   /**
    * @async
    * @memberOf MongoQueue
    * @name update
-   * @description remove task from queue
+   * @description update task in queue
    * @param task {object} - task's object
    * @param updateObj {object} - fields with new values to update
    * @returns {Promise<boolean>} returns `true` if updated or `false` if not found or no changes was made
    */
   async update(task, updateObj) {
+    this.__debug('[update]', task?.uuid);
     if (!task || typeof task !== 'object' || !updateObj || typeof updateObj !== 'object') {
       return false;
     }
+    this.__ensurePrefix();
 
     const query = {
-      _id: task._id
+      _id: task._id,
     };
 
     if (isSendClaimUpdate(updateObj)) {
-      Object.assign(query, {
-        isSent: false,
-        isFailed: false,
-        isCancelled: false,
-        tries: task.tries
-      });
+      const now = typeof updateObj.sendingAt === 'number' ? updateObj.sendingAt : Date.now();
+      const sendingTimeout = this.mailTimeInstance?.sendingTimeout || 300000;
+      query.isSent = false;
+      query.isFailed = false;
+      query.isCancelled = false;
+      query.tries = task.tries;
+      query.$or = [
+        { isSending: { $ne: true } },
+        { sendingAt: { $lte: now - sendingTimeout } },
+      ];
     }
 
-    return (await this.collection.updateOne(query, {
-      $set: updateObj
-    }))?.modifiedCount >= 1;
+    const res = await this.collection.updateOne(query, {
+      $set: updateObj,
+    });
+    return (res?.modifiedCount || 0) >= 1;
   }
 }
 
