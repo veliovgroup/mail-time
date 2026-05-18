@@ -113,7 +113,7 @@ Constructor. `opts.queue` is always required. `opts.type` defaults to `'server'`
 - `mode` (`'one' | 'batch'`, default `'batch'`) — claim every due row per tick (`'batch'`) or one row per tick (`'one'`). Mirrors JoSk's `execute`.
 - `concurrency` (default `1`) — number of parallel SMTPs per MailTime instance. The atomic CAS on `isSending` keeps it safe.
 - `sendingTimeout` (default `300000` ms) — stale-lock recovery window. Must exceed worst-case SMTP roundtrip.
-- `concatEmails`, `concatDelay`, `concatSubject`, `concatDelimiter` — fold multiple emails to the same address into one.
+- `concatEmails`, `concatDelay`, `concatSubject`, `concatDelimiter` — fold multiple emails to the same address into one. `concatEmails` accepts `true` *or* `{ subject: 'X {{count}} new notifications' }` — the inline `subject` overrides `concatSubject` and supports the `{{count}}` placeholder for the folded letter count.
 - `template` — Mustache-like default template applied to every letter.
 - `keepHistory` — keep sent / failed / cancelled rows in storage instead of deleting them.
 - `prefix` — isolate this instance's storage from sibling instances.
@@ -126,7 +126,7 @@ Enqueue a letter. `opts.to` is required (string or non-empty array). Everything 
 
 - `sendAt` — `Date` or ms timestamp. Default: now.
 - `template` — per-letter template override.
-- `concatSubject` — per-letter concat subject override.
+- `concatSubject` — per-letter concat subject override. Supports `{{count}}` for the folded letter count.
 
 Returns the email's stable `uuid`.
 

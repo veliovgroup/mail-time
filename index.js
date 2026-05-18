@@ -167,7 +167,11 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
  */
 
 /**
- * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
+ * @typedef {{ subject?: string }} MailTimeConcatEmailsOptions
+ */
+
+/**
+ * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
  */
 
 /** Class of MailTime */
@@ -248,8 +252,17 @@ class MailTime {
 
     this.queue.mailTimeInstance = this;
 
-    this.concatEmails = opts.concatEmails === true;
     this.concatSubject = (typeof opts.concatSubject === 'string' && opts.concatSubject) ? opts.concatSubject : 'Multiple notifications';
+    if (opts.concatEmails === true) {
+      this.concatEmails = true;
+    } else if (isPlainObject(opts.concatEmails)) {
+      this.concatEmails = true;
+      if (typeof opts.concatEmails.subject === 'string' && opts.concatEmails.subject) {
+        this.concatSubject = opts.concatEmails.subject;
+      }
+    } else {
+      this.concatEmails = false;
+    }
     this.concatDelimiter = (typeof opts.concatDelimiter === 'string' && opts.concatDelimiter) ? opts.concatDelimiter : '<hr>';
 
     if (typeof opts.concatDelay === 'number') {
@@ -707,7 +720,8 @@ class MailTime {
     }
 
     if (isMulti) {
-      compiledOpts.subject = task.concatSubject || this.concatSubject || compiledOpts.subject;
+      const rawSubject = task.concatSubject || this.concatSubject || compiledOpts.subject;
+      compiledOpts.subject = this.___render(rawSubject, { count: mailOptionsList.length });
     }
 
     if (!compiledOpts.from && this.from) {

@@ -86,6 +86,9 @@ export type MailTimeMailOptions = {
     accepted?: string[];
     rejected?: MailTimeRejectedRecipient[];
 };
+export type MailTimeConcatEmailsOptions = {
+    subject?: string;
+};
 export type MailTimeOptions = {
     queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue;
     type?: "server" | "client";
@@ -98,7 +101,7 @@ export type MailTimeOptions = {
     retryDelay?: number;
     interval?: number;
     keepHistory?: boolean;
-    concatEmails?: boolean;
+    concatEmails?: boolean | MailTimeConcatEmailsOptions;
     concatSubject?: string;
     concatDelimiter?: string;
     concatDelay?: number;
@@ -154,7 +157,10 @@ export type MailTimeOptions = {
  * @typedef {{ [key: string]: any, to: string | string[], sendAt?: Date | number, template?: string, concatSubject?: string, text?: string | false, html?: string | false, subject?: string, accepted?: string[], rejected?: MailTimeRejectedRecipient[] }} MailTimeMailOptions
  */
 /**
- * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
+ * @typedef {{ subject?: string }} MailTimeConcatEmailsOptions
+ */
+/**
+ * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
  */
 /** Class of MailTime */
 export class MailTime {
@@ -185,8 +191,8 @@ export class MailTime {
     transports: MailTimeTransport[];
     transport: number;
     from: boolean | ((transport: MailTimeTransport) => string);
+    concatSubject: any;
     concatEmails: boolean;
-    concatSubject: string;
     concatDelimiter: string;
     concatDelay: number;
     josk: {

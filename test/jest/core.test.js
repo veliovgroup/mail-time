@@ -369,6 +369,121 @@ describe('MailTime send and render behavior', () => {
     expect(mailTime.queue.records.get(first).mailOptions).toHaveLength(2);
   });
 
+  it('accepts concatEmails as an object and stores its subject template', () => {
+    const mailTime = createMailTime({
+      concatEmails: { subject: '{{count}} new notifications' }
+    });
+
+    expect(mailTime.concatEmails).toBe(true);
+    expect(mailTime.concatSubject).toBe('{{count}} new notifications');
+  });
+
+  it('falls back to default concatSubject when concatEmails object lacks a subject', () => {
+    const emptyObj = createMailTime({ concatEmails: {} });
+    expect(emptyObj.concatEmails).toBe(true);
+    expect(emptyObj.concatSubject).toBe('Multiple notifications');
+
+    const withConcatSubject = createMailTime({
+      concatEmails: {},
+      concatSubject: 'Folded letter'
+    });
+    expect(withConcatSubject.concatEmails).toBe(true);
+    expect(withConcatSubject.concatSubject).toBe('Folded letter');
+
+    const nonStringSubject = createMailTime({
+      concatEmails: { subject: 42 }
+    });
+    expect(nonStringSubject.concatEmails).toBe(true);
+    expect(nonStringSubject.concatSubject).toBe('Multiple notifications');
+  });
+
+  it('concatEmails object subject overrides standalone concatSubject option', () => {
+    const mailTime = createMailTime({
+      concatEmails: { subject: 'Inline {{count}}' },
+      concatSubject: 'Ignored'
+    });
+
+    expect(mailTime.concatSubject).toBe('Inline {{count}}');
+  });
+
+  it('treats unknown concatEmails values as disabled', () => {
+    const nullish = createMailTime({ concatEmails: null });
+    expect(nullish.concatEmails).toBe(false);
+
+    const stringy = createMailTime({ concatEmails: 'yes' });
+    expect(stringy.concatEmails).toBe(false);
+  });
+
+  it('renders {{count}} placeholder in the concat subject when folding letters', () => {
+    const mailTime = createMailTime({
+      concatEmails: { subject: '{{count}} new notifications' }
+    });
+
+    const compiled = mailTime.___compileMailOpts(createTransport(), {
+      mailOptions: [
+        { to: 'user@example.com', subject: 'One', text: 'One' },
+        { to: 'user@example.com', subject: 'Two', text: 'Two' },
+        { to: 'user@example.com', subject: 'Three', text: 'Three' }
+      ],
+      template: '{{{html}}}',
+      concatSubject: false
+    });
+
+    expect(compiled.subject).toBe('3 new notifications');
+  });
+
+  it('renders {{count}} in per-letter concatSubject override', () => {
+    const mailTime = createMailTime({ concatEmails: true });
+
+    const compiled = mailTime.___compileMailOpts(createTransport(), {
+      mailOptions: [
+        { to: 'user@example.com', subject: 'One', text: 'One' },
+        { to: 'user@example.com', subject: 'Two', text: 'Two' }
+      ],
+      template: '{{{html}}}',
+      concatSubject: 'You have {{count}} updates'
+    });
+
+    expect(compiled.subject).toBe('You have 2 updates');
+  });
+
+  it('leaves single-letter subject untouched even when concat subject template is set', () => {
+    const mailTime = createMailTime({
+      concatEmails: { subject: '{{count}} new notifications' }
+    });
+
+    const compiled = mailTime.___compileMailOpts(createTransport(), {
+      mailOptions: [
+        { to: 'user@example.com', subject: 'Only one', text: 'Only one' }
+      ],
+      template: '{{{html}}}',
+      concatSubject: false
+    });
+
+    expect(compiled.subject).toBe('Only one');
+  });
+
+  it('folds emails the same way when concatEmails is given as an object', async () => {
+    const mailTime = createMailTime({
+      concatEmails: { subject: '{{count}} bundled' },
+      concatDelay: 1000
+    });
+
+    const first = await mailTime.sendMail({
+      to: 'user@example.com',
+      subject: 'Hello',
+      text: 'Hello'
+    });
+    const second = await mailTime.sendMail({
+      to: 'user@example.com',
+      subject: 'Different',
+      text: 'Different body'
+    });
+
+    expect(second).toBe(first);
+    expect(mailTime.queue.records.get(first).mailOptions).toHaveLength(2);
+  });
+
   it('retries failed mail with updated sendAt and next backup transport', async () => {
     const firstTransport = createTransport((_mail, done) => done(new Error('smtp down'), {
       accepted: []

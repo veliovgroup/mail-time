@@ -71,8 +71,8 @@ Constructor. The scheduler starts immediately when `opts.type === 'server'`.
 | `retries` | `number` | `60` | Re-send attempts on failure. The first attempt counts; `retries: 0` ⇒ one attempt total. |
 | `retryDelay` | `number` (ms) | `60000` | Wait between re-send attempts. |
 | `keepHistory` | `boolean` | `false` | When `true`, sent / failed / cancelled rows stay in storage instead of being deleted. |
-| `concatEmails` | `boolean` | `false` | Fold multiple emails to the same `to` into one. |
-| `concatSubject` | `string` | `'Multiple notifications'` | Subject when folding. |
+| `concatEmails` | `boolean \| { subject?: string }` | `false` | Fold multiple emails to the same `to` into one. Pass `{ subject: 'X' }` to set the folded-letter subject inline; the string supports the `{{count}}` placeholder (rendered to the number of folded letters) and overrides `concatSubject`. |
+| `concatSubject` | `string` | `'Multiple notifications'` | Subject when folding. Supports `{{count}}` for the folded letter count. |
 | `concatDelimiter` | `string` | `'<hr>'` | HTML/plain separator between folded bodies. |
 | `concatDelay` | `number` (ms) | `60000` | How long the fold window is open from each new email. |
 | `revolvingInterval` | `number` (ms) | `1536` | JoSk task interval that drives queue iteration. |
@@ -128,7 +128,7 @@ Enqueue a letter.
 |---|---|---|
 | `sendAt` | `Date \| number` | Future timestamp. Defaults to "now". |
 | `template` | `string` | Overrides constructor `template` for this letter. |
-| `concatSubject` | `string` | Overrides constructor `concatSubject` for this letter. |
+| `concatSubject` | `string` | Overrides constructor `concatSubject` for this letter. Supports `{{count}}` for the folded letter count. |
 
 Throws synchronously:
 

@@ -1486,6 +1486,20 @@ class PostgresQueue {
 }
 
 /**
+ * Default `onError` hook used by every built-in preset. Logs via the
+ * shared `logError` helper and tags the line with the MailTime instance
+ * `prefix` (or `'default'` when unset) so multi-queue deployments can
+ * tell their streams apart. Defined as a regular function so `this`
+ * resolves to the MailTime instance at call time — `this.onError(...)`
+ * in `index.js` binds the receiver. Users override by passing their own
+ * `onError` through `mailTimePreset(name, { onError })` or the
+ * constructor.
+ */
+function defaultPresetOnError(error, email, info) {
+  logError(`[${this?.prefix || 'default'}] [onError]`, { error, email, info });
+}
+
+/**
  * @typedef {object} MailTimePresetConfig
  * @property {boolean} [concatEmails]
  * @property {number} [concatDelay]
@@ -1496,6 +1510,7 @@ class PostgresQueue {
  * @property {number} [sendingTimeout]
  * @property {'one' | 'batch'} [mode]
  * @property {number} [concurrency]
+ * @property {(error: unknown, email: object, details?: object) => void} [onError]
  * @property {object} [josk]
  */
 
@@ -1533,6 +1548,7 @@ const PRESETS = Object.freeze({
     retryDelay: 10_000,
     mode: 'batch',
     concurrency: 1,
+    onError: defaultPresetOnError,
     josk: Object.freeze({
       zombieTime: 120_000,
     }),
@@ -1545,6 +1561,7 @@ const PRESETS = Object.freeze({
     sendingTimeout: 60_000,
     mode: 'batch',
     concurrency: 4,
+    onError: defaultPresetOnError,
     josk: Object.freeze({
       minRevolvingDelay: 256,
       maxRevolvingDelay: 1024,
@@ -1560,6 +1577,7 @@ const PRESETS = Object.freeze({
     sendingTimeout: 600_000,
     mode: 'batch',
     concurrency: 2,
+    onError: defaultPresetOnError,
     josk: Object.freeze({
       zombieTime: 300_000,
     }),
@@ -1570,6 +1588,7 @@ const PRESETS = Object.freeze({
     retryDelay: 30_000,
     mode: 'batch',
     concurrency: 5,
+    onError: defaultPresetOnError,
     josk: Object.freeze({
       zombieTime: 180_000,
     }),
@@ -1582,6 +1601,7 @@ const PRESETS = Object.freeze({
     retryDelay: 30_000,
     mode: 'batch',
     concurrency: 3,
+    onError: defaultPresetOnError,
     josk: Object.freeze({
       zombieTime: 180_000,
     }),
@@ -1594,6 +1614,7 @@ const PRESETS = Object.freeze({
     sendingTimeout: 60_000,
     mode: 'batch',
     concurrency: 2,
+    onError: defaultPresetOnError,
     josk: Object.freeze({
       minRevolvingDelay: 256,
       maxRevolvingDelay: 1024,
@@ -1814,7 +1835,11 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
  */
 
 /**
- * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
+ * @typedef {{ subject?: string }} MailTimeConcatEmailsOptions
+ */
+
+/**
+ * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
  */
 
 /** Class of MailTime */
@@ -1866,8 +1891,8 @@ class MailTime {
 
     this.template = (typeof opts.template === 'string') ? opts.template : '{{{html}}}';
     this.keepHistory = opts.keepHistory === true;
-    this.onSent = (typeof opts.onSent === 'function') ? opts.onSent : noop;
-    this.onError = (typeof opts.onError === 'function') ? opts.onError : noop;
+    this.onSent = (typeof opts.onSent === 'function') ? opts.onSent.bind(this) : noop;
+    this.onError = (typeof opts.onError === 'function') ? opts.onError.bind(this) : noop;
 
     this.revolvingInterval = (typeof opts.revolvingInterval === 'number' && opts.revolvingInterval > 0) ? opts.revolvingInterval : 1536;
     this.mode = (opts.mode === 'one' || opts.mode === 'batch') ? opts.mode : 'batch';
@@ -1895,8 +1920,17 @@ class MailTime {
 
     this.queue.mailTimeInstance = this;
 
-    this.concatEmails = opts.concatEmails === true;
     this.concatSubject = (typeof opts.concatSubject === 'string' && opts.concatSubject) ? opts.concatSubject : 'Multiple notifications';
+    if (opts.concatEmails === true) {
+      this.concatEmails = true;
+    } else if (isPlainObject(opts.concatEmails)) {
+      this.concatEmails = true;
+      if (typeof opts.concatEmails.subject === 'string' && opts.concatEmails.subject) {
+        this.concatSubject = opts.concatEmails.subject;
+      }
+    } else {
+      this.concatEmails = false;
+    }
     this.concatDelimiter = (typeof opts.concatDelimiter === 'string' && opts.concatDelimiter) ? opts.concatDelimiter : '<hr>';
 
     if (typeof opts.concatDelay === 'number') {
@@ -2354,7 +2388,8 @@ class MailTime {
     }
 
     if (isMulti) {
-      compiledOpts.subject = task.concatSubject || this.concatSubject || compiledOpts.subject;
+      const rawSubject = task.concatSubject || this.concatSubject || compiledOpts.subject;
+      compiledOpts.subject = this.___render(rawSubject, { count: mailOptionsList.length });
     }
 
     if (!compiledOpts.from && this.from) {
