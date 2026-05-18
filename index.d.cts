@@ -1,3 +1,5 @@
+export type MailTimePresetName = import("./presets.js").MailTimePresetName;
+export type MailTimePresetConfig = import("./presets.js").MailTimePresetConfig;
 export type MailTimePingResult = {
     status: string;
     code: number;
@@ -34,8 +36,10 @@ export type MailTimeJoSkOptions = {
     minRevolvingDelay?: number;
     maxRevolvingDelay?: number;
     execute?: "batch" | "one";
+    concurrency?: number;
     lockOwnerId?: string;
     resetOnInit?: boolean;
+    onError?: (title: string, details: object) => void;
 };
 export type MailTimeTask = {
     uuid: string;
@@ -45,20 +49,30 @@ export type MailTimeTask = {
     isSent: boolean;
     isCancelled: boolean;
     isFailed: boolean;
+    isSending?: boolean;
+    sendingAt?: number;
     template?: string | false;
     transport: number;
     concatSubject?: string | false;
     mailOptions: MailTimeMailOptions[];
 };
+export type MailTimeIterateOptions = {
+    limit?: number;
+    sendingTimeout?: number;
+};
 export type CustomQueue = {
     ping: () => Promise<MailTimePingResult>;
-    iterate: () => Promise<void> | void;
+    iterate: (opts?: MailTimeIterateOptions) => Promise<void> | void;
     getPendingTo: (to: string, sendAt: number) => Promise<MailTimeTask | object | null>;
     push: (email: MailTimeTask) => Promise<void> | void;
     cancel: (uuid: string) => Promise<boolean>;
     remove: (email: MailTimeTask | object) => Promise<boolean>;
     update: (email: MailTimeTask | object, updateObj: object) => Promise<boolean>;
     ready?: () => Promise<void>;
+};
+export type MailTimeRejectedRecipient = {
+    address: string;
+    error: string;
 };
 export type MailTimeMailOptions = {
     [key: string]: any;
@@ -69,6 +83,8 @@ export type MailTimeMailOptions = {
     text?: string | false;
     html?: string | false;
     subject?: string;
+    accepted?: string[];
+    rejected?: MailTimeRejectedRecipient[];
 };
 export type MailTimeOptions = {
     queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue;
@@ -88,6 +104,9 @@ export type MailTimeOptions = {
     concatDelay?: number;
     concatThrottling?: number;
     revolvingInterval?: number;
+    mode?: "one" | "batch";
+    concurrency?: number;
+    sendingTimeout?: number;
     template?: string;
     prefix?: string;
     debug?: boolean;
@@ -95,6 +114,12 @@ export type MailTimeOptions = {
     onError?: (error: unknown, email: MailTimeTask, details?: object) => void;
     onSent?: (email: MailTimeTask, details?: object) => void;
 };
+/**
+ * @typedef {import('./presets.js').MailTimePresetName} MailTimePresetName
+ */
+/**
+ * @typedef {import('./presets.js').MailTimePresetConfig} MailTimePresetConfig
+ */
 /**
  * @typedef {{ status: string, code: number, statusCode: number, error?: unknown }} MailTimePingResult
  */
@@ -111,19 +136,25 @@ export type MailTimeOptions = {
  * @typedef {{ [key: string]: any, type?: 'mongo' | 'redis' | 'postgres', client?: MailTimeStorageClient, db?: MailTimeMongoDb, prefix?: string, resetOnInit?: boolean }} MailTimeJoSkAdapterOptions
  */
 /**
- * @typedef {{ [key: string]: any, adapter: MailTimeJoSkAdapterOptions | object, debug?: boolean, autoClear?: boolean, zombieTime?: number, minRevolvingDelay?: number, maxRevolvingDelay?: number, execute?: 'batch' | 'one', lockOwnerId?: string, resetOnInit?: boolean }} MailTimeJoSkOptions
+ * @typedef {{ [key: string]: any, adapter: MailTimeJoSkAdapterOptions | object, debug?: boolean, autoClear?: boolean, zombieTime?: number, minRevolvingDelay?: number, maxRevolvingDelay?: number, execute?: 'batch' | 'one', concurrency?: number, lockOwnerId?: string, resetOnInit?: boolean, onError?: (title: string, details: object) => void }} MailTimeJoSkOptions
  */
 /**
- * @typedef {{ uuid: string, to?: string | string[], tries: number, sendAt: number, isSent: boolean, isCancelled: boolean, isFailed: boolean, template?: string | false, transport: number, concatSubject?: string | false, mailOptions: MailTimeMailOptions[] }} MailTimeTask
+ * @typedef {{ uuid: string, to?: string | string[], tries: number, sendAt: number, isSent: boolean, isCancelled: boolean, isFailed: boolean, isSending?: boolean, sendingAt?: number, template?: string | false, transport: number, concatSubject?: string | false, mailOptions: MailTimeMailOptions[] }} MailTimeTask
  */
 /**
- * @typedef {{ ping: () => Promise<MailTimePingResult>, iterate: () => Promise<void> | void, getPendingTo: (to: string, sendAt: number) => Promise<MailTimeTask | object | null>, push: (email: MailTimeTask) => Promise<void> | void, cancel: (uuid: string) => Promise<boolean>, remove: (email: MailTimeTask | object) => Promise<boolean>, update: (email: MailTimeTask | object, updateObj: object) => Promise<boolean>, ready?: () => Promise<void> }} CustomQueue
+ * @typedef {{ limit?: number, sendingTimeout?: number }} MailTimeIterateOptions
  */
 /**
- * @typedef {{ [key: string]: any, to: string | string[], sendAt?: Date | number, template?: string, concatSubject?: string, text?: string | false, html?: string | false, subject?: string }} MailTimeMailOptions
+ * @typedef {{ ping: () => Promise<MailTimePingResult>, iterate: (opts?: MailTimeIterateOptions) => Promise<void> | void, getPendingTo: (to: string, sendAt: number) => Promise<MailTimeTask | object | null>, push: (email: MailTimeTask) => Promise<void> | void, cancel: (uuid: string) => Promise<boolean>, remove: (email: MailTimeTask | object) => Promise<boolean>, update: (email: MailTimeTask | object, updateObj: object) => Promise<boolean>, ready?: () => Promise<void> }} CustomQueue
  */
 /**
- * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
+ * @typedef {{ address: string, error: string }} MailTimeRejectedRecipient
+ */
+/**
+ * @typedef {{ [key: string]: any, to: string | string[], sendAt?: Date | number, template?: string, concatSubject?: string, text?: string | false, html?: string | false, subject?: string, accepted?: string[], rejected?: MailTimeRejectedRecipient[] }} MailTimeMailOptions
+ */
+/**
+ * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
  */
 /** Class of MailTime */
 export class MailTime {
@@ -146,14 +177,14 @@ export class MailTime {
     onSent: (email: MailTimeTask, details?: object) => void;
     onError: (error: unknown, email: MailTimeTask, details?: object) => void;
     revolvingInterval: number;
-    __isDestroyed: boolean;
-    __readyPromise: Promise<MailTime>;
-    __schedulerTimer: Promise<string> | null;
+    mode: "one" | "batch";
+    concurrency: number;
+    sendingTimeout: number;
     failsToNext: number;
     strategy: "backup" | "balancer";
     transports: MailTimeTransport[];
     transport: number;
-    from: boolean | (() => string | ((transport: MailTimeTransport) => string) | undefined) | ((transport: MailTimeTransport) => string);
+    from: boolean | ((transport: MailTimeTransport) => string);
     concatEmails: boolean;
     concatSubject: string;
     concatDelimiter: string;
@@ -167,8 +198,10 @@ export class MailTime {
         minRevolvingDelay?: number;
         maxRevolvingDelay?: number;
         execute?: "batch" | "one";
+        concurrency?: number;
         lockOwnerId?: string;
         resetOnInit?: boolean;
+        onError?: (title: string, details: object) => void;
     } | undefined;
     scheduler: JoSk | undefined;
     /**
@@ -195,6 +228,14 @@ export class MailTime {
      * @returns {boolean}
      */
     destroy(): boolean;
+    /**
+     * @async
+     * @memberOf MailTime
+     * @name drain
+     * @description Wait for all in-flight email send attempts to settle
+     * @returns {Promise<void>}
+     */
+    drain(): Promise<void>;
     /**
      * @memberOf MailTime
      * @name send
@@ -229,76 +270,12 @@ export class MailTime {
      * @returns {Promise<boolean>} returns `true` if cancelled or `false` if not found was sent or was cancelled previously
      */
     cancelMail(uuid: string | Promise<string>): Promise<boolean>;
-    /**
-     * @async
-     * @memberOf MailTime
-     * @name ___handleError
-     * @description Handle runtime errors and pass to `onError` callback
-     * @param {MailTimeTask} task - Email task record from Storage
-     * @param {unknown} error - Error String/Object/Error
-     * @param {object} info - Info object returned from nodemailer
-     * @returns {Promise<void 0>}
-     */
-    ___handleError(task: MailTimeTask, error: unknown, info: object): Promise<void>;
-    /**
-     * @async
-     * @memberOf MailTime
-     * @name ___addToQueue
-     * @description Prepare task's object and push to the queue
-     * @param {{ sendAt: number, template: string | false, mailOptions: MailTimeMailOptions, concatSubject: string | false }} opts - Email options
-     * @returns {Promise<string>} message uuid
-     */
-    ___addToQueue(opts: {
-        sendAt: number;
-        template: string | false;
-        mailOptions: MailTimeMailOptions;
-        concatSubject: string | false;
-    }): Promise<string>;
-    /**
-     * @memberOf MailTime
-     * @name ___render
-     * @description Render templates
-     * @param {string} _string - Template with Mustache-like placeholders
-     * @param {Record<string, any>} replacements - Blaze/Mustache-like helpers Object
-     * @returns {string}
-     */
-    ___render(_string: string, replacements: Record<string, any>): string;
-    /**
-     * @memberOf MailTime
-     * @name ___compileMailOpts
-     * @description Run various checks, compile options, and render template
-     * @param {MailTimeTransport} transport - Current transport
-     * @param {MailTimeTask} task - Email task record from Storage
-     * @returns {MailTimeMailOptions}
-     */
-    ___compileMailOpts(transport: MailTimeTransport, task: MailTimeTask): MailTimeMailOptions;
-    /**
-     * @async
-     * @memberOf MailTime
-     * @name ___send
-     * @description send email using nodemailer's transport
-     * @param {MailTimeTask} task - email's task object from Storage
-     * @returns {Promise<void 0>}
-     */
-    ___send(task: MailTimeTask): Promise<void>;
-    /**
-     * @memberOf MailTime
-     * @name ___iterate
-     * @description Iterate over queued tasks
-     * @returns {Promise}
-     */
-    ___iterate(): Promise<any>;
-    /**
-     * @async
-     * @memberOf MailTime
-     * @name ___ready
-     * @description Internal storage readiness gate
-     * @returns {Promise<MailTime>}
-     */
-    ___ready(): Promise<MailTime>;
 }
 import { MongoQueue } from './adapters/mongo.js';
 import { RedisQueue } from './adapters/redis.js';
 import { PostgresQueue } from './adapters/postgres.js';
+import { mailTimePreset } from './presets.js';
+import { presets } from './presets.js';
+import { presetNames } from './presets.js';
 import { JoSk } from 'josk';
-export { MongoQueue, RedisQueue, PostgresQueue };
+export { MongoQueue, RedisQueue, PostgresQueue, mailTimePreset, presets, presetNames };
