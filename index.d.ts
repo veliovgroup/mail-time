@@ -174,7 +174,6 @@ export class MailTime {
     constructor(opts: MailTimeOptions);
     queue: MongoQueue | RedisQueue | PostgresQueue | CustomQueue;
     debug: boolean;
-    _debug: (...args: any[]) => void;
     type: "server" | "client";
     prefix: string;
     maxTries: number;
@@ -193,7 +192,8 @@ export class MailTime {
     transport: number;
     verifyTransports: boolean;
     from: boolean | ((transport: MailTimeTransport) => string);
-    concatSubject: any;
+    /** @type {string} */
+    concatSubject: string;
     concatEmails: boolean;
     concatDelimiter: string;
     concatDelay: number;
@@ -218,7 +218,7 @@ export class MailTime {
      * @name ping
      * @description Check package readiness and connection to Storage
      * @returns {Promise<MailTimePingResult>}
-     * @throws {mix}
+     * @throws {Error}
      */
     ping(): Promise<MailTimePingResult>;
     /**
@@ -263,12 +263,14 @@ export class MailTime {
      */
     sendMail(opts?: MailTimeMailOptions): Promise<string>;
     /**
+     * @async
      * @memberOf MailTime
      * @name cancel
      * @description alias of `cancelMail`
+     * @param {string|Promise<string>} uuid - uuid returned from `send` or `sendMail`
      * @returns {Promise<boolean>} returns `true` if cancelled or `false` if not found was sent or was cancelled previously
      */
-    cancel(uuid: any): Promise<boolean>;
+    cancel(uuid: string | Promise<string>): Promise<boolean>;
     /**
      * @async
      * @memberOf MailTime

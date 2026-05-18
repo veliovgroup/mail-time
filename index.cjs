@@ -353,7 +353,7 @@ class MongoQueue {
   /**
    * @memberOf MongoQueue
    * @name iterate
-   * @description iterate over queued tasks passing to `mailTimeInstance.___send` method
+   * @description iterate over queued tasks passing each to `mailTimeInstance.___dispatch` (the bounded send pool)
    * @param {{ limit?: number, sendingTimeout?: number }} [opts] - iteration options
    * @returns {Promise<void>}
    */
@@ -721,7 +721,7 @@ class RedisQueue {
   /**
    * @memberOf RedisQueue
    * @name iterate
-   * @description iterate over queued tasks passing to `mailTimeInstance.___send` method
+   * @description iterate over queued tasks passing each to `mailTimeInstance.___dispatch` (the bounded send pool)
    * @param {{ limit?: number, sendingTimeout?: number }} [opts] - iteration options
    * @returns {Promise<void>}
    */
@@ -1221,7 +1221,7 @@ class PostgresQueue {
   /**
    * @memberOf PostgresQueue
    * @name iterate
-   * @description iterate over queued tasks passing to `mailTimeInstance.___send` method
+   * @description iterate over queued tasks passing each to `mailTimeInstance.___dispatch` (the bounded send pool). Postgres reads buffer the full result, so each tick is bounded by `opts.limit` (or 1000 when caller passes `Infinity` / no limit) to keep memory predictable; high-throughput deployments should shard prefixes.
    * @param {{ limit?: number, sendingTimeout?: number }} [opts] - iteration options
    * @returns {Promise<void>}
    */
@@ -1236,10 +1236,9 @@ class PostgresQueue {
     const sendingTimeout = (opts && typeof opts.sendingTimeout === 'number' && opts.sendingTimeout > 0)
       ? opts.sendingTimeout
       : 300000;
-    const requestedLimit = (opts && typeof opts.limit === 'number' && Number.isFinite(opts.limit) && opts.limit > 0)
-      ? Math.floor(opts.limit)
-      : 100;
-    const limit = Math.max(1, Math.min(requestedLimit, 100));
+    const limit = (opts && typeof opts.limit === 'number' && Number.isFinite(opts.limit) && opts.limit > 0)
+      ? Math.max(1, Math.floor(opts.limit))
+      : 1000;
 
     try {
       const res = await this.client.query(`SELECT id, uuid, to_address, tries, send_at, is_sent, is_cancelled, is_failed,
@@ -1866,7 +1865,7 @@ class MailTime {
     }
 
     this.debug = opts.debug === true;
-    this._debug = (...args) => {
+    this.__debug = (...args) => {
       debug(this.debug, `[${this.prefix || 'default'}]`, ...args);
     };
 
@@ -1922,6 +1921,7 @@ class MailTime {
 
     this.queue.mailTimeInstance = this;
 
+    /** @type {string} */
     this.concatSubject = (typeof opts.concatSubject === 'string' && opts.concatSubject) ? opts.concatSubject : 'Multiple notifications';
     if (opts.concatEmails === true) {
       this.concatEmails = true;
@@ -1943,16 +1943,16 @@ class MailTime {
       this.concatDelay = 60000;
     }
 
-    this._debug('DEBUG ON {debug: true}');
-    this._debug(`INITIALIZING [type: ${this.type}]`);
-    this._debug(`INITIALIZING [strategy: ${this.strategy}]`);
-    this._debug(`INITIALIZING [josk.adapter.type: ${opts?.josk?.adapter?.type || 'custom'}]`);
-    this._debug(`INITIALIZING [prefix: ${this.prefix}]`);
-    this._debug(`INITIALIZING [retries: ${this.maxTries - 1}]`);
-    this._debug(`INITIALIZING [failsToNext: ${this.failsToNext}]`);
-    this._debug(`INITIALIZING [mode: ${this.mode}]`);
-    this._debug(`INITIALIZING [concurrency: ${this.concurrency}]`);
-    this._debug(`INITIALIZING [sendingTimeout: ${this.sendingTimeout}]`);
+    this.__debug('DEBUG ON {debug: true}');
+    this.__debug(`INITIALIZING [type: ${this.type}]`);
+    this.__debug(`INITIALIZING [strategy: ${this.strategy}]`);
+    this.__debug(`INITIALIZING [josk.adapter.type: ${opts?.josk?.adapter?.type || 'custom'}]`);
+    this.__debug(`INITIALIZING [prefix: ${this.prefix}]`);
+    this.__debug(`INITIALIZING [retries: ${this.maxTries - 1}]`);
+    this.__debug(`INITIALIZING [failsToNext: ${this.failsToNext}]`);
+    this.__debug(`INITIALIZING [mode: ${this.mode}]`);
+    this.__debug(`INITIALIZING [concurrency: ${this.concurrency}]`);
+    this.__debug(`INITIALIZING [sendingTimeout: ${this.sendingTimeout}]`);
 
     /** SERVER-SPECIFIC CHECKS AND CONFIG */
     if (this.type === 'server') {
@@ -2043,10 +2043,10 @@ class MailTime {
    * @name ping
    * @description Check package readiness and connection to Storage
    * @returns {Promise<MailTimePingResult>}
-   * @throws {mix}
+   * @throws {Error}
    */
   async ping() {
-    this._debug('[ping]');
+    this.__debug('[ping]');
     if (this.scheduler) {
       const schedulerPing = await this.scheduler.ping();
       if (schedulerPing.status !== 'OK') {
@@ -2064,7 +2064,7 @@ class MailTime {
    * @returns {Promise<MailTime>}
    */
   async ready() {
-    this._debug('[ready]');
+    this.__debug('[ready]');
     return await this.__readyPromise;
   }
 
@@ -2075,7 +2075,7 @@ class MailTime {
    * @returns {boolean}
    */
   destroy() {
-    this._debug('[destroy]');
+    this.__debug('[destroy]');
     if (this.__isDestroyed) {
       return false;
     }
@@ -2095,7 +2095,7 @@ class MailTime {
    * @returns {Promise<void>}
    */
   async drain() {
-    this._debug('[drain]');
+    this.__debug('[drain]');
     if (this.__pool) {
       await this.__pool.drain();
     }
@@ -2109,7 +2109,7 @@ class MailTime {
    * @returns {Promise<string>} uuid of the email
    */
   async send(opts) {
-    this._debug('[send]', opts);
+    this.__debug('[send]', opts);
     return await this.sendMail(opts);
   }
 
@@ -2123,7 +2123,7 @@ class MailTime {
    * @throws {Error}
    */
   async sendMail(opts = {}) {
-    this._debug('[sendMail]', opts);
+    this.__debug('[sendMail]', opts);
     if (!opts.html && !opts.text) {
       throw new Error('[mail-time] [sendMail] `html` nor `text` field is presented, at least one of those fields is required');
     }
@@ -2178,13 +2178,15 @@ class MailTime {
   }
 
   /**
+   * @async
    * @memberOf MailTime
    * @name cancel
    * @description alias of `cancelMail`
+   * @param {string|Promise<string>} uuid - uuid returned from `send` or `sendMail`
    * @returns {Promise<boolean>} returns `true` if cancelled or `false` if not found was sent or was cancelled previously
    */
   async cancel(uuid) {
-    this._debug('[cancel]', uuid);
+    this.__debug('[cancel]', uuid);
     return await this.cancelMail(uuid);
   }
 
@@ -2197,7 +2199,7 @@ class MailTime {
    * @returns {Promise<boolean>} returns `true` if cancelled or `false` if not found was sent or was cancelled previously
    */
   async cancelMail(uuid) {
-    this._debug('[cancelMail]', uuid);
+    this.__debug('[cancelMail]', uuid);
     const resolved = (uuid && typeof uuid.then === 'function') ? await uuid : uuid;
     return await this.queue.cancel(resolved);
   }
@@ -2214,7 +2216,7 @@ class MailTime {
    * @returns {Promise<void 0>}
    */
   async ___handleError(task, error, info) {
-    this._debug('[private handleError]', { task, error, info });
+    this.__debug('[private handleError]', { task, error, info });
     if (!task) {
       return;
     }
@@ -2237,7 +2239,7 @@ class MailTime {
         });
       }
 
-      this._debug(`[private handleError] Giving up trying send email after ${task.tries} attempts to: `, task.mailOptions[0].to, error);
+      this.__debug(`[private handleError] Giving up trying send email after ${task.tries} attempts to: `, task.mailOptions[0].to, error);
       this.onError(error, task, info);
       return;
     }
@@ -2255,7 +2257,7 @@ class MailTime {
       transport: transportIndex,
     });
 
-    this._debug(`[private handleError] Next re-send attempt at ${new Date(Date.now() + this.retryDelay)}: #${task.tries}/${this.maxTries}, transport #${transportIndex} to: `, task.mailOptions[0].to, error);
+    this.__debug(`[private handleError] Next re-send attempt at ${new Date(Date.now() + this.retryDelay)}: #${task.tries}/${this.maxTries}, transport #${transportIndex} to: `, task.mailOptions[0].to, error);
   }
 
   /**
@@ -2268,7 +2270,7 @@ class MailTime {
    * @returns {Promise<string>} message uuid
    */
   async ___addToQueue(opts) {
-    this._debug('[private addToQueue]', opts);
+    this.__debug('[private addToQueue]', opts);
     const task = {
       uuid: node_crypto.randomUUID(),
       tries: 0,
@@ -2486,7 +2488,7 @@ class MailTime {
       return;
     }
     if (this.__inFlight.has(task.uuid)) {
-      this._debug('[private dispatch] already in-flight on this instance, skipping', task.uuid);
+      this.__debug('[private dispatch] already in-flight on this instance, skipping', task.uuid);
       return;
     }
     this.__inFlight.add(task.uuid);
@@ -2509,7 +2511,7 @@ class MailTime {
    * @returns {Promise<void 0>}
    */
   async ___send(task) {
-    this._debug('[private send]', task);
+    this.__debug('[private send]', task);
     try {
       if (!task || task.isSent === true || task.isFailed === true || task.isCancelled === true) {
         return;
@@ -2530,7 +2532,7 @@ class MailTime {
       }
 
       if (!isClaimed) {
-        this._debug('[private send] [queue.update] Stale claim, skipping', task.uuid);
+        this.__debug('[private send] [queue.update] Stale claim, skipping', task.uuid);
         return;
       }
 
@@ -2557,7 +2559,7 @@ class MailTime {
 
       await new Promise((resolve) => {
         transport.sendMail(compiledOpts, async (error, info) => {
-          this._debug('[private sendNow] [sending]', { error, info });
+          this.__debug('[private send] [sending]', { error, info });
           try {
             if (error) {
               await this.___handleError(task, error, info);
@@ -2586,7 +2588,7 @@ class MailTime {
             }
 
             if (isFullyDelivered) {
-              this._debug(`email successfully sent, attempts: #${task.tries}, transport #${transportIndex} to: `, compiledOpts.to);
+              this.__debug(`email successfully sent, attempts: #${task.tries}, transport #${transportIndex} to: `, compiledOpts.to);
 
               task.isSent = true;
               task.isSending = false;
@@ -2632,7 +2634,7 @@ class MailTime {
                 }
               }
               const partialError = new Error(`Recipients rejected after ${task.tries} attempts: ${rejectedAddrs.join(', ')}`);
-              this._debug('[private sendNow] Partial delivery exhausted retries; rejected: ', rejectedAddrs);
+              this.__debug('[private send] Partial delivery exhausted retries; rejected: ', rejectedAddrs);
               this.onError(partialError, task, info);
               return;
             }
@@ -2644,7 +2646,7 @@ class MailTime {
               sendAt: nextSendAt,
               mailOptions: task.mailOptions,
             });
-            this._debug(`[private sendNow] Partial delivery, next attempt at ${new Date(nextSendAt)}: #${task.tries}/${this.maxTries} for remaining recipients`);
+            this.__debug(`[private send] Partial delivery, next attempt at ${new Date(nextSendAt)}: #${task.tries}/${this.maxTries} for remaining recipients`);
           } finally {
             resolve();
           }
@@ -2664,7 +2666,7 @@ class MailTime {
    * @returns {Promise<void>|void}
    */
   async ___iterate() {
-    this._debug('[private iterate]');
+    this.__debug('[private iterate]');
     if (this.__isDestroyed) {
       return;
     }
@@ -2713,7 +2715,7 @@ class MailTime {
    * @returns {Promise<void>}
    */
   async ___verifyTransports() {
-    this._debug('[private verifyTransports]');
+    this.__debug('[private verifyTransports]');
     const results = await Promise.all(this.transports.map(async (transport, index) => {
       if (!transport || typeof transport.verify !== 'function') {
         return { index, ok: true };
