@@ -21,9 +21,9 @@ export class RedisQueue {
      */
     constructor(opts: RedisQueueOption);
     name: string;
-    prefix: string;
-    uniqueName: string;
     client: RedisClient;
+    prefix: any;
+    uniqueName: string | undefined;
     /**
      * @async
      * @memberOf RedisQueue
@@ -44,9 +44,13 @@ export class RedisQueue {
      * @memberOf RedisQueue
      * @name iterate
      * @description iterate over queued tasks passing to `mailTimeInstance.___send` method
+     * @param {{ limit?: number, sendingTimeout?: number }} [opts] - iteration options
      * @returns {Promise<void>}
      */
-    iterate(): Promise<void>;
+    iterate(opts?: {
+        limit?: number;
+        sendingTimeout?: number;
+    }): Promise<void>;
     /**
      * @async
      * @memberOf RedisQueue
@@ -88,26 +92,10 @@ export class RedisQueue {
      * @async
      * @memberOf RedisQueue
      * @name update
-     * @description remove task from queue
+     * @description update task in queue
      * @param task {object} - task's object
      * @param updateObj {object} - fields with new values to update
      * @returns {Promise<boolean>} returns `true` if updated or `false` if not found or no changes was made
      */
     update(task: object, updateObj: object): Promise<boolean>;
-    /**
-     * @memberOf RedisQueue
-     * @name __getKey
-     * @description helper to generate scoped key
-     * @param uuid {string} - letter's uuid
-     * @param type {string} - "letter" or "sendat" or "concatletter"
-     * @returns {string} returns key used by Redis
-     */
-    __getKey(uuid: string, type?: string): string;
-    /**
-     * @memberOf RedisQueue
-     * @name __keyTypes
-     * @description list of supported key type
-     * @returns {string} returns key used by Redis
-     */
-    __keyTypes: string[];
 }

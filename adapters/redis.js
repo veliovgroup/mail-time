@@ -1,4 +1,4 @@
-import { logError } from '../helpers.js';
+import { debug, logError } from '../helpers.js';
 
 /**
  * @typedef {object} RedisClient
@@ -19,16 +19,38 @@ import { logError } from '../helpers.js';
  * @property {string} [prefix]
  */
 
+const KEY_TYPES = new Set(['letter', 'sendat', 'concatletter']);
+const DEFAULT_PREFIX = 'default';
+
 const isSendClaimUpdate = (updateObj) => {
-  return updateObj.isSent === true && typeof updateObj.tries === 'number';
+  return updateObj.isSending === true && typeof updateObj.tries === 'number';
 };
 
-const canClaimTask = (currentTask, task) => {
-  return currentTask &&
-    currentTask.isSent !== true &&
-    currentTask.isFailed !== true &&
-    currentTask.isCancelled !== true &&
-    currentTask.tries === task.tries;
+const canClaimTask = (currentTask, task, now, sendingTimeout) => {
+  if (!currentTask) {
+    return false;
+  }
+  if (currentTask.isSent === true || currentTask.isFailed === true || currentTask.isCancelled === true) {
+    return false;
+  }
+  if (currentTask.tries !== task.tries) {
+    return false;
+  }
+  if (currentTask.isSending === true) {
+    const sendingAt = typeof currentTask.sendingAt === 'number' ? currentTask.sendingAt : 0;
+    if (sendingAt > now - sendingTimeout) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const parseUuidFromKey = (key, uniqueName) => {
+  const prefix = `${uniqueName}:sendat:`;
+  if (!key.startsWith(prefix)) {
+    return null;
+  }
+  return key.slice(prefix.length);
 };
 
 /** Class representing Redis Queue for MailTime */
@@ -39,7 +61,7 @@ class RedisQueue {
    */
   constructor (opts) {
     this.name = 'redis-queue';
-    if (!opts || typeof opts !== 'object' || opts === null) {
+    if (!opts || typeof opts !== 'object') {
       throw new TypeError('[mail-time] Configuration object must be passed into RedisQueue constructor');
     }
 
@@ -47,34 +69,28 @@ class RedisQueue {
       throw new Error('[mail-time] [RedisQueue] required {client} option is missing, e.g. returned from `redis.createClient()` or `redis.createCluster()` method');
     }
 
-    this.prefix = (typeof opts.prefix === 'string') ? opts.prefix : 'default';
-    this.uniqueName = `mailtime:${this.prefix}`;
     this.client = opts.client;
+    if (typeof opts.prefix === 'string') {
+      this.__applyPrefix(opts.prefix);
+    }
+  }
 
-    // 3 types of keys are stored in Redis:
-    // 'letter' - JSON with email details
-    // 'sendat' - Timestamp used to scan/find/iterate over scheduled emails
-    // 'concatletter' — uuid of "pending" email for concatenation used when {concatEmails: true}
+  /** @internal */
+  __applyPrefix(prefix) {
+    this.prefix = prefix;
+    this.uniqueName = `mailtime:${prefix}`;
+  }
 
-    // Stored JSON structure:
-    // to          {string|[string]}
-    // uuid        {string}
-    // tries       {number}  - qty of send attempts
-    // sendAt      {number}  - When letter should be sent
-    // isSent      {boolean} - Email status
-    // isCancelled {boolean} - `true` if email was cancelled before it was sent
-    // isFailed    {boolean} - `true` if email has failed to send
-    // template    {string}  - Template for this email
-    // transport   {number}  - Last used transport
-    // concatSubject {string|boolean} - Email concatenation subject
-    // ---
-    // mailOptions         {[object]}  - Array of nodeMailer's `mailOptions`
-    // mailOptions.to      {string|[string]} - [REQUIRED]
-    // mailOptions.from    {string}
-    // mailOptions.text    {string|boolean}
-    // mailOptions.html    {string}
-    // mailOptions.subject {string}
-    // mailOptions.Other nodeMailer `sendMail` options...
+  /** @internal */
+  __ensurePrefix() {
+    if (typeof this.prefix !== 'string') {
+      this.__applyPrefix(this.mailTimeInstance?.prefix || DEFAULT_PREFIX);
+    }
+  }
+
+  /** @internal */
+  __debug(...args) {
+    debug(this.mailTimeInstance?.debug === true, `[${this.name}]`, ...args);
   }
 
   /**
@@ -85,6 +101,8 @@ class RedisQueue {
    * @returns {Promise<void 0>}
    */
   async ready() {
+    this.__ensurePrefix();
+    this.__debug('[ready]');
     return void 0;
   }
 
@@ -96,6 +114,7 @@ class RedisQueue {
    * @returns {Promise<object>}
    */
   async ping() {
+    this.__debug('[ping]');
     if (!this.mailTimeInstance) {
       return {
         status: 'Service Unavailable',
@@ -119,7 +138,7 @@ class RedisQueue {
         status: 'Internal Server Error',
         code: 500,
         statusCode: 500,
-        error: pingError
+        error: pingError,
       };
     }
 
@@ -127,7 +146,7 @@ class RedisQueue {
       status: 'Service Unavailable',
       code: 503,
       statusCode: 503,
-      error: new Error('Service Unavailable')
+      error: new Error('Service Unavailable'),
     };
   }
 
@@ -135,25 +154,55 @@ class RedisQueue {
    * @memberOf RedisQueue
    * @name iterate
    * @description iterate over queued tasks passing to `mailTimeInstance.___send` method
+   * @param {{ limit?: number, sendingTimeout?: number }} [opts] - iteration options
    * @returns {Promise<void>}
    */
-  async iterate() {
+  async iterate(opts) {
+    this.__debug('[iterate]', opts);
     try {
       const now = Date.now();
+      const sendingTimeout = (opts && typeof opts.sendingTimeout === 'number' && opts.sendingTimeout > 0)
+        ? opts.sendingTimeout
+        : 300000;
+      const limit = (opts && typeof opts.limit === 'number' && Number.isFinite(opts.limit) && opts.limit > 0)
+        ? Math.floor(opts.limit)
+        : 0;
+      let dispatched = 0;
+
+      const matchPattern = this.__getKey('*', 'sendat');
       const cursor = this.client.scanIterator({
         TYPE: 'string',
-        MATCH: this.__getKey('*', 'sendat'),
+        MATCH: matchPattern,
         COUNT: 9999,
       });
 
+      outer:
       for await (const cursorValue of cursor) {
         const sendatKeys = Array.isArray(cursorValue) ? cursorValue : [cursorValue];
         for (const sendatKey of sendatKeys) {
-          if (parseInt(await this.client.get(sendatKey)) <= now) {
-            const taskJSON = await this.client.get(this.__getKey(sendatKey.split(':')[3]));
-            if (taskJSON) {
-              await this.mailTimeInstance.___send(JSON.parse(taskJSON));
+          const raw = await this.client.get(sendatKey);
+          if (raw === null || parseInt(raw, 10) > now) {
+            continue;
+          }
+          const uuid = parseUuidFromKey(sendatKey, this.uniqueName);
+          if (!uuid) {
+            continue;
+          }
+          const taskJSON = await this.client.get(this.__getKey(uuid));
+          if (!taskJSON) {
+            continue;
+          }
+          const candidate = JSON.parse(taskJSON);
+          if (candidate.isSending === true) {
+            const sendingAt = typeof candidate.sendingAt === 'number' ? candidate.sendingAt : 0;
+            if (sendingAt > now - sendingTimeout) {
+              continue;
             }
+          }
+          await this.mailTimeInstance.___dispatch(candidate);
+          dispatched++;
+          if (limit > 0 && dispatched >= limit) {
+            break outer;
           }
         }
       }
@@ -172,24 +221,24 @@ class RedisQueue {
    * @returns {Promise<object|null>}
    */
   async getPendingTo(to, sendAt) {
+    this.__debug('[getPendingTo]', to, sendAt);
     if (typeof to !== 'string' || typeof sendAt !== 'number') {
       return null;
     }
 
     const concatKey = this.__getKey(to, 'concatletter');
-    let exists = await this.client.exists(concatKey);
-    if (!exists) {
-      return null;
-    }
-
     const uuid = await this.client.get(concatKey);
-    const letterKey = this.__getKey(uuid, 'letter');
-    exists = await this.client.exists(letterKey);
-    if (!exists) {
+    if (!uuid) {
       return null;
     }
 
-    const task = JSON.parse(await this.client.get(letterKey));
+    const letterKey = this.__getKey(uuid, 'letter');
+    const taskJSON = await this.client.get(letterKey);
+    if (!taskJSON) {
+      return null;
+    }
+
+    const task = JSON.parse(taskJSON);
     if (!task || task.isSent === true || task.isCancelled === true || task.isFailed === true || task.sendAt > sendAt) {
       return null;
     }
@@ -206,6 +255,7 @@ class RedisQueue {
    * @returns {Promise<void 0>}
    */
   async push(task) {
+    this.__debug('[push]', task?.uuid);
     if (!task || typeof task !== 'object') {
       return;
     }
@@ -214,11 +264,28 @@ class RedisQueue {
       task.sendAt = +task.sendAt;
     }
 
-    await this.client.set(this.__getKey(task.uuid, 'letter'), JSON.stringify(task));
-    await this.client.set(this.__getKey(task.uuid, 'sendat'), `${task.sendAt}`);
+    const letterKey = this.__getKey(task.uuid, 'letter');
+    const sendatKey = this.__getKey(task.uuid, 'sendat');
+    const taskJSON = JSON.stringify(task);
+
+    if (typeof this.client.multi === 'function') {
+      const multi = this.client.multi();
+      multi.set(letterKey, taskJSON);
+      multi.set(sendatKey, `${task.sendAt}`);
+      if (task.to) {
+        multi.set(this.__getKey(task.to, 'concatletter'), task.uuid, {
+          PXAT: task.sendAt - 128,
+        });
+      }
+      await multi.exec();
+      return;
+    }
+
+    await this.client.set(letterKey, taskJSON);
+    await this.client.set(sendatKey, `${task.sendAt}`);
     if (task.to) {
       await this.client.set(this.__getKey(task.to, 'concatletter'), task.uuid, {
-        PXAT: task.sendAt - 128
+        PXAT: task.sendAt - 128,
       });
     }
   }
@@ -232,18 +299,19 @@ class RedisQueue {
    * @returns {Promise<boolean>} returns `true` if cancelled or `false` if not found, was sent, or was cancelled previously
    */
   async cancel(uuid) {
+    this.__debug('[cancel]', uuid);
     if (typeof uuid !== 'string') {
       return false;
     }
 
     await this.client.del(this.__getKey(uuid, 'sendat'));
     const letterKey = this.__getKey(uuid, 'letter');
-    const exists = await this.client.exists(letterKey);
-    if (!exists) {
+    const taskJSON = await this.client.get(letterKey);
+    if (!taskJSON) {
       return false;
     }
 
-    const task = JSON.parse(await this.client.get(letterKey));
+    const task = JSON.parse(taskJSON);
     if (!task || task.isSent === true || task.isCancelled === true) {
       return false;
     }
@@ -266,6 +334,7 @@ class RedisQueue {
    * @returns {Promise<boolean>} returns `true` if removed or `false` if not found
    */
   async remove(task) {
+    this.__debug('[remove]', task?.uuid);
     if (!task || typeof task !== 'object' || typeof task.uuid !== 'string') {
       return false;
     }
@@ -276,13 +345,11 @@ class RedisQueue {
       return false;
     }
 
-    await this.client.del([
-      letterKey,
-      this.__getKey(task.uuid, 'sendat'),
-    ]);
+    const keysToDelete = [letterKey, this.__getKey(task.uuid, 'sendat')];
     if (task.to) {
-      await this.client.del(this.__getKey(task.to, 'concatletter'));
+      keysToDelete.push(this.__getKey(task.to, 'concatletter'));
     }
+    await this.client.del(keysToDelete);
     return true;
   }
 
@@ -290,12 +357,13 @@ class RedisQueue {
    * @async
    * @memberOf RedisQueue
    * @name update
-   * @description remove task from queue
+   * @description update task in queue
    * @param task {object} - task's object
    * @param updateObj {object} - fields with new values to update
    * @returns {Promise<boolean>} returns `true` if updated or `false` if not found or no changes was made
    */
   async update(task, updateObj) {
+    this.__debug('[update]', task?.uuid);
     if (!task || typeof task !== 'object' || typeof task.uuid !== 'string' || !updateObj || typeof updateObj !== 'object') {
       return false;
     }
@@ -303,6 +371,8 @@ class RedisQueue {
     const letterKey = this.__getKey(task.uuid, 'letter');
     const sendatKey = this.__getKey(task.uuid, 'sendat');
     const isClaim = isSendClaimUpdate(updateObj);
+    const now = isClaim && typeof updateObj.sendingAt === 'number' ? updateObj.sendingAt : Date.now();
+    const sendingTimeout = this.mailTimeInstance?.sendingTimeout || 300000;
 
     try {
       if (isClaim && typeof this.client.watch === 'function' && typeof this.client.multi === 'function') {
@@ -314,7 +384,7 @@ class RedisQueue {
         }
 
         const currentTask = JSON.parse(taskJSON);
-        if (!canClaimTask(currentTask, task)) {
+        if (!canClaimTask(currentTask, task, now, sendingTimeout)) {
           await this.client.unwatch?.();
           return false;
         }
@@ -338,7 +408,7 @@ class RedisQueue {
       }
 
       const currentTask = JSON.parse(taskJSON);
-      if (isClaim && !canClaimTask(currentTask, task)) {
+      if (isClaim && !canClaimTask(currentTask, task, now, sendingTimeout)) {
         return false;
       }
 
@@ -357,29 +427,22 @@ class RedisQueue {
     }
   }
 
-
   /**
+   * @internal
    * @memberOf RedisQueue
    * @name __getKey
    * @description helper to generate scoped key
-   * @param uuid {string} - letter's uuid
+   * @param uuid {string} - letter's uuid (or "to" address for `concatletter` keys)
    * @param type {string} - "letter" or "sendat" or "concatletter"
    * @returns {string} returns key used by Redis
    */
   __getKey(uuid, type = 'letter') {
-    if (!this.__keyTypes.includes(type)) {
+    if (!KEY_TYPES.has(type)) {
       throw new Error(`[mail-time] [RedisQueue] [__getKey] unsupported key "${type}" passed into the second argument`);
     }
+    this.__ensurePrefix();
     return `${this.uniqueName}:${type}:${uuid}`;
   }
-
-  /**
-   * @memberOf RedisQueue
-   * @name __keyTypes
-   * @description list of supported key type
-   * @returns {string} returns key used by Redis
-   */
-  __keyTypes = ['letter', 'sendat', 'concatletter'];
 }
 
 export { RedisQueue };
