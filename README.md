@@ -1,82 +1,47 @@
-[![support](https://img.shields.io/badge/support-GitHub-white)](https://github.com/sponsors/dr-dimitru)
-[![support](https://img.shields.io/badge/support-PayPal-white)](https://paypal.me/veliovgroup)
-<a href="https://ostr.io/info/built-by-developers-for-developers?ref=github-mail-time-repo-top"><img src="https://ostr.io/apple-touch-icon-60x60.png" height="20"></a>
-<a href="https://meteor-files.com/?ref=github-mail-time-repo-top"><img src="https://meteor-files.com/apple-touch-icon-60x60.png" height="20"></a>
+[support](https://github.com/sponsors/dr-dimitru)
+[support](https://paypal.me/veliovgroup)
 
 # MailTime
 
-"Mail-Time" is NPM package for mail queue management. Build on top of the [`nodemailer`](https://github.com/nodemailer/nodemailer) package. Mail-Time made for single-server and horizontally scaled multi-server setups in mind.
+Bulletproof email queue for [horizontally scaled](#sending-emails-from-a-cluster) Node.js & Bun apps. Built on top of `[nodemailer](https://github.com/nodemailer/nodemailer)` and `[josk](https://github.com/veliovgroup/josk)`. Single runtime dependency, ESM + CJS, full TypeScript declarations.
 
-Every `MailTime` instance can have `type` configured as *Server* or *Client*. *Server* type of `MailTime` is great for creating an emailing micro-service app.
+`MailTime` runs in one of two modes:
 
-The main difference between *Server* and *Client* `type` is that the *Server* handles the queue and __sends__ email. While the *Client* only __adds__ emails into the queue.
+- `**server**` — drains the queue and sends emails via SMTP. The cluster-aware lease guarantees exactly one server sends each email even when many are running.
+- `**client**` — only enqueues emails. Use for app servers in a "dedicated mail micro-service" topology.
 
-## ToC
+Many clients + one or more servers coexist behind the same `prefix` in the same store.
 
-- [How it works?](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#how-it-works)
-  - [With single SMTP](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#single-point-of-failure)
-  - [With multiple SMTP](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#multiple-smtp-providers)
-  - [For horizontally-scaled apps](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#sending-emails-from-cluster-of-servers)
-- [Features](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#features)
-- [Installation](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#installation)
-- [Meteor.js usage](https://github.com/veliovgroup/mail-time/blob/master/docs/meteor.md)
-- [Usage examples](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#basic-usage)
-  - [Require/Import `mail-time`](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#1-require-package)
-  - [Create NodeMailer's transports](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#2-create-nodemailers-transports)
-  - [Initiate `mail-time`](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#3-initiate-mail-time)
-    - [Connect to Redis](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#3a-initiate-and-connect-to-redis)
-    - [Connect to MongoDB](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#3b-initiate-and-connect-to-mongodb)
-    - [Initiate as *Client* instance](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#3c-optionally-create-client-type-of-mailtime)
-  - [Initiate two `MailTime` instances within the single app](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#two-mailtime-instances-usage-example)
-  - [Use templates](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#passing-variables-to-the-template)
-  - Different storage configurations:
-    - [Use MongoDB for queue and scheduler](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#using-mongodb-for-queue-and-scheduler)
-    - [Use MongoDB for queue and Redis for scheduler](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#using-mongodb-for-queue-and-redis-for-scheduler)
-    - [Use Redis for queue and MongoDB for scheduler](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#using-redis-for-queue-and-mongodb-for-scheduler)
-    - [Use Redis for queue and scheduler](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#using-redis-for-queue-and-scheduler)
-- [API](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#api)
-  - [`new MailTime` *Constructor*](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#new-mailtimeopts-constructor)
-  - [`new RedisQueue` *Constructor*](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#new-redisqueueopts-constructor)
-  - [`new MongoQueue` *Constructor*](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#new-mongoqueueopts-constructor)
-  - [`.sendMail()`](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#sendmailopts)
-  - [`.cancelMail()`](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#cancelmailuuid)
-  - [`.ping()`](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#ping)
-  - [Default Template](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#static-mailtimetemplate)
-- [Custom Templates](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#template-example)
-- [Running tests](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#testing)
+## Features
 
-## Main features:
+- 🏢 **Horizontally scaled** — synchronize one queue across N processes/hosts/DCs.
+- 🔁 **Multi-SMTP rotation** — `backup` (failover) and `balancer` (round-robin) strategies.
+- 💪 **Built-in retries** — storage-backed retry with per-letter transport pinning.
+- 🎯 **Per-recipient retries** — when a multi-`to` send is partially rejected, only the un-accepted addresses are retried; delivered ones never see a duplicate.
+- 📮 **Email concatenation** — fold same-`to` emails arriving inside a window into one letter.
+- 🛢️ **Three first-party storages** — MongoDB, Redis, PostgreSQL. Plus a custom-adapter contract.
+- 📦 **Bun ≥ 1.1.0 & Node ≥ 20.9.0** — same code, both runtimes.
+- 👨‍💼 Ships with AI agent skills, install via `npm skills add`
+- 📐 **Hand-tuned ESM + CJS + TypeScript declarations**.
+- 🧪 **>95% Jest coverage** + mocha integration tests for every adapter.
 
-- 👨‍🔬 ~94% tests coverage;
-- 📦 Two simple dependencies, written from scratch for top performance;
-- 🏢 Synchronize email queue across multiple (horizontally scaled) servers;
-- 💪 Bulletproof design, built-in retries.
-
-## How does it work?
-
-Redundant solution for email transmission.
+## How it works
 
 ### Single point of failure
-
-Issue - mitigate a single point of failure via persistent queue and re-send attempts
 
 ```ascii
 |----------------|         |------|         |------------------|
 |  Other mailer  | ------> | SMTP | ------> |  ^_^ Happy user  |
 |----------------|         |------|         |------------------|
 
-The scheme above will work as long as SMTP service is available
-or connection between your server and SMPT is up. Once network
-failure occurs or SMTP service is down - users won't be happy
+The scheme above works only as long as SMTP is up.
 
 |----------------|  \ /    |------|         |------------------|
 |  Other mailer  | --X---> | SMTP | ------> | 0_o Disappointed |
 |----------------|  / \    |------|         |------------------|
                      ^- email lost in vain
 
-Single SMTP solution may work in case of network or other failures
-As long as MailTime has not received confirmation what email is sent
-it will keep the letter in the queue and retry to send it again
+MailTime keeps every letter in the queue until SMTP confirms delivery.
 
 |----------------|    /    |------|         |------------------|
 |   Mail Time    | --X---> | SMTP | ------> |  ^_^ Happy user  |
@@ -88,7 +53,7 @@ it will keep the letter in the queue and retry to send it again
 
 ### Multiple SMTP providers
 
-Rotate email transports by using multiple SMTP providers. *MailTime* support two strategies `backup` (*rotate when failed*) and `balancer` (*round-robin rotation*)
+`backup` falls over on failure; `balancer` round-robins:
 
 ```ascii
                            |--------|
@@ -104,18 +69,14 @@ Rotate email transports by using multiple SMTP providers. *MailTime* support two
                            |--------|
 ```
 
-### Sending emails from cluster of servers
+### Sending emails from a cluster
 
-It is common to have horizontally scaled "Cluster" of servers for load-balancing and for durability.
-
-Most modern application has scheduled or recurring emails. For example, once a day — with recent news and updates. It won't be an issue with a single server setup — the server would send emails at a daily interval via timer or CRON. But in "Cluster" implementation — each server will attempt to send the same email. *MailTime* built to avoid sending the same email multiple times to a user from horizontally scaled applications.
-
-For the maximum durability and agility each Application Server can run *MailTime* in the "Server" mode:
+Most apps schedule recurring emails (daily digest, weekly summary). On a single server this is trivial. In a cluster, every node would otherwise send the same email N times. MailTime's lease prevents the duplicate sends.
 
 ```ascii
 |===================THE=CLUSTER===================| |=QUEUE=|
 | |----------|     |----------|     |----------|  | |       |   |--------|
-| |   App    |     |   App    |     |   App    |  | |       |-->| SMTP 1 |------\
+| | MailTime |     | MailTime |     | MailTime |  | |       |-->| SMTP 1 |------\
 | | Server 1 |     | Server 2 |     | Server 3 |  | |       |   |--------|       \
 | |-----\----|     |----\-----|     |----\-----|  | |       |                |-------------|
 |        \---------------\----------------\---------->      |   |--------|   |     ^_^     |
@@ -128,17 +89,17 @@ For the maximum durability and agility each Application Server can run *MailTime
 |=================================================| |=======|
 ```
 
-To split roles *MailTime* can run on a dedicated machine as micro-service. This case is great for private email servers with implemented authentication via rDNS and PTR records:
+For a dedicated mail machine (rDNS / PTR records), use `type: 'client'` on app servers and a single `type: 'server'` micro-service:
 
 ```ascii
 |===================THE=CLUSTER===================| |=QUEUE=| |===Mail=Time===|
 | |----------|     |----------|     |----------|  | |       | |               |   |--------|
-| |   App    |     |   App    |     |   App    |  | |       | | Micro-service |-->| SMTP 1 |------\
-| | Server 1 |     | Server 2 |     | Server 3 |  | |       | | running       |   |--------|       \
+| | MailTime |     | MailTime |     | MailTime |  | |       | | Micro-service |-->| SMTP 1 |------\
+| | Client 1 |     | Client 2 |     | Client 3 |  | |       | | running       |   |--------|       \
 | |-----\----|     |----\-----|     |----\-----|  | |       | | MailTime as   |                |-------------|
 |        \---------------\----------------\---------->      | | "Server" only |   |--------|   |     ^_^     |
 |                                                 | |       | | sending       |-->| SMTP 2 |-->| Happy users |
-| Each "App Server" runs MailTime as              | |       | | emails        |   |--------|   |-------------|
+| Each "App" runs MailTime as                     | |       | | emails        |   |--------|   |-------------|
 | a "Client" only placing emails to the queue.    | |    <--------            |                    /
 |                                                 | |    -------->            |   |--------|      /
 |                                                 | |       | |               |-->| SMTP 3 |-----/
@@ -146,693 +107,646 @@ To split roles *MailTime* can run on a dedicated machine as micro-service. This 
 |=================================================| |=======| |===============|
 ```
 
-## Features
-
-- __Email Queue__ - Managed via MongoDB, Redis, or [Custom Queue](https://github.com/veliovgroup/mail-time/blob/master/docs/queue-api.md). Storage-based queue will survive server reboots and failures
-- __Made for horizontally scaled multi-server setups__ - *MailTime* is made to run in multi-server environments, like "Clusters", multiple app instances, load balanced solutions, and replications. *MailTime* is the perfect fit for applications scaled on a single machine, multiple virtual servers, multiple "bare metal" servers, within single or multiple data centers
-- __Email concatenation__ - Reduce amount of sent emails to a single user with concatenation, and avoid mistakenly duplicated emails. When "email concatenation" is enabled the same emails (*checked by addressee and content*) won't be sent twice. If emails are sent multiple times, due to issues in logic or application failures, - enable "email concatenation" to solve this behavior
-- __Multiple NodeMailer/SMTP transports__ — Support for multiple SMPT transports implemented in two modes - `backup` and `balancing`. Use this feature to reduce the cost of SMTP services and add extra layer of durability. When one of the transports is failing to send an email — `mail-time` will switch to the next one
-- __Sending retries__ — Built-in retries for failed to send emails due to network or other failures
-- __Templating__ — Built with support of [Mustache](https://mustache.github.io/)-like placeholders, see [templating docs](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#passing-variables-to-the-template)
-
 ## Installation
 
-To implement Server functionality — begin with installing `nodemailer`, although this package meant to be used with `nodemailer`, it's not added as the dependency, as `nodemailer` not needed by Client, and to give freedom to choose `nodemailer`'s version to fit every project needs:
+```sh
+npm install --save mail-time nodemailer
+# pick at least one storage driver:
+npm install --save redis        # for RedisQueue
+npm install --save mongodb      # for MongoQueue
+npm install --save pg           # for PostgresQueue
 
-```shell
-npm install --save nodemailer
+# Bun:
+bun add mail-time nodemailer
 ```
 
-Install *MailTime* package:
+> [!NOTE]
+> `nodemailer` and adapter drivers are a peer (not bundled) so you can pin your own versions
 
-```shell
-# for node@>=14.20.0
-npm install --save mail-time
+For Meteor.js usage see [docs/meteor.md](docs/meteor.md).
 
-# for node@<14.20.0
-npm install --save mail-time@=1.3.4
+## Quick start
 
-# for node@<8.9.0
-npm install --save mail-time@=0.1.7
-```
-
-## Basic usage
-
-Setup Nodemailer's transports, Queue storage, and *MailTime* instance
-
-### Steps to get started
-
-See steps 1-4 below to learn about different parts of *MailTime* library and how it can get used. From configuration options to sending email
-
-1. [Require `mail-time` package](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#1-require-package)
-2. [Create NodeMailer's transports](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#2-create-nodemailers-transports)
-3. [Initiate `mail-time` *server*](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#3-initiate-mail-time)
-   - a. [Connect to Redis](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#3a-initiate-and-connect-to-redis); Or
-   - b. [Connect to MongoDB](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#3b-initiate-and-connect-to-mongodb); And
-   - c. [*optionally*] [initiate `mail-time` as *client*](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#3c-optionally-create-client-type-of-mailtime)
-4. [Start sending emails](https://github.com/veliovgroup/mail-time?tab=readme-ov-file#4-send-email)
-
-#### 1. Require package
+### 1. Import
 
 ```js
-// import as ES Module
-import { MailTime, MongoQueue, RedisQueue } from 'mail-time';
+// ESM
+import { MailTime, MongoQueue, PostgresQueue, RedisQueue, mailTimePreset } from 'mail-time';
 
-// require as CommonJS
-const { MailTime, MongoQueue, RedisQueue } = require('mail-time');
+// CommonJS
+const { MailTime, MongoQueue, PostgresQueue, RedisQueue, mailTimePreset } = require('mail-time');
 ```
 
-#### 2. Create NodeMailer's transports
+`mailTimePreset(name, overrides)` is optional — it returns a vetted config bundle you can pass to `new MailTime(...)` instead of hand-tuning every knob. See [Settings presets](#settings-presets).
 
-For compatibility and flexibility *MailTime* has no dependency on `nodemailer` it should be installed and imported manually. Create one or more "SMTP transports" before initializing new *MailTime* instance.
+### 2. Create nodemailer transports
 
-For details and full list of options available in `.createTransport()` see [`nodemailer` docs](https://nodemailer.com/smtp/)
+Each transport must expose `.options` (set automatically by `nodemailer.createTransport({...})`). MailTime reads `options.from` and merges any `options.mailOptions` defaults onto every letter.
 
 ```js
 // transports.js
 import nodemailer from 'nodemailer';
-// Use DIRECT transport
-// and enable sending email from localhost
-// install "nodemailer-direct-transport" NPM package:
-import directTransport from 'nodemailer-direct-transport';
 
-const transports = [];
-const directTransportOpts = {
-  pool: false,
-  direct: true,
-  name: 'mail.example.com',
-  from: 'no-reply@example.com',
-};
-transports.push(nodemailer.createTransport(directTransport(directTransportOpts)));
-// IMPORTANT: Add `.options` to a newly created transport,
-// this is necessary to make sure options are available to MailTime package:
-transports[0].options = directTransportOpts;
-
-// Private SMTP
-transports.push(nodemailer.createTransport({
+const privateSMTP = {
   host: 'smtp.example.com',
   from: 'no-reply@example.com',
-  auth: {
-    user: 'no-reply',
-    pass: 'xxx'
-  },
-}));
-
-// Google Apps SMTP
-transports.push(nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  from: 'no-reply@mail.example.com',
-  auth: {
-    user: 'no-reply@mail.example.com',
-    pass: 'xxx'
-  },
-}));
-
-// Mailing service (SparkPost as example)
-transports.push(nodemailer.createTransport({
-  host: 'smtp.sparkpostmail.com',
-  port: 587,
-  from: 'no-reply@mail2.example.com',
-  auth: {
-    user: 'SMTP_Injection',
-    pass: 'xxx'
-  },
-}));
-
-export { transports };
-```
-
-#### 3. Initiate `mail-time`
-
-Create new instance of *MailTime* in the *Server* mode, — it will be able to __send__ and __add__ emails to the queue.
-
-#### 3a. Initiate and connect to Redis
-
-Connecting to Redis before initiating `new MailTime` instance:
-
-```js
-// mail-queue.js
-import { MailTime, RedisQueue } from 'mail-time';
-import { createClient } from 'redis';
-import { transports } from './transports.js';
-
-// Use REDIS_URL environment variable to store connection string to MongoDB
-// example: "REDIS_URL=redis://127.0.0.1:6379 node mail-micro-service.js"
-const redisClient = await createClient({ url: process.env.REDIS_URL }).connect();
-const mailQueue = new MailTime({
-  transports,
-  queue: new MongoQueue({
-    client: redisClient,
-  }),
-  josk: {
-    adapter: {
-      type: 'redis',
-      client: redisClient,
-    }
-  },
-  template: MailTime.Template // Use default template
-  from(transport) {
-    // To pass spam-filters `from` field should be correctly set
-    // for each transport, check `transport` object for more options
-    return `"Awesome App" <${transport.options.from}>`;
-  },
-  onError(error, email, details) {
-    console.log(`Email "${email.mailOptions.subject}" wasn't sent to ${email.mailOptions.to}`, error, details);
-  },
-  onSent(email, details) {
-    console.log(`Email "${email.mailOptions.subject}" successfully sent to ${email.mailOptions.to}`, details);
-  },
-});
-
-export { mailQueue };
-```
-
-#### 3b. Initiate and connect to MongoDB
-
-Connecting to MongoDB before initiating `new MailTime` instance:
-
-```js
-// mail-queue.js
-import { MailTime, MongoQueue } from 'mail-time';
-import { MongoClient } from 'mongodb';
-import { transports } from './transports.js';
-
-// Use MONGO_URL environment variable to store connection string to MongoDB
-// example: "MONGO_URL=mongodb://127.0.0.1:27017/myapp node mail-micro-service.js"
-const mongodb = (await MongoClient.connect(process.env.MONGO_URL)).db('database');
-const mailQueue = new MailTime({
-  transports,
-  queue: new MongoQueue({
-    db: mongodb,
-  }),
-  josk: {
-    adapter: {
-      type: 'mongo',
-      db: mongodb,
-    }
-  },
-  template: MailTime.Template // Use default template
-  from(transport) {
-    // To pass spam-filters `from` field should be correctly set
-    // for each transport, check `transport` object for more options
-    return `"Awesome App" <${transport.options.from}>`;
-  },
-  onError(error, email, details) {
-    console.log(`Email "${email.mailOptions.subject}" wasn't sent to ${email.mailOptions.to}`, error, details);
-  },
-  onSent(email, details) {
-    console.log(`Email "${email.mailOptions.subject}" successfully sent to ${email.mailOptions.to}`, details);
-  },
-});
-
-export { mailQueue };
-```
-
-#### 3c. Optionally create *Client* type of *MailTime*
-
-Only __one__ `MailTime` *Server* instance required to send email. In the other parts of an app (like UI units or in sub-apps) use `mail-time` in the *Client* mode to __add__ emails to queue
-
-```js
-// mail-queue.js
-import { MailTime, RedisQueue } from 'mail-time';
-import { createClient } from 'redis';
-
-const mailQueue = new MailTime({
-  type: 'client',
-  queue: new RedisQueue({
-    client: await createClient({ url: 'redis://url' }).connect()
-  }),
-});
-
-export { mailQueue };
-```
-
-#### 4. Send email
-
-Import created `mailQueue` where needed and call `.sendMail()` method. See [NodeMailer's message configuration documentation](https://nodemailer.com/message/) for details
-
-```js
-import { mailQueue } from './mail-queue.js';
-
-await mailQueue.sendMail({
-  to: 'user@gmail.com',
-  subject: 'You\'ve got an email!',
-  text: 'Plain text message',
-  html: '<h1>HTML</h1><p>Styled message</p>'
-});
-```
-
-### Using MongoDB for queue and scheduler
-
-*MailTime* uses separate storage for Queue management and Scheduler. In the example below MongoDB is used for both
-
-```js
-import { MailTime, MongoQueue } from 'mail-time';
-import { MongoClient } from 'mongodb';
-import { transports } from './transports.js';
-
-const db = (await MongoClient.connect('mongodb://url')).db('database');
-const mailQueue = new MailTime({
-  queue: new MongoQueue({
-    db: db,
-  }),
-  josk: {
-    adapter: {
-      type: 'mongo',
-      db: db,
-    }
-  },
-  transports,
-  from(transport) {
-    // To pass spam-filters `from` field should be correctly set
-    // for each transport, check `transport` object for more options
-    return `"Awesome App" <${transport.options.from}>`;
-  }
-});
-```
-
-### Using MongoDB for queue and Redis for scheduler
-
-*MailTime* uses separate storage for Queue management and Scheduler. In the example below MongoDB is used for queue and Redis is used for scheduler
-
-```js
-import { MailTime, MongoQueue } from 'mail-time';
-import { MongoClient } from 'mongodb';
-import { createClient } from 'redis';
-import { transports } from './transports.js';
-
-const mailQueue = new MailTime({
-  queue: new MongoQueue({
-    db: (await MongoClient.connect('mongodb://url')).db('database'),
-  }),
-  josk: {
-    adapter: {
-      type: 'redis',
-      client: await createClient({ url: 'redis://url' }).connect(),
-    }
-  },
-  transports,
-  from(transport) {
-    return `"Awesome App" <${transport.options.from}>`;
-  }
-});
-```
-
-### Using Redis for queue and MongoDB for scheduler
-
-*MailTime* uses separate storage for Queue management and Scheduler. In the example below Redis is used for queue and MongoDB is used for scheduler
-
-```js
-import { MailTime, RedisQueue } from 'mail-time';
-import { MongoClient } from 'mongodb';
-import { createClient } from 'redis';
-import { transports } from './transports.js';
-
-const mailQueue = new MailTime({
-  queue: new RedisQueue({
-    client: await createClient({ url: 'redis://url' }).connect(),
-  }),
-  josk: {
-    adapter: {
-      type: 'mongo',
-      db: (await MongoClient.connect('mongodb://url')).db('database'),
-    }
-  },
-  transports,
-  from(transport) {
-    return `"Awesome App" <${transport.options.from}>`;
-  }
-});
-```
-
-### Using Redis for queue and scheduler
-
-*MailTime* uses separate storage for Queue management and Scheduler. In the example below Redis is used for both
-
-```js
-import { MailTime, RedisQueue } from 'mail-time';
-import { MongoClient } from 'mongodb';
-import { createClient } from 'redis';
-import { transports } from './transports.js';
-
-const redisClient = await createClient({ url: 'redis://url' }).connect();
-const mailQueue = new MailTime({
-  queue: new RedisQueue({
-    client: redisClient,
-  }),
-  josk: {
-    adapter: {
-      type: 'redis',
-      client: redisClient,
-    }
-  },
-  transports,
-  from(transport) {
-    return `"Awesome App" <${transport.options.from}>`;
-  }
-});
-```
-
-### Two `MailTime` instances usage example
-
-Create two `MailTime` instances with different settings. One for urgent (*e.g. "transactional" emails*), and another one for other types of emails (*e.g. "marketing" emails*)
-
-```js
-import { MailTime, RedisQueue } from 'mail-time';
-import { createClient } from 'redis';
-import { transports } from './transports.js';
-const redisClient = await createClient({ url: 'redis://url' }).connect();
-
-// CREATE mailQueue FOR NON-URGENT EMAILS WHICH IS OKAY TO CONCATENATE
-const mailQueue = new MailTime({
-  queue: new RedisQueue({
-    client: redisClient,
-  }),
-  transports,
-  strategy: 'backup',
-  failsToNext: 1,
-  concatEmails: true,
-  josk: {
-    adapter: {
-      type: 'redis',
-      client: redisClient
-    },
-    zombieTime: 120000
-  }
-});
-
-// CREATE mailInstantQueue FOR TRANSACTIONAL EMAILS AND ALERTS
-const mailInstantQueue = new MailTime({
-  queue: new RedisQueue({
-    client: redisClient,
-    prefix: 'instant'
-  }),
-  transports,
-  prefix: 'instant',
-  retryDelay: 2000,
-  strategy: 'backup',
-  failsToNext: 1,
-  concatEmails: false,
-  josk: {
-    adapter: {
-      type: 'redis',
-      client: redisClient
-    },
-    zombieTime: 20000
-  }
-});
-
-await mailQueue.sendMail({
-  to: 'user@gmail.com',
-  subject: 'You\'ve got an email!',
-  text: 'Plain text message',
-  html: '<h1>HTML</h1><p>Styled message</p>'
-});
-
-await mailInstantQueue.sendMail({
-  to: 'user@gmail.com',
-  subject: 'Sign in request',
-  text: 'Your OTP login code: xxxx:',
-  html: '<h1>Code:</h1><code>XXXX</code>'
-});
-```
-
-### Passing variables to the template
-
-All options passed to the `.sendMail()` method are available inside `text`, `html`, and global templates
-
-```js
-const templates = {
-  global: '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>{{subject}}</title></head><body>{{{html}}}<footer>Message sent to @{{username}} user ({{to}})</footer></body></html>',
-  signInCode: {
-    text: 'Hello @{{username}}! Here\'s your login code: {{code}}',
-    html: `<h1>Sign-in request</h1><p>Hello @{{username}}! <p>Copy your login code below:</p> <pre><code>{{code}}</code></pre>`
-  }
+  auth: { user: 'no-reply', pass: process.env.SMTP_PASS },
 };
 
-const mailQueue = new MailTime({
-  queue: new RedisQueue({ /* ... */ }),
-  template: templates.global
-});
+const sparkpost = {
+  host: 'smtp.sparkpostmail.com',
+  port: 587,
+  from: 'no-reply@mail.example.com',
+  auth: { user: 'SMTP_Injection', pass: process.env.SPARKPOST_PASS },
+};
 
-await mailQueue.sendMail({
-  to: 'user@gmail.com',
-  subject: 'Sign-in request',
-  username: 'johndoe',
-  code: 'XXXXX-YY',
-  text: templates.signInCode.text,
-  html: templates.signInCode.html
-});
+export const transports = [
+  nodemailer.createTransport(privateSMTP),
+  nodemailer.createTransport(sparkpost),
+];
 ```
 
-## API
+### 3. Initialize MailTime
 
-All available constructor options and `.sendMail()` method API overview
+Pick one storage and pass a connected client to the queue + the JoSk adapter. **You only need to set `prefix` on the `MailTime` constructor — it propagates into the queue adapter and into the JoSk adapter automatically.**
 
-### `new MailTime(opts)` constructor
-
-- `opts` {*object*} - Configuration object
-- `opts.type` {*string*} - [Optional] `client` or `server`, default - `server`
-- `opts.queue` {*RedisQueue*|*MongoQueue*|*CustomQueue*} - Queue storage driver instance
-- `opts.transports` {*[object]*} - [*Required for "server"*] An array of `nodemailer`'s transports, returned from `nodemailer.createTransport({})`. Required for `{type: 'server'}`
-- `opts.josk` {*object*} - [*Required for "server"*] [`JoSk` package](https://github.com/veliovgroup/josk#api) options
-- `opts.josk.adapter` {*object*|*RedisAdapter*|*MongoAdapter*|*CustomAdapter*} - Config object or *Adapter* instance
-- `opts.josk.adapter.type` {*string*} - One of `mongo` *or* `redis`; Pass `josk.adapter.type` to avoid burden of creating *Adapter* instance manually
-- `opts.josk.adapter.client` {*RedisClient*} - *RedisClient* instance
-- `opts.josk.adapter.db` {*Db*} - Mongo's *Db* instance
-- `opts.josk[option]` {*mix*} - Any other options passed to [`JoSk` instance](https://github.com/veliovgroup/josk#api)
-- `opts.from` {*function*} - [Optional] A function which returns *string* of `from` field, format: `"MyApp" <user@example.com>`
-- `opts.strategy` {*string*} - [Optional] `backup` or `balancer`, default - `backup`. If set to `backup`, first transport will be used unless failed to send `failsToNext` times. If set to `balancer` - transports will be used equally in round robin chain
-- `opts.failsToNext` {*number*} - [Optional] After how many failed "send attempts" switch to the next transport, applied only for `backup` strategy, default - `4`
-- `opts.prefix` {*string*} - [Optional] Use unique prefixes to create multiple `MailTime` instances within the same application
-- `opts.retries` {*number*} - [Optional] How many times resend failed emails, default - `60`
-- `opts.retryDelay` {*number*} - [Optional] Interval in *milliseconds* between send re-tries, default - `60000`
-- `opts.keepHistory` {*boolean*} - [Optional] By default sent emails not stored in the database. Set `{ keepHistory: true }` to keep queue task as it is in the database, default - `false`
-- `opts.concatEmails` {*boolean*} - [Optional] Concatenate email by `to` field (*e.g. to the same addressee*), default - `false`
-- `opts.concatSubject` {*string*} - [Optional] Email subject used in concatenated email, default - `Multiple notifications`
-- `opts.concatDelimiter` {*string*} - [Optional] HTML or plain string delimiter used between concatenated email, default - `<hr>`
-- `opts.concatDelay` {*number*} - [Optional] Time in *milliseconds* while emails are waiting to be concatenated, default - `60000`
-- `opts.revolvingInterval` {*number*} - [Optional] Interval in *milliseconds* in between queue checks, default - `256`
-- `opts.template` {*string*} - [Optional] Mustache-like template, default - `{{{html}}}`, all options passed to `sendMail` is available in Template, like `to`, `subject`, `text`, `html` or any other custom option. Use `{{opt}}` for string placeholders and `{{{opt}}}` for html placeholders
-- `opts.onError(error, email, details)` {*function*} - [Optional] called when email has failed to get sent and exhausted all send attempts (`opts.retries`), called with 3 arguments:
-  - `error` {*Error*|*object*} - Error object
-  - `email` {*object*} - email's object
-  - `details` {*object*} - *not always present*, details from SMTP protocol
-- `opts.onSent(email, details)` {*function*} - [Optional] called when email was successfully handed over to receiving/recipient's SMTP server, called with 2 arguments:
-  - `email` {*object*} - email's object
-  - `details` {*object*} - *not always present*, details from SMTP server/protocol
+#### With Redis
 
 ```js
-import { MailTime, MongoQueue, RedisQueue } from 'mail-time';
-import nodemailer from 'nodemailer';
+// mail-queue.js
+import { MailTime, RedisQueue } from 'mail-time';
 import { createClient } from 'redis';
+import { transports } from './transports.js';
 
-const redisClient = await createClient({ url: 'redis://url' }).connect();
+const redisClient = await createClient({
+  url: process.env.REDIS_URL
+}).connect();
+
+const joskOptions = {
+  adapter: {
+    type: 'redis',
+    client: redisClient
+  }
+};
 
 const mailQueue = new MailTime({
   type: 'server',
-  strategy: 'backup',
-  prefix: 'appMailQueue',
-  transports: [nodemailer.createTransport({/* ... */})],
-  failsToNext: 4,
-  retries: 60,
-  retryDelay: 60000,
-  keepHistory: false,
-  concatEmails: false,
-  concatDelay: 60000,
-  concatDelimiter: '<hr>',
-  concatSubject: 'Multiple notifications',
-  revolvingInterval: 256,
-  template: '{{{html}}}',
-  queue: new RedisQueue({
-    client: redisClient,
-    prefix: 'appMailQueue',
-  }),
-  josk: {
-    adapter: {
-      type: 'redis',
-      client: redisClient,
-    }
+  prefix: 'app',
+  queue: new RedisQueue({ client: redisClient }),
+  josk: joskOptions,
+  transports,
+  template: MailTime.Template,
+  from: (transport) => `"Awesome App" <${transport.options.from}>`,
+  onSent(email, info) {
+    console.log('sent', email.uuid, info);
   },
-  from(transport) {
-    // To pass spam-filters `from` field should be correctly set
-    // for each transport, check `transport` object for more options
-    return `"App Name" <${transport.options.from}>`;
-  },
-  onError(error, email, details) {
-    console.log(`Email "${email.mailOptions.subject}" wasn't sent to ${email.mailOptions.to}`, error, details);
-  },
-  onSent(email, details) {
-    console.log(`Email "${email.mailOptions.subject}" successfully sent to ${email.mailOptions.to}`, details);
+  onError(error, email, info) {
+    console.error('failed', email.uuid, error, info);
   },
 });
 
-await mailQueue.sendMail({
-  to: 'johndoe@example.com',
-  subject: 'Email subject',
-  text: 'You have got email!',
-  html: '<p>You have got email!</p>',
-});
+await mailQueue.ready();
+export { mailQueue };
 ```
 
-### `new RedisQueue(opts)` constructor
+#### With MongoDB
 
-*Create Redis Queue instance.* Use for `opts.queue` when creating *MailTime* instance
+```js
+import { MailTime, MongoQueue } from 'mail-time';
+import { MongoClient } from 'mongodb';
+import { transports } from './transports.js';
 
-- `opts` {*object*} - Configuration object
-- `opts.client` {*RedisClient*} - Required, Redis'es `RedisClient` instance, like one returned from `await redis.createClient().connect()` method
-- `opts.prefix` {*string*} - Optional prefix for scope isolation; use when creating multiple `MailTime` instances within the single application
+const db = (await MongoClient.connect(process.env.MONGO_URL)).db('app');
+
+const joskOptions = {
+  adapter: { type: 'mongo', db },
+};
+
+const mailQueue = new MailTime({
+  type: 'server',
+  prefix: 'app',
+  queue: new MongoQueue({ db }),
+  josk: joskOptions,
+  transports,
+  from: (t) => `"Awesome App" <${t.options.from}>`,
+});
+
+await mailQueue.ready();
+```
+
+#### With PostgreSQL
+
+```js
+import { MailTime, PostgresQueue } from 'mail-time';
+import { Pool } from 'pg';
+import { transports } from './transports.js';
+
+const pgPool = new Pool({ connectionString: process.env.PG_URL });
+
+const joskOptions = {
+  adapter: {
+    type: 'postgres',
+    client: pgPool
+  },
+};
+
+const mailQueue = new MailTime({
+  type: 'server',
+  prefix: 'app',
+  queue: new PostgresQueue({ client: pgPool }),
+  josk: joskOptions,
+  transports,
+  from: (t) => `"Awesome App" <${t.options.from}>`,
+});
+
+await mailQueue.ready();
+```
+
+#### Client-only mode
+
+Only enqueues — no transports, no `josk` block. Use for app servers when sending is handled by a separate micro-service.
 
 ```js
 import { MailTime, RedisQueue } from 'mail-time';
 import { createClient } from 'redis';
 
-new RedisQueue({
-  client: await createClient({ url: 'redis://url' }).connect(),
-  prefix: 'appMailQueue',
+const redisClient = await createClient({ url: process.env.REDIS_URL }).connect();
+
+export const mailQueue = new MailTime({
+  type: 'client',
+  prefix: 'app',
+  queue: new RedisQueue({ client: redisClient }),
 });
 ```
 
-### `new MongoQueue(opts)` constructor
-
-*Create MongoDB Queue instance.* Use for `opts.queue` when creating *MailTime* instance
-
-- `opts` {*object*} - Configuration object
-- `opts.db` {*Db*} - Required, Mongo's `Db` instance, like one returned from `MongoClient#db()`
-- `opts.prefix` {*string*} - Optional prefix for scope isolation; use when creating multiple `MailTime` instances within the single application
-
-```js
-import { MailTime, MongoQueue } from 'mail-time';
-import { MongoClient } from 'mongodb';
-
-new MongoQueue({
-  db: (await MongoClient.connect('mongodb://url')).db('database'),
-  prefix: 'appMailQueue',
-});
-```
-
-### `sendMail(opts)`
-
-*Add email to the queue.* Returns `Promise<string>` unique email's `uuid`
-
-- `opts` {*object*} - Configuration object
-- `opts.sendAt` {*number*} - When email should be sent, default - `Date.now()`
-- `opts.template` {*string*} - Email specific template, this will override default template passed to `MailTime` constructor
-- `opts.concatSubject` {*string*} - Email specific concatenation subject, this will override default concatenation subject passed to `MailTime` constructor
-- `opts[key]` {*mix*} - Other custom and NodeMailer specific options, like `text`, `html` and `to`, [learn more here](https://nodemailer.com/message/). __Note:__ if [`attachments`](https://nodemailer.com/message/attachments/) are used via `path` — file must exists on all micro-services servers
-
-### `cancelMail(uuid)`
-
-*Remove email from queue.* Returns `Promise<boolean>` — `true` if cancelled or `false` if not found, was sent, or was cancelled previously. Throws *Error*
-
-- `uuid` {*string*|*promise*} — email's `uuid` returned from `.sendEmail()` method
+### 4. Send and cancel
 
 ```js
 import { mailQueue } from './mail-queue.js';
 
 const uuid = await mailQueue.sendMail({
-  to: 'johndoe@example.com',
-  subject: 'Email subject',
-  text: 'You have got email!',
-  html: '<p>You have got email!</p>',
+  to: 'user@example.com',
+  subject: 'You\'ve got an email!',
+  text: 'Plain text body',
+  html: '<h1>HTML</h1><p>Styled body</p>',
 });
 
-await mailQueue.cancelMail(uuid);
+// later — cancel before sendAt:
+await mailQueue.cancelMail(uuid); // true | false
 ```
 
-### `ping()`
+`sendMail` returns a stable `uuid` you can store for cancellation. Pass any [nodemailer message option](https://nodemailer.com/message/) — `to`, `subject`, `text`, `html`, `attachments`, `cc`, `bcc`, custom headers, etc.
 
-*Ping MailTime instance, its scheduler, and its queue.* Returns `Promise<object>`
+### 5. Shutdown
 
 ```js
-const mailQueue = new MailTime({ /* ... */ });
-
-const pingResult = await mailQueue.ping();
-console.log(pingResult)
-/**
-In case of the successful response
-{
-  status: 'OK',
-  code: 200,
-  statusCode: 200,
-}
-
-Failed response
-{
-  status: 'Error reason',
-  code: 500,
-  statusCode: 500,
-  error: ErrorObject
-}
-*/
+process.on('SIGTERM', () => mailQueue.destroy());
 ```
 
-### `static MailTime.Template`
+`destroy()` is idempotent and stops the scheduler. Always call it from tests.
 
-Simple and bulletproof HTML template, see [its source](https://github.com/veliovgroup/mail-time/blob/master/template.html). Usage example:
+## Storage layouts
+
+Queue storage and scheduler storage can be the same store or different ones. Use this matrix:
+
+
+| Queue    | Scheduler (`josk`) | Best for                                     |
+| -------- | ------------------ | -------------------------------------------- |
+| Postgres | Postgres           | Multi-DC, mixed clocks, strict exactly-once. |
+| Redis    | Redis              | High-throughput single-region.               |
+| Mongo    | Mongo              | Apps already on Mongo (especially Meteor).   |
+| Mongo    | Redis              | Durable letter storage + sub-second polling. |
+| Redis    | Mongo              | Hot Redis letters + Mongo for scheduler.     |
+
+
+For split-store setups pass a different client to each:
 
 ```js
-import { MailTime, MongoQueue, RedisQueue } from 'mail-time';
-
-// Make it default
 const mailQueue = new MailTime({
-  /* .. */
-  template: MailTime.Template
-});
-
-// For single letter
-mailQueue.sendMail({
-  /* .. */
-  template: MailTime.Template
+  prefix: 'app',
+  queue:  new MongoQueue({ db }),
+  transports,
+  josk: {
+    adapter: { 
+      type: 'redis', 
+      client: redisClient 
+    }
+  },
+  /* ... */
 });
 ```
 
-### Template Example
+## Settings presets
 
-Pass custom template via `template` property to `.sendMail()` method
+Each email class wants a different policy — OTP must reach the inbox in seconds, a newsletter wants emails folded together, marketing tolerates retries spread over hours. `mailTimePreset(name, overrides)` applies a vetted shape in one line; you layer your own `queue` / `transports` / `josk.adapter` / `prefix` on top.
 
 ```js
-mailQueue.sendMail({
-  to: 'user@gmail.com',
-  userName: 'Mike',
-  subject: 'Sign up confirmation',
-  text: 'Hello {{userName}}, \r\n Thank you for registration \r\n Your login: {{to}}',
-  html: '<div style="text-align: center"><h1>Hello {{userName}}</h1><p><ul><li>Thank you for registration</li><li>Your login: {{to}}</li></ul></p></div>',
-  template: '<body>{{{html}}}</body>'
+import { MailTime, RedisQueue, mailTimePreset } from 'mail-time';
+
+const mailTime = new MailTime(mailTimePreset('otp', {
+  prefix: 'otp',
+  queue: new RedisQueue({ client: redisClient }),
+  transports: [otpTransport],
+  josk: { 
+    adapter: { 
+      type: 'redis', 
+      client: redisClient 
+    }
+  },
+}));
+```
+
+
+| Preset          | Shape                                                                                                                                                                                  | Best for                                                                                |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `transactional` | `retries: 30`, `retryDelay: 10s`, `concatEmails: false`, `concurrency: 1`, `josk.zombieTime: 120s`                                                                                     | Receipts, password resets, account changes, welcome emails.                             |
+| `otp`           | `retries: 5`, `retryDelay: 2s`, snappy `revolvingInterval: 1024` + jitter `256/1024`, `concurrency: 4`, `sendingTimeout: 60s`                                                          | Sign-in codes, 2FA, verification codes — stale OTPs aren't worth resending forever.     |
+| `newsletter`    | `concatEmails: true` with a 5-minute fold window, `concatSubject: 'Your updates'`, `retries: 5`, `retryDelay: 60s`, `concurrency: 2`, `sendingTimeout: 10min`, `josk.zombieTime: 5min` | Scheduled digests, weekly summaries, "what's new" emails.                               |
+| `marketing`     | `retries: 10`, `retryDelay: 30s`, `concatEmails: false`, `concurrency: 5`, `josk.zombieTime: 3min`                                                                                     | Promotional / campaign blasts where each letter is unique.                              |
+| `notifications` | `concatEmails: true` with a 60-second fold window, `concatSubject: 'New activity'`, `retries: 8`, `retryDelay: 30s`, `concurrency: 3`, `josk.zombieTime: 3min`                         | App / social activity (likes, mentions, follows) where bursts collapse into one letter. |
+| `alerts`        | `retries: 20`, `retryDelay: 5s`, snappy `revolvingInterval: 1024` + jitter `256/1024`, `concurrency: 2`, `sendingTimeout: 60s`                                                         | Ops / admin alerts: monitoring, error reports, escalations.                             |
+
+
+Presets are equally useful on `type: 'client'` instances — keys that don't apply to the client role are simply ignored.
+
+## Multiple MailTime instances (recommended)
+
+**Run several `MailTime` instances when email classes need different policies** (OTP vs marketing vs receipts). Each class gets its own `MailTime` options and, when policies differ, its own `prefix`. Combine with [presets](#settings-presets) to keep the boilerplate to a single line per class.
+
+### `prefix`: when it matches vs when it splits
+
+- **Same `prefix` for every `client` and `server` that share one logical queue** — app pods enqueue with `type: 'client'`, mail workers drain with `type: 'server'`, both use e.g. `prefix: 'otp'`. That is the common case.
+- **Different `prefix` per class** so OTP, transactional, and marketing namespaces do not collide.
+- **Never** reuse `prefix` across two instances with different `concatEmails`, `retryDelay`, or other mail policy.
+
+You can share one Redis / Mongo / Postgres connection across instances.
+
+```js
+import { MailTime, RedisQueue, mailTimePreset } from 'mail-time';
+import { createClient } from 'redis';
+import { transports, otpTransport, marketingTransport } from './transports.js';
+
+const redisClient = await createClient({ url: process.env.REDIS_URL }).connect();
+const adapter = { type: 'redis', client: redisClient };
+const lockOwnerId = `${process.env.HOSTNAME || 'mail'}-${process.pid}`;
+const queue = () => new RedisQueue({ client: redisClient });
+
+export const otpMail = new MailTime(mailTimePreset('otp', {
+  type: 'server', 
+  prefix: 'otp',
+  queue: queue(), 
+  transports: [otpTransport],
+  josk: { adapter, lockOwnerId },
+  from: (t) => `"Security" <${t.options.from}>`,
+}));
+
+export const transactionalMail = new MailTime(mailTimePreset('transactional', {
+  type: 'server', 
+  prefix: 'transactional',
+  queue: queue(), 
+  transports,
+  josk: { adapter, lockOwnerId },
+  from: (t) => `"Awesome App" <${t.options.from}>`,
+}));
+
+export const marketingMail = new MailTime(mailTimePreset('newsletter', {
+  type: 'server', 
+  prefix: 'marketing',
+  queue: queue(), 
+  transports: [marketingTransport],
+  josk: { adapter, lockOwnerId },
+  from: (t) => `"News by Awesome App" <${t.options.from}>`,
+}));
+
+await Promise.all([otpMail, transactionalMail, marketingMail].map((m) => m.ready()));
+
+// App code picks the right queue:
+await otpMail.sendMail({ to: user.email, subject: 'Sign-in code', text: code, html: codeHtml });
+await marketingMail.sendMail({ to: user.email, subject: 'New features', text, html });
+```
+
+**App servers** use `type: 'client'` with the **same `prefix`** as the mail worker for that class (no `transports`, no `josk`):
+
+```js
+// app-server — enqueue only; same prefix as otpMail server above
+export const otpClient = new MailTime({
+  type: 'client',
+  prefix: 'otp',
+  queue: new RedisQueue({ client: redisClient }),
+});
+await otpClient.ready();
+await otpClient.sendMail({ to: user.email, subject: 'Sign-in code', text: code });
+```
+
+## Dedicated mail host: several servers on one machine
+
+On a **single mail VM** (good rDNS / PTR, fixed SMTP credentials), run **2–8 `server` processes** (~**one per CPU core**). Typical layout: **one process per email class** (`otp`, `transactional`, `marketing`) — each with its own `prefix`. That parallelizes drains across classes. Extra processes with the **same** `prefix` only add **failover** (one JoSk lease winner per tick), not multiplied throughput.
+
+This is **not** the same as scaling app pods on one queue: each `prefix` still has **one cluster-wide drain tick** at a time.
+
+```js
+// mail-worker.js — one process per class (example: 3 classes on one host)
+import { otpMail, transactionalMail, marketingMail } from './mail-instances.js';
+
+const workers = [otpMail, transactionalMail, marketingMail];
+await Promise.all(workers.map((m) => m.ready()));
+
+process.on('SIGTERM', () => {
+  for (const m of workers) m.destroy();
 });
 ```
+
+### Parallel `server` processes with systemd
+
+Run each class as its own unit (same `prefix` as app `client` instances for that class). Adjust paths and env to your deploy.
+
+`/etc/systemd/system/mailtime@.service`:
+
+```ini
+[Unit]
+Description=MailTime server (%i)
+After=network-online.target redis.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=NODE_ENV=production
+Environment=REDIS_URL=redis://127.0.0.1:6379
+Environment=MAILTIME_CLASS=%i
+ExecStart=/usr/bin/node /opt/mailtime/worker.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`/opt/mailtime/worker.js` — one class per invocation (`otp`, `transactional`, `marketing`):
+
+```js
+import { startMailWorker } from './mail-instances.js';
+
+const mailClass = process.env.MAILTIME_CLASS;
+if (!mailClass) {
+  throw new Error('MAILTIME_CLASS required (otp | transactional | marketing)');
+}
+
+const mailTime = await startMailWorker(mailClass);
+process.on('SIGTERM', () => {
+  mailTime.destroy();
+  process.exit(0);
+});
+```
+
+Enable and start:
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl enable --now mailtime@otp mailtime@transactional mailtime@marketing
+```
+
+Optional **second unit on the same class** for hot standby (same `prefix`, different `lockOwnerId`) — only one drains per tick; the other takes over if the primary dies.
+
+For **very high volume on one class**, shard with different prefixes (`marketing-0`, `marketing-1`, …) and one systemd instance per shard — not many units on the identical `prefix`.
+
+## Tuning
+
+Defaults fit moderate traffic in a single region. Adjust when latency, volume, or cluster shape demands it.
+
+### How scheduling relates to throughput
+
+MailTime registers **one** JoSk interval per `prefix` (`mailTimeQueue<prefix>` → `queue.iterate()`). Across the cluster, **one `server` wins that lease per tick** — extra app replicas are mainly **failover**, not N× send rate for the same `prefix`.
+
+Inside one server, MailTime now drives sends through a bounded **in-process send pool** (`concurrency`). When a tick fires:
+
+1. `queue.iterate({ limit, sendingTimeout })` streams candidate rows.
+2. Each row is handed to `mailTime.___dispatch(row)`, which waits for a free pool slot, atomically claims the row by flipping `isSending=false → true` (with `sendingAt=now`), and starts the full send lifecycle in the background.
+3. The scan moves to the next due row as soon as the previous claim has started — the JoSk lease is released as soon as scanning ends, so other ticks (on this or any cluster node) can pick up rows that are still `isSending=false`.
+4. The SMTP roundtrip runs detached. On success the row is removed (or marked `isSent: true` with `keepHistory`); on failure `isSending` flips back to `false` and `sendAt` is bumped for the next retry.
+
+`isSending` is the **per-row lock**. The storage-level atomic-claim CAS makes it impossible for two workers — in the same instance or across the cluster — to flip the same row from `false` to `true` at the same `tries` value. A worker that died mid-SMTP leaves the row `isSending=true`; once `sendingAt + sendingTimeout` is in the past, the iterate predicate makes that row eligible again and a recovery worker can re-claim it.
+
+**Throughput levers:**
+
+- More **distinct `prefix`es** (OTP vs marketing, or shards) → more parallel drain loops.
+- **Dedicated mail workers** (`type: 'client'` on apps, `type: 'server'` on 1–3 mail hosts) → cleaner SMTP and tuning.
+- `**concurrency: N`** (MailTime option) → up to N parallel SMTPs per server instance. The CAS on `isSending` is what makes this safe — two parallel sends never deliver the same row.
+- `**mode: 'one' | 'batch'`** (MailTime option) → `'batch'` (default) claims every due row per tick; `'one'` claims a single row per tick (fairer across cluster nodes when one node has dominant scheduling luck).
+- `**revolvingInterval`** + `**josk.minRevolvingDelay` / `maxRevolvingDelay**` → how often due mail is picked up (effective delay ≈ interval + jitter + storage RTT).
+- **Few fat mail hosts** with several instances (above) → better than dozens of app pods all running `server`.
+
+### Scenario guide
+
+Reach for a [preset](#settings-presets) first; tune only what the preset doesn't cover.
+
+
+| Situation                            | What to change                                                                                                             |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| OTP / alerts                         | `mailTimePreset('otp')` or `mailTimePreset('alerts')`                                                                      |
+| Receipts / password resets / welcome | `mailTimePreset('transactional')`                                                                                          |
+| Newsletters / activity digests       | `mailTimePreset('newsletter')` or `mailTimePreset('notifications')`                                                        |
+| Marketing campaigns                  | `mailTimePreset('marketing')`                                                                                              |
+| Multi-DC or clock skew               | Postgres queue + Postgres scheduler; stable `lockOwnerId` per worker                                                       |
+| Mongo letters + fast polls           | Mongo `queue`, Redis `josk.adapter` (see [Storage layouts](#storage-layouts))                                              |
+| SMTP rate limits                     | Fewer mail workers, `josk.concurrency: 1`, consider `strategy: 'backup'` with real fallback transports                     |
+| Large backlog / slow SMTP            | Raise `josk.zombieTime` above worst-case `iterate` duration (Postgres drains up to **100** letters per tick, sequentially) |
+| Tests                                | `retries: 0`, `mailTime.destroy()` in teardown; `josk.adapter.resetOnInit: true` dev-only                                  |
+
+
+### Production JoSk block (any storage)
+
+```js
+{
+  josk: {
+    adapter: { type: 'redis', client: redisClient }, // or mongo / postgres
+    lockOwnerId: `${process.env.K8S_POD_NAME || process.env.HOSTNAME}-${process.pid}`,
+    onError: (title, details) => logger.error({ scheduler: title, ...details }),
+    concurrency: 1,       // optional: prevent overlapping queue.iterate on one worker
+    zombieTime: 120_000,  // raise if one tick can run >60s (big backlog × slow SMTP)
+  }
+}
+```
+
+### Option reference (when to touch)
+
+
+| Option                                         | Default          | Change when                                                                                                                        |
+| ---------------------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `mode`                                         | `'batch'`        | `'one'` to claim a single row per tick (fairness over throughput across cluster nodes)                                             |
+| `concurrency`                                  | `1`              | Raise to send N emails in parallel per instance. Bounded by your SMTP / API rate limits. The CAS on `isSending` keeps it safe.     |
+| `sendingTimeout`                               | `300000` (5 min) | Stale-lock recovery window. Must exceed worst-case SMTP roundtrip; lower it only when you're confident sends never take that long. |
+| `revolvingInterval`                            | `1536` ms        | Lower → faster pickup; higher → less scheduler I/O                                                                                 |
+| `josk.minRevolvingDelay` / `maxRevolvingDelay` | `512` / `2048`   | Lower both → snappier polls, more storage load                                                                                     |
+| `josk.zombieTime`                              | `60000`          | **Never below 60s.** Iterate releases the JoSk lease as soon as scanning ends — only a stalled storage scan can blow this.         |
+| `josk.concurrency`                             | `Infinity`       | Set `1` if scheduler ticks overlap while `iterate` still runs                                                                      |
+| `josk.execute`                                 | `'batch'`        | Usually leave default; MailTime only registers one JoSk task per instance                                                          |
+| `josk.lockOwnerId`                             | random           | Set in production for observability                                                                                                |
+| `retries` / `retryDelay`                       | `60` / `60s`     | Per email class; transactional shorter, marketing longer                                                                           |
+| `concatEmails` / `concatDelay`                 | `false` / `60s`  | On for notification batching; off for OTP and receipts                                                                             |
+| `prefix`                                       | `''`             | **Same** on all `client` + `server` for one queue; **different** only per email class / shard                                      |
+
+
+### Pitfalls
+
+- Expecting **many `server` pods on the same `prefix`** to multiply throughput — they compete for one drain lease per tick. Use `concurrency` (in-process) and/or distinct `prefix`es (cluster-wide) instead. (Duplicate-prefix `server` is still useful as **failover/HA** — a warm standby with a different `lockOwnerId` takes over the lease the next tick if the leader dies.)
+- `zombieTime` too low** with slow storage scans — another node may start an overlapping drain (atomic CAS on `isSending` still prevents double-send, but wasted work and SMTP pressure remain).
+- `sendingTimeout` below the worst-case SMTP roundtrip** — a healthy still-sending worker can lose its lock to a recovery worker, causing a duplicate delivery. Always keep `sendingTimeout` comfortably above the slowest legitimate roundtrip.
+- **Replica reads** for queue or scheduler — use primary / writer endpoint only.
+- `josk.adapter.resetOnInit: true` in production — wipes scheduler state on every boot.
+
+## Templates
+
+Two Mustache-like placeholder forms:
+
+- `{{key}}` — string interpolation, strips HTML from the value (safe for plain text).
+- `{{{key}}}` — raw HTML interpolation.
+
+Every `sendMail` option is available inside `text`, `html`, and the wrapping template:
+
+```js
+const layouts = {
+  envelope: `<html><body>{{{html}}}<footer>Sent to @{{username}} ({{to}})</footer></body></html>`,
+  otp: {
+    text: 'Hello @{{username}}! Your code: {{code}}',
+    html: '<h1>Sign-in</h1><p>Hello <b>@{{username}}</b></p><pre><code>{{code}}</code></pre>',
+  },
+};
+
+const mailQueue = new MailTime({
+  /* ... */
+  template: layouts.envelope,
+});
+
+await mailQueue.sendMail({
+  to: 'user@example.com',
+  subject: 'Sign-in code',
+  username: 'mike',
+  code: 'A1B2-C3D4',
+  text: layouts.otp.text,
+  html: layouts.otp.html,
+});
+```
+
+`MailTime.Template` is a bundled responsive HTML envelope you can use as the default — set it on the constructor or per-letter via `opts.template`.
+
+## API
+
+### `new MailTime(opts)`
+
+
+| Option                        | Type                     | Default                    | Notes                                                                                                                                                                                       |
+| ----------------------------- | ------------------------ | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `queue`                       | `MongoQueue              | RedisQueue                 | PostgresQueue                                                                                                                                                                               |
+| `type`                        | `'server'                | 'client'`                  | `'server'`                                                                                                                                                                                  |
+| `transports`                  | `nodemailer.Transport[]` | —                          | **Required for `server`**. Non-empty.                                                                                                                                                       |
+| `josk`                        | `MailTimeJoSkOptions`    | —                          | **Required for `server`**. See below.                                                                                                                                                       |
+| `strategy`                    | `'backup'                | 'balancer'`                | `'backup'`                                                                                                                                                                                  |
+| `failsToNext`                 | `number`                 | `4`                        | (backup) failures-in-a-row before rotating.                                                                                                                                                 |
+| `retries`                     | `number`                 | `60`                       | Re-send attempts after first failure.                                                                                                                                                       |
+| `retryDelay`                  | `number` (ms)            | `60000`                    | Wait between attempts.                                                                                                                                                                      |
+| `keepHistory`                 | `boolean`                | `false`                    | Keep sent/failed/cancelled rows.                                                                                                                                                            |
+| `concatEmails`                | `boolean`                | `false`                    | Fold same-`to` letters into one.                                                                                                                                                            |
+| `concatSubject`               | `string`                 | `'Multiple notifications'` | Subject when folded.                                                                                                                                                                        |
+| `concatDelimiter`             | `string`                 | `'<hr>'`                   | Separator between folded bodies.                                                                                                                                                            |
+| `concatDelay`                 | `number` (ms)            | `60000`                    | Fold window.                                                                                                                                                                                |
+| `revolvingInterval`           | `number` (ms)            | `1536`                     | Queue iteration interval.                                                                                                                                                                   |
+| `mode`                        | `'one'                   | 'batch'`                   | `'batch'`                                                                                                                                                                                   |
+| `concurrency`                 | `number`                 | `1`                        | Parallel SMTPs per instance. The CAS on `isSending` prevents duplicate delivery.                                                                                                            |
+| `sendingTimeout`              | `number` (ms)            | `300000`                   | Window after which a stuck `isSending=true` row becomes eligible again. Must exceed worst-case SMTP roundtrip.                                                                              |
+| `template`                    | `string`                 | `'{{{html}}}'`             | Default envelope.                                                                                                                                                                           |
+| `prefix`                      | `string`                 | `''`                       | Queue namespace. **Same** on every `client` and `server` for one logical queue; **different** per email class. Inherited by the queue adapter; JoSk scheduler uses `mailTimeQueue<prefix>`. |
+| `from`                        | `string                  | (transport) => string`     | —                                                                                                                                                                                           |
+| `debug`                       | `boolean`                | `false`                    | Verbose logs.                                                                                                                                                                               |
+| `onSent(email, info)`         | `function`               | —                          | Called once the task is fully delivered. `email.mailOptions[i].accepted` lists every address that got through (across all attempts).                                                        |
+| `onError(error, email, info)` | `function`               | —                          | Called once the retry budget is exhausted with at least one un-accepted recipient. `email.mailOptions[i].rejected` lists each un-delivered address with its last error.                     |
+
+
+`josk` is passed to the underlying `[JoSk](https://github.com/veliovgroup/josk)` constructor. Useful keys:
+
+
+| Key                       | Default           | Notes                                                                              |
+| ------------------------- | ----------------- | ---------------------------------------------------------------------------------- |
+| `adapter`                 | —                 | Either a constructed adapter or `{ type: 'redis'                                   |
+| `minRevolvingDelay`       | `512`             | Lower bound of poll window.                                                        |
+| `maxRevolvingDelay`       | `2048`            | Upper bound.                                                                       |
+| `zombieTime`              | `60000`           | Re-claim if `queue.iterate()` runs longer than this. **Do not drop below 60s.**    |
+| `execute`                 | `'batch'`         | JoSk scheduler batching; low impact for MailTime (one interval task per instance). |
+| `concurrency`             | `Infinity`        | Cap overlapping JoSk handler runs on **this** process (`1` if ticks pile up).      |
+| `autoClear`               | `false`           | Remove orphan tasks from storage.                                                  |
+| `lockOwnerId`             | `josk-<uuid>`     | Stable owner id; recommended per worker.                                           |
+| `onError(title, details)` | (logs to console) | Wire to your logger.                                                               |
+
+
+### Methods
+
+- `sendMail(opts)` → `Promise<string>` uuid. Throws on missing `to`/`text`/`html`. Pass any nodemailer message option plus `sendAt` (Date or ms timestamp), `template`, `concatSubject`.
+- `send(opts)` — alias of `sendMail`.
+- `cancelMail(uuidOrPromise)` → `Promise<boolean>`. Accepts the `uuid` or the `Promise<string>` from `sendMail`.
+- `cancel(uuid)` — alias of `cancelMail`.
+- `ping()` → `Promise<{status, code, statusCode, error?}>`. Pings scheduler then queue.
+- `ready()` → `Promise<MailTime>`. Awaits all startup work; rejects with `.cause` on storage failure.
+- `destroy()` → `boolean`. Stops scheduler. Idempotent. Pair with `drain()` for graceful shutdown.
+- `drain()` → `Promise<void>`. Resolves once every in-flight SMTP attempt finishes. Useful in tests and graceful-shutdown paths.
+
+### Queue constructors
+
+
+| Constructor                              | Required option                                      | Optional                                                                                                     |
+| ---------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `new RedisQueue({ client, prefix? })`    | `client` from `await redis.createClient().connect()` | `prefix` — inherited from `MailTime` when omitted.                                                           |
+| `new MongoQueue({ db, prefix? })`        | `db` from `MongoClient#db()`                         | `prefix` — inherited from `MailTime` when omitted. Indexes auto-created on first `ready()`.                  |
+| `new PostgresQueue({ client, prefix? })` | `pg.Pool` (recommended) or `pg.Client`               | `prefix` — inherited from `MailTime` when omitted. `mail_time_queue` table auto-migrated on first `ready()`. |
+
+
+For custom adapters see [docs/queue-api.md](docs/queue-api.md).
+
+### Module functions
+
+- `mailTimePreset(name, overrides?)` → fresh MailTime constructor config. Deep-clones the named [preset](#settings-presets) and deep-merges your overrides (scalars win, nested `josk` composes). Throws on unknown `name` or non-object `overrides`.
+- `presets` — read-only `{ [name]: partialConfig }` map backing `mailTimePreset`.
+- `presetNames` — read-only array of preset names.
+
+### Static
+
+- `MailTime.Template` — get/set the default HTML envelope template.
 
 ## Testing
 
-1. Clone this package
-2. Start local or obtain URLs for remote MongoDB and Redis servers
-3. In Terminal (*Console*) go to directory where package was cloned
-4. Then run:
+```sh
+npm install
+# DEFAULT RUN — needs Redis + Mongo + Postgres up locally
+REDIS_URL="redis://127.0.0.1:6379" \
+MONGO_URL="mongodb://127.0.0.1:27017/mail-time-test" \
+PG_URL="postgres://127.0.0.1:5432/postgres" \
+  npm test
 
-```shell
-# Before running tests make sure NODE_ENV === development
-# Install NPM dependencies
-npm install --save-dev
+# Single suite
+npm run test:redis
+npm run test:mongo
+npm run test:postgres
 
-# DEFAULT RUN
-REDIS_URL="redis://127.0.0.1:6379" MONGO_URL="mongodb://127.0.0.1:27017/npm-mail-time-test-001" npm test
-
-# OPTIONALLY RUN WITH CUSTOM DOMAIN
-EMAIL_DOMAIN="your-domain.com" REDIS_URL="redis://127.0.0.1:6379" MONGO_URL="mongodb://127.0.0.1:27017/npm-mail-time-test-001" npm test
-
-# IF SOME TESTS ARE FAILING: ENABLE DEBUG
-DEBUG="true" REDIS_URL="redis://127.0.0.1:6379" MONGO_URL="mongodb://127.0.0.1:27017/npm-mail-time-test-001" npm test
-
-# Be patient, tests are taking around 8 mins
+# Bun-native test runner (only jest-shaped tests)
+bun test ./test/jest
 ```
 
-## Support this project:
+`npm test` runs Jest unit tests, then Mocha integration tests, then TypeScript declaration tests. Jest coverage threshold is **85%** across statements, branches, functions, and lines. GitHub Actions runs the matrix against `redis@^4` and `redis@^5`.
 
-- Upload and share files using [☄️ meteor-files.com](https://meteor-files.com/?ref=github-mail-time-repo-footer) — Continue interrupted file uploads without losing any progress. There is nothing that will stop Meteor from delivering your file to the desired destination
-- Use [▲ ostr.io](https://ostr.io?ref=github-mail-time-repo-footer) for [Server Monitoring](https://snmp-monitoring.com), [Web Analytics](https://ostr.io/info/web-analytics?ref=github-mail-time-repo-footer), [WebSec](https://domain-protection.info), [Web-CRON](https://web-cron.info) and [SEO Pre-rendering](https://prerendering.com) of a website
-- Star on [GitHub](https://github.com/veliovgroup/mail-time)
-- Star on [NPM](https://www.npmjs.com/package/mail-time)
-- Star on [Atmosphere](https://atmospherejs.com/ostrio/mailer)
-- [Sponsor maintainer via GitHub](https://github.com/sponsors/dr-dimitru) — support open source with one-time contribution or on a regular basis
-- [Sponsor veliovgroup via GitHub](https://github.com/sponsors/veliovgroup) — support company behind this package
-- [Support via PayPal](https://paypal.me/veliovgroup) — support our open source contributions
+## Bun
+
+MailTime ships pure ESM with a generated CJS bundle. Both runtimes (Bun ≥ 1.1.0, Node ≥ 20.9.0) load it directly:
+
+```js
+import { MailTime } from 'mail-time'; // works in both
+```
+
+Mixed clusters (some Node, some Bun) share one schedule under the same `prefix` — the lease lives in storage, runtime-agnostic.
+
+## Support this project
+
+- Star on [GitHub](https://github.com/veliovgroup/mail-time) and [NPM](https://www.npmjs.com/package/mail-time).
+- [Sponsor maintainer on GitHub](https://github.com/sponsors/dr-dimitru).
+- [Sponsor veliovgroup on GitHub](https://github.com/sponsors/veliovgroup).
+- [PayPal](https://paypal.me/veliovgroup).
+- Try [☄️ meteor-files.com](https://meteor-files.com/?ref=github-mail-time-repo-footer).
+- Try [▲ ostr.io](https://ostr.io?ref=github-mail-time-repo-footer) for server monitoring, web analytics, web-CRON, and SEO pre-rendering.
+
