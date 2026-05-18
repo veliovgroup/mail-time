@@ -11,6 +11,16 @@ import type {
   MailTimeTransport
 } from 'mail-time';
 
+// Subpath exports — must resolve and re-expose the same constructors / function.
+import { MongoQueue as MongoQueueSub } from 'mail-time/adapters/mongo';
+import { RedisQueue as RedisQueueSub } from 'mail-time/adapters/redis';
+import { PostgresQueue as PostgresQueueSub } from 'mail-time/adapters/postgres';
+import { mailTimePreset as mailTimePresetSub } from 'mail-time/presets';
+void MongoQueueSub;
+void RedisQueueSub;
+void PostgresQueueSub;
+void mailTimePresetSub;
+
 const queue: CustomQueue = {
   async ping(): Promise<MailTimePingResult> {
     return {
@@ -115,6 +125,8 @@ mailTime.___iterate;
 mailTime.__isDestroyed;
 // @ts-expect-error __readyPromise is internal
 mailTime.__readyPromise;
+// @ts-expect-error __debug is internal
+mailTime.__debug;
 
 const redisQueue = new RedisQueue({
   client: {
