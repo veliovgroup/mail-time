@@ -17,9 +17,8 @@ export class PostgresQueue {
      */
     constructor(opts: PostgresQueueOption);
     name: string;
-    prefix: string;
     client: PostgresClient;
-    __readyPromise: Promise<void>;
+    prefix: any;
     /**
      * @async
      * @memberOf PostgresQueue
@@ -28,8 +27,6 @@ export class PostgresQueue {
      * @returns {Promise<void 0>}
      */
     ready(): Promise<void>;
-    /** @internal */
-    __setup(): Promise<void>;
     /**
      * @async
      * @memberOf PostgresQueue
@@ -42,9 +39,13 @@ export class PostgresQueue {
      * @memberOf PostgresQueue
      * @name iterate
      * @description iterate over queued tasks passing to `mailTimeInstance.___send` method
+     * @param {{ limit?: number, sendingTimeout?: number }} [opts] - iteration options
      * @returns {Promise<void>}
      */
-    iterate(): Promise<void>;
+    iterate(opts?: {
+        limit?: number;
+        sendingTimeout?: number;
+    }): Promise<void>;
     /**
      * @async
      * @memberOf PostgresQueue

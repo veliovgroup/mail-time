@@ -1,4 +1,4 @@
-import { logError } from '../helpers.js';
+import { debug, logError } from '../helpers.js';
 
 /**
  * @typedef {object} PostgresQueryResult
@@ -17,6 +17,7 @@ import { logError } from '../helpers.js';
  * @property {string} [prefix]
  */
 
+const DEFAULT_PREFIX = 'default';
 const setupLockId = 93824519;
 
 const fieldMap = {
@@ -26,14 +27,16 @@ const fieldMap = {
   isSent: 'is_sent',
   isCancelled: 'is_cancelled',
   isFailed: 'is_failed',
+  isSending: 'is_sending',
+  sendingAt: 'sending_at',
   template: 'template',
   transport: 'transport',
   concatSubject: 'concat_subject',
-  mailOptions: 'mail_options'
+  mailOptions: 'mail_options',
 };
 
 const isSendClaimUpdate = (updateObj) => {
-  return updateObj.isSent === true && typeof updateObj.tries === 'number';
+  return updateObj.isSending === true && typeof updateObj.tries === 'number';
 };
 
 const parseMailOptions = (mailOptions) => {
@@ -57,10 +60,12 @@ const normalizeRow = (row) => {
     isSent: row.is_sent,
     isCancelled: row.is_cancelled,
     isFailed: row.is_failed,
+    isSending: row.is_sending === true,
+    sendingAt: row.sending_at !== null && row.sending_at !== undefined ? parseInt(row.sending_at, 10) : 0,
     template: row.template || false,
     transport: parseInt(row.transport, 10),
     concatSubject: row.concat_subject || false,
-    mailOptions: parseMailOptions(row.mail_options)
+    mailOptions: parseMailOptions(row.mail_options),
   };
 };
 
@@ -72,18 +77,37 @@ class PostgresQueue {
    */
   constructor(opts) {
     this.name = 'postgres-queue';
-    if (!opts || typeof opts !== 'object' || opts === null) {
+    if (!opts || typeof opts !== 'object') {
       throw new TypeError('[mail-time] Configuration object must be passed into PostgresQueue constructor');
     }
 
-    if (!opts.client) {
-      throw new Error('[mail-time] [PostgresQueue] required {client} option is missing');
+    if (!opts.client || typeof opts.client.query !== 'function') {
+      throw new Error('[mail-time] [PostgresQueue] required {client} option is missing or does not expose a `query` method');
     }
 
-    this.prefix = (typeof opts.prefix === 'string' && opts.prefix.length > 0) ? opts.prefix : 'default';
     this.client = opts.client;
+    if (typeof opts.prefix === 'string' && opts.prefix.length > 0) {
+      this.__applyPrefix(opts.prefix);
+    }
+  }
+
+  /** @internal */
+  __applyPrefix(prefix) {
+    this.prefix = prefix;
     this.__readyPromise = this.__setup();
     this.__readyPromise.catch(() => void 0);
+  }
+
+  /** @internal */
+  __ensurePrefix() {
+    if (typeof this.prefix !== 'string') {
+      this.__applyPrefix(this.mailTimeInstance?.prefix || DEFAULT_PREFIX);
+    }
+  }
+
+  /** @internal */
+  __debug(...args) {
+    debug(this.mailTimeInstance?.debug === true, `[${this.name}]`, ...args);
   }
 
   /**
@@ -94,6 +118,8 @@ class PostgresQueue {
    * @returns {Promise<void 0>}
    */
   async ready() {
+    this.__ensurePrefix();
+    this.__debug('[ready]');
     await this.__readyPromise;
   }
 
@@ -102,8 +128,7 @@ class PostgresQueue {
     await this.client.query('SELECT pg_advisory_lock($1)', [setupLockId]);
 
     try {
-      await this.client.query(`
-        CREATE TABLE IF NOT EXISTS mail_time_queue (
+      await this.client.query(`CREATE TABLE IF NOT EXISTS mail_time_queue (
           id BIGSERIAL PRIMARY KEY,
           prefix TEXT NOT NULL DEFAULT 'default',
           uuid TEXT NOT NULL,
@@ -113,44 +138,23 @@ class PostgresQueue {
           is_sent BOOLEAN NOT NULL DEFAULT false,
           is_cancelled BOOLEAN NOT NULL DEFAULT false,
           is_failed BOOLEAN NOT NULL DEFAULT false,
+          is_sending BOOLEAN NOT NULL DEFAULT false,
+          sending_at BIGINT NOT NULL DEFAULT 0,
           template TEXT,
           transport INTEGER NOT NULL DEFAULT 0,
           concat_subject TEXT,
           mail_options JSONB NOT NULL,
           created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-      `);
+        )`);
+      await this.client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_time_queue_prefix_uuid
+        ON mail_time_queue (prefix, uuid)`);
 
-      await this.client.query(`ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS prefix TEXT NOT NULL DEFAULT 'default'`);
-      await this.client.query(`ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS uuid TEXT NOT NULL DEFAULT ''`);
-      await this.client.query(`ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS to_address TEXT`);
-      await this.client.query(`ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS tries INTEGER NOT NULL DEFAULT 0`);
-      await this.client.query(`ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS send_at BIGINT NOT NULL DEFAULT 0`);
-      await this.client.query(`ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS is_sent BOOLEAN NOT NULL DEFAULT false`);
-      await this.client.query(`ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS is_cancelled BOOLEAN NOT NULL DEFAULT false`);
-      await this.client.query(`ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS is_failed BOOLEAN NOT NULL DEFAULT false`);
-      await this.client.query(`ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS template TEXT`);
-      await this.client.query(`ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS transport INTEGER NOT NULL DEFAULT 0`);
-      await this.client.query(`ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS concat_subject TEXT`);
-      await this.client.query(`ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS mail_options JSONB NOT NULL DEFAULT '[]'::jsonb`);
-      await this.client.query(`ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP`);
-      await this.client.query(`ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP`);
+      await this.client.query(`CREATE INDEX IF NOT EXISTS idx_mail_time_queue_due
+        ON mail_time_queue (prefix, is_sent, is_failed, is_cancelled, is_sending, sending_at, send_at, tries)`);
 
-      await this.client.query(`
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_time_queue_prefix_uuid
-        ON mail_time_queue (prefix, uuid)
-      `);
-
-      await this.client.query(`
-        CREATE INDEX IF NOT EXISTS idx_mail_time_queue_due
-        ON mail_time_queue (prefix, is_sent, is_failed, is_cancelled, send_at, tries)
-      `);
-
-      await this.client.query(`
-        CREATE INDEX IF NOT EXISTS idx_mail_time_queue_pending_to
-        ON mail_time_queue (prefix, to_address, is_sent, is_failed, is_cancelled, send_at)
-      `);
+      await this.client.query(`CREATE INDEX IF NOT EXISTS idx_mail_time_queue_pending_to
+        ON mail_time_queue (prefix, to_address, is_sent, is_failed, is_cancelled, send_at)`);
     } finally {
       await this.client.query('SELECT pg_advisory_unlock($1)', [setupLockId]);
     }
@@ -164,6 +168,7 @@ class PostgresQueue {
    * @returns {Promise<object>}
    */
   async ping() {
+    this.__debug('[ping]');
     if (!this.mailTimeInstance) {
       return {
         status: 'Service Unavailable',
@@ -188,7 +193,7 @@ class PostgresQueue {
         status: 'Internal Server Error',
         code: 500,
         statusCode: 500,
-        error: pingError
+        error: pingError,
       };
     }
 
@@ -196,7 +201,7 @@ class PostgresQueue {
       status: 'Service Unavailable',
       code: 503,
       statusCode: 503,
-      error: new Error('Service Unavailable')
+      error: new Error('Service Unavailable'),
     };
   }
 
@@ -204,15 +209,28 @@ class PostgresQueue {
    * @memberOf PostgresQueue
    * @name iterate
    * @description iterate over queued tasks passing to `mailTimeInstance.___send` method
+   * @param {{ limit?: number, sendingTimeout?: number }} [opts] - iteration options
    * @returns {Promise<void>}
    */
-  async iterate() {
+  async iterate(opts) {
+    this.__debug('[iterate]', opts);
+    if (!this.mailTimeInstance) {
+      return;
+    }
     await this.ready();
 
+    const now = Date.now();
+    const sendingTimeout = (opts && typeof opts.sendingTimeout === 'number' && opts.sendingTimeout > 0)
+      ? opts.sendingTimeout
+      : 300000;
+    const requestedLimit = (opts && typeof opts.limit === 'number' && Number.isFinite(opts.limit) && opts.limit > 0)
+      ? Math.floor(opts.limit)
+      : 100;
+    const limit = Math.max(1, Math.min(requestedLimit, 100));
+
     try {
-      const res = await this.client.query(`
-        SELECT id, uuid, to_address, tries, send_at, is_sent, is_cancelled, is_failed,
-               template, transport, concat_subject, mail_options
+      const res = await this.client.query(`SELECT id, uuid, to_address, tries, send_at, is_sent, is_cancelled, is_failed,
+               is_sending, sending_at, template, transport, concat_subject, mail_options
         FROM mail_time_queue
         WHERE prefix = $1
           AND is_sent = false
@@ -220,12 +238,12 @@ class PostgresQueue {
           AND is_cancelled = false
           AND send_at <= $2
           AND tries < $3
+          AND (is_sending = false OR sending_at <= $4)
         ORDER BY send_at ASC
-        LIMIT 100
-      `, [this.prefix, Date.now(), this.mailTimeInstance.maxTries]);
+        LIMIT $5`, [this.prefix, now, this.mailTimeInstance.maxTries, now - sendingTimeout, limit]);
 
       for (const row of res.rows || []) {
-        await this.mailTimeInstance.___send(normalizeRow(row));
+        await this.mailTimeInstance.___dispatch(normalizeRow(row));
       }
     } catch (iterateError) {
       logError('[PostgresQueue] [iterate] [iterateError]', iterateError);
@@ -242,14 +260,14 @@ class PostgresQueue {
    * @returns {Promise<object|null>}
    */
   async getPendingTo(to, sendAt) {
+    this.__debug('[getPendingTo]', to, sendAt);
     if (typeof to !== 'string' || typeof sendAt !== 'number') {
       return null;
     }
 
     await this.ready();
 
-    const res = await this.client.query(`
-      SELECT id, uuid, to_address, tries, send_at, is_sent, is_cancelled, is_failed,
+    const res = await this.client.query(`SELECT id, uuid, to_address, tries, send_at, is_sent, is_cancelled, is_failed,
              template, transport, concat_subject, mail_options
       FROM mail_time_queue
       WHERE prefix = $1
@@ -259,8 +277,7 @@ class PostgresQueue {
         AND is_cancelled = false
         AND send_at <= $3
       ORDER BY send_at DESC
-      LIMIT 1
-    `, [this.prefix, to, sendAt]);
+      LIMIT 1`, [this.prefix, to, sendAt]);
 
     return normalizeRow(res.rows?.[0]);
   }
@@ -274,6 +291,7 @@ class PostgresQueue {
    * @returns {Promise<void 0>}
    */
   async push(task) {
+    this.__debug('[push]', task?.uuid);
     if (!task || typeof task !== 'object') {
       return;
     }
@@ -284,12 +302,11 @@ class PostgresQueue {
       task.sendAt = +task.sendAt;
     }
 
-    await this.client.query(`
-      INSERT INTO mail_time_queue (
+    await this.client.query(`INSERT INTO mail_time_queue (
         prefix, uuid, to_address, tries, send_at, is_sent, is_cancelled, is_failed,
-        template, transport, concat_subject, mail_options, created_at, updated_at
+        is_sending, sending_at, template, transport, concat_subject, mail_options, created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT (prefix, uuid) DO UPDATE SET
         to_address = EXCLUDED.to_address,
         tries = EXCLUDED.tries,
@@ -297,12 +314,13 @@ class PostgresQueue {
         is_sent = EXCLUDED.is_sent,
         is_cancelled = EXCLUDED.is_cancelled,
         is_failed = EXCLUDED.is_failed,
+        is_sending = EXCLUDED.is_sending,
+        sending_at = EXCLUDED.sending_at,
         template = EXCLUDED.template,
         transport = EXCLUDED.transport,
         concat_subject = EXCLUDED.concat_subject,
         mail_options = EXCLUDED.mail_options,
-        updated_at = CURRENT_TIMESTAMP
-    `, [
+        updated_at = CURRENT_TIMESTAMP`, [
       this.prefix,
       task.uuid,
       typeof task.to === 'string' ? task.to : null,
@@ -311,10 +329,12 @@ class PostgresQueue {
       task.isSent,
       task.isCancelled,
       task.isFailed,
+      task.isSending === true,
+      typeof task.sendingAt === 'number' ? task.sendingAt : 0,
       task.template || null,
       task.transport,
       task.concatSubject || null,
-      JSON.stringify(task.mailOptions || [])
+      JSON.stringify(task.mailOptions || []),
     ]);
   }
 
@@ -327,20 +347,19 @@ class PostgresQueue {
    * @returns {Promise<boolean>} returns `true` if cancelled or `false` if not found, was sent, or was cancelled previously
    */
   async cancel(uuid) {
+    this.__debug('[cancel]', uuid);
     if (typeof uuid !== 'string') {
       return false;
     }
 
     await this.ready();
 
-    const task = normalizeRow((await this.client.query(`
-      SELECT id, uuid, to_address, tries, send_at, is_sent, is_cancelled, is_failed,
+    const task = normalizeRow((await this.client.query(`SELECT id, uuid, to_address, tries, send_at, is_sent, is_cancelled, is_failed,
              template, transport, concat_subject, mail_options
       FROM mail_time_queue
       WHERE prefix = $1
         AND uuid = $2
-      LIMIT 1
-    `, [this.prefix, uuid])).rows?.[0]);
+      LIMIT 1`, [this.prefix, uuid])).rows?.[0]);
 
     if (!task || task.isSent === true || task.isCancelled === true) {
       return false;
@@ -364,6 +383,7 @@ class PostgresQueue {
    * @returns {Promise<boolean>} returns `true` if removed or `false` if not found
    */
   async remove(task) {
+    this.__debug('[remove]', task?.uuid);
     if (!task || typeof task !== 'object') {
       return false;
     }
@@ -372,11 +392,9 @@ class PostgresQueue {
 
     const where = task.id ? 'id = $2' : 'uuid = $2';
     const value = task.id || task.uuid;
-    const res = await this.client.query(`
-      DELETE FROM mail_time_queue
+    const res = await this.client.query(`DELETE FROM mail_time_queue
       WHERE prefix = $1
-        AND ${where}
-    `, [this.prefix, value]);
+        AND ${where}`, [this.prefix, value]);
     return (res.rowCount || 0) >= 1;
   }
 
@@ -390,6 +408,7 @@ class PostgresQueue {
    * @returns {Promise<boolean>} returns `true` if updated or `false` if not found or no changes was made
    */
   async update(task, updateObj) {
+    this.__debug('[update]', task?.uuid);
     if (!task || typeof task !== 'object' || !updateObj || typeof updateObj !== 'object') {
       return false;
     }
@@ -421,12 +440,18 @@ class PostgresQueue {
 
     let claimWhere = '';
     if (isSendClaimUpdate(updateObj)) {
+      const now = typeof updateObj.sendingAt === 'number' ? updateObj.sendingAt : Date.now();
+      const sendingTimeout = this.mailTimeInstance?.sendingTimeout || 300000;
       values.push(task.tries);
+      const triesIndex = values.length;
+      values.push(now - sendingTimeout);
+      const staleIndex = values.length;
       claimWhere = `
         AND is_sent = false
         AND is_failed = false
         AND is_cancelled = false
-        AND tries = $${values.length}
+        AND tries = $${triesIndex}
+        AND (is_sending = false OR sending_at <= $${staleIndex})
       `;
     }
 
@@ -436,14 +461,12 @@ class PostgresQueue {
     const taskIndex = values.length;
     const where = task.id ? 'id' : 'uuid';
 
-    const res = await this.client.query(`
-      UPDATE mail_time_queue
+    const res = await this.client.query(`UPDATE mail_time_queue
       SET ${sets.join(', ')},
           updated_at = CURRENT_TIMESTAMP
       WHERE prefix = $${prefixIndex}
         AND ${where} = $${taskIndex}
-        ${claimWhere}
-    `, values);
+        ${claimWhere}`, values);
 
     return (res.rowCount || 0) >= 1;
   }
