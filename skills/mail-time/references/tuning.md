@@ -87,7 +87,7 @@ Non-preset cases:
 
 ## Anti-patterns
 
-- Many `server` pods, one `prefix`, expecting N× send rate. Use `concurrency: N` (in-process) and/or distinct `prefix`es (cluster-wide). (Duplicate-prefix `server` is still valid for failover/HA — just not throughput.)
+- Many `server` pods, one `prefix` for throughput and concurrency.
 - `zombieTime` < worst-case storage scan time.
 - `sendingTimeout` < worst-case SMTP roundtrip — a live still-sending worker can lose its lock to a recovery worker, causing duplicate delivery.
 - `resetOnInit` / `autoClear` in prod without intent.

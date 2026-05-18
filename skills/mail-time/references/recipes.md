@@ -153,9 +153,9 @@ On a dedicated mail VM, run **2–8 `server` instances** (~1 per CPU core) for *
 ```js
 import { otpMail, transactionalMail, marketingMail } from './mail-instances.js';
 
-const workers = [otpMail, transactionalMail, marketingMail];
-await Promise.all(workers.map((m) => m.ready()));
-process.on('SIGTERM', () => workers.forEach((m) => m.destroy()));
+const mailers = [otpMail, transactionalMail, marketingMail];
+await Promise.all(mailers.map((m) => m.ready()));
+process.on('SIGTERM', () => mailers.forEach((m) => m.destroy()));
 ```
 
 High volume on one logical queue → shard prefixes (`marketing-0`, `marketing-1`). See `tuning.md`.
