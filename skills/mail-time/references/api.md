@@ -140,8 +140,8 @@ Enqueue a letter.
 
 Throws synchronously:
 
-- `[mail-time] [sendMail] \`html\` nor \`text\` field is presented` — when both are missing.
-- `[mail-time] [sendMail] \`mailOptions.to\` is required and must be a string or non-empty Array` — when `to` is invalid.
+- `[mail-time] [sendMail] html nor text field is presented` — when both are missing.
+- `[mail-time] [sendMail] mailOptions.to is required and must be a string or non-empty Array` — when `to` is invalid.
 
 Returns the email's stable `uuid` string. Use it for cancellation.
 
