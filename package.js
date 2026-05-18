@@ -11,8 +11,12 @@ Package.onUse((api) => {
     josk: '6.0.0',
   });
 
-  api.versionsFrom(['1.6', '3.0-beta.0']);
-  api.use(['mongo@1.6.19 || 2.0.0-beta300.0', 'ecmascript@0.16.8 || 0.16.8-beta300.0'], 'server');
+  api.versionsFrom(['1.12', '2.16', '3.0', '3.4']);
+  api.use([
+    'ecmascript@0.14.0 || 0.16.0',
+    'mongo@1.10.0 || 1.16.0 || 2.0.4',
+    'zodern:types@1.0.13',
+  ], 'server');
   api.mainModule('index.js', 'server');
 });
 
@@ -23,6 +27,10 @@ Package.onTest((api) => {
     redis: '5.12.1',
   });
 
-  api.use(['ecmascript@0.16.8 || 0.16.8-beta300.0', 'mongo@1.6.19 || 2.0.0-beta300.0', 'meteortesting:mocha@2.1.0 || 3.1.0-beta300.0'], 'server');
+  api.use([
+    'ecmascript@0.14.0 || 0.16.0',
+    'mongo@1.10.0 || 1.16.0 || 2.0.4',
+    'meteortesting:mocha@1.2.0 || 2.1.0 || 3.2.0',
+  ], 'server');
   api.addFiles('test/meteor.js', 'server');
 });

@@ -19,6 +19,7 @@ jest.config.mjs
 node_modules
 npm-debug.log*
 package.js
+package-types.json
 rollup.config.js
 scripts/
 scripts/*
