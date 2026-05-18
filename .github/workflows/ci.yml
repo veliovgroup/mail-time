@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  test:
+    name: ${{ matrix.runtime }} ${{ matrix.runtime-version }} · redis-client ${{ matrix.redis-client }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [node]
+        runtime-version: ['20.9', '22', 'lts/*']
+        redis-client: ['^4', '^5']
+        include:
+          - runtime: bun
+            runtime-version: 'latest'
+            redis-client: '^5'
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "echo 'db.runCommand({ping:1})' | mongosh --quiet"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    env:
+      REDIS_URL: redis://127.0.0.1:6379
+      MONGO_URL: mongodb://127.0.0.1:27017/npm-mail-time-test
+      PG_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        if: matrix.runtime == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.runtime-version }}
+          cache: npm
+
+      - name: Setup Bun
+        if: matrix.runtime == 'bun'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ matrix.runtime-version }}
+
+      - name: Install deps (npm)
+        if: matrix.runtime == 'node'
+        run: npm ci
+
+      - name: Install deps (bun)
+        if: matrix.runtime == 'bun'
+        run: bun install --frozen-lockfile
+
+      - name: Pin redis client to ${{ matrix.redis-client }}
+        if: matrix.runtime == 'node'
+        run: npm install --no-save "redis@${{ matrix.redis-client }}"
+
+      - name: Pin redis client to ${{ matrix.redis-client }} (bun)
+        if: matrix.runtime == 'bun'
+        run: bun add --dev "redis@${{ matrix.redis-client }}"
+
+      - name: Jest (node)
+        if: matrix.runtime == 'node'
+        run: npm run test:jest
+
+      - name: Mocha integration (node)
+        if: matrix.runtime == 'node'
+        run: npm run test:mocha
+
+      - name: TypeScript declarations
+        if: matrix.runtime == 'node'
+        run: npm run test:types
+
+      - name: Bun-runner jest suite
+        if: matrix.runtime == 'bun'
+        run: bun test ./test/jest
