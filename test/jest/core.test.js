@@ -418,6 +418,25 @@ describe('MailTime send and render behavior', () => {
     expect(stringy.concatEmails).toBe(false);
   });
 
+  it('concatEmails appends via appendMailOption when a pending row exists', async () => {
+    const mailTime = createMailTime({
+      concatEmails: true,
+      concatDelay: 1000,
+    });
+    const first = await mailTime.sendMail({
+      to: 'fold@example.com',
+      subject: 'One',
+      text: 'One',
+    });
+    const second = await mailTime.sendMail({
+      to: 'fold@example.com',
+      subject: 'Two',
+      text: 'Two',
+    });
+    expect(second).toBe(first);
+    expect(mailTime.queue.records.get(first).mailOptions).toHaveLength(2);
+  });
+
   it('renders {{count}} placeholder in the concat subject when folding letters', () => {
     const mailTime = createMailTime({
       concatEmails: { subject: '{{count}} new notifications' }
@@ -624,7 +643,20 @@ describe('MailTime send and render behavior', () => {
       async cancel() {
         return false;
       },
-      async remove(task) {
+      async remove(task, opts) {
+        const current = records.get(task.uuid);
+        if (!current) {
+          return false;
+        }
+        if (opts && typeof opts.leaseTries === 'number' && typeof opts.leaseSendingAt === 'number') {
+          if (current.tries !== opts.leaseTries
+            || current.isSending !== true
+            || current.sendingAt !== opts.leaseSendingAt
+            || current.isCancelled === true
+            || current.isFailed === true) {
+            return false;
+          }
+        }
         return records.delete(task.uuid);
       },
       async update(task, updateObj) {
@@ -642,9 +674,20 @@ describe('MailTime send and render behavior', () => {
           if (current.isSending === true && (typeof current.sendingAt === 'number' ? current.sendingAt : 0) > now - sendingTimeout) {
             return false;
           }
+        } else if (typeof updateObj.leaseTries === 'number' && typeof updateObj.leaseSendingAt === 'number') {
+          if (current.tries !== updateObj.leaseTries
+            || current.isSending !== true
+            || current.sendingAt !== updateObj.leaseSendingAt
+            || current.isCancelled === true
+            || current.isFailed === true) {
+            return false;
+          }
         }
 
-        Object.assign(current, updateObj);
+        const persistObj = { ...updateObj };
+        delete persistObj.leaseTries;
+        delete persistObj.leaseSendingAt;
+        Object.assign(current, persistObj);
         return true;
       }
     };
@@ -1352,6 +1395,99 @@ describe('MailTime mode, concurrency, and isSending lifecycle', () => {
     const stored = mailTime.queue.records.get(uuid);
     expect(stored.isSending).toBe(false);
     expect(stored.sendingAt).toBe(0);
+  });
+
+  it('ignores late SMTP completion when another worker holds the lease', async () => {
+    const queue = createQueue();
+    let releaseSmtp;
+    const smtpGate = new Promise((resolve) => {
+      releaseSmtp = resolve;
+    });
+    const transport = createTransport((_mail, done) => {
+      smtpGate.then(() => done(null, { accepted: [_mail.to], rejected: [], response: 'ok' }));
+    });
+    const onSent = jest.fn();
+    const mailTime = createMailTime({
+      queue,
+      transports: [transport],
+      onSent,
+    });
+    const task = {
+      uuid: 'lease-lost',
+      tries: 0,
+      isSent: false,
+      isFailed: false,
+      isCancelled: false,
+      isSending: false,
+      sendingAt: 0,
+      sendAt: Date.now() - 1,
+      template: false,
+      transport: 0,
+      concatSubject: false,
+      mailOptions: [{ to: 'user@example.com', text: 'hi' }],
+    };
+    queue.records.set(task.uuid, { ...task });
+
+    const sendPromise = mailTime.___send({ ...task });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(queue.records.get(task.uuid)?.isSending).toBe(true);
+    const claimed = queue.records.get(task.uuid);
+    queue.records.set(task.uuid, {
+      ...claimed,
+      tries: 2,
+      sendingAt: Date.now(),
+      isSending: true,
+    });
+    releaseSmtp();
+    await sendPromise;
+
+    expect(onSent).not.toHaveBeenCalled();
+    expect(queue.records.has(task.uuid)).toBe(true);
+  });
+
+  it('skips onError when final failure update loses the lease', async () => {
+    const mailTime = createMailTime({ retries: 0 });
+    const onError = jest.fn();
+    mailTime.onError = onError;
+    const uuid = await mailTime.sendMail({ to: 'user@example.com', text: 'fail' });
+    const task = mailTime.queue.records.get(uuid);
+    task.tries = 1;
+    task.isSending = true;
+    task.sendingAt = Date.now();
+    mailTime.queue.update = jest.fn(async () => false);
+    mailTime.queue.remove = jest.fn(async () => false);
+
+    await mailTime.___handleError(task, new Error('smtp down'), {});
+
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('destroy({ drain: true }) waits for in-flight pool work', async () => {
+    const mailTime = createMailTime({ concurrency: 1 });
+    let released = false;
+    mailTime.___send = jest.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      released = true;
+    });
+    const task = {
+      uuid: 'drain-on-destroy',
+      tries: 0,
+      isSent: false,
+      isFailed: false,
+      isCancelled: false,
+      isSending: false,
+      sendingAt: 0,
+      sendAt: Date.now() - 1,
+      template: false,
+      transport: 0,
+      concatSubject: false,
+      mailOptions: [{ to: 'user@example.com', text: 'hi' }],
+    };
+    mailTime.queue.records.set(task.uuid, { ...task });
+    await mailTime.___dispatch(task);
+    expect(released).toBe(false);
+    await expect(mailTime.destroy({ drain: true })).resolves.toBe(true);
+    expect(released).toBe(true);
   });
 });
 

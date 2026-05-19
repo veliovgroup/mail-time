@@ -39,7 +39,7 @@ export const createQueue = () => {
     },
     async getPendingTo(to, sendAt) {
       for (const task of records.values()) {
-        if (task.to === to && task.isSent === false && task.isFailed === false && task.isCancelled === false && task.sendAt <= sendAt) {
+        if (task.to === to && task.isSent === false && task.isFailed === false && task.isCancelled === false && task.isSending !== true && task.sendAt <= sendAt) {
           return task;
         }
       }
@@ -60,13 +60,34 @@ export const createQueue = () => {
       task.isCancelled = true;
       return true;
     },
-    async remove(task) {
+    async remove(task, opts) {
+      const current = records.get(task.uuid);
+      if (!current) {
+        return false;
+      }
+      if (opts && typeof opts.leaseTries === 'number' && typeof opts.leaseSendingAt === 'number') {
+        if (current.tries !== opts.leaseTries
+          || current.isSending !== true
+          || current.sendingAt !== opts.leaseSendingAt
+          || current.isCancelled === true
+          || current.isFailed === true) {
+          return false;
+        }
+      }
       return records.delete(task.uuid);
     },
     async update(task, updateObj) {
       const current = records.get(task.uuid);
       if (!current) {
         return false;
+      }
+      if (updateObj.appendMailOption !== void 0) {
+        if (current.isSending === true || current.isSent === true || current.isFailed === true || current.isCancelled === true) {
+          return false;
+        }
+        current.mailOptions = [...(current.mailOptions || []), updateObj.appendMailOption];
+        Object.assign(task, { mailOptions: current.mailOptions });
+        return true;
       }
       if (updateObj.isSending === true && typeof updateObj.tries === 'number') {
         const now = typeof updateObj.sendingAt === 'number' ? updateObj.sendingAt : Date.now();
@@ -77,9 +98,21 @@ export const createQueue = () => {
         if (current.isSending === true && (typeof current.sendingAt === 'number' ? current.sendingAt : 0) > now - sendingTimeout) {
           return false;
         }
+      } else if (typeof updateObj.leaseTries === 'number' && typeof updateObj.leaseSendingAt === 'number') {
+        if (current.tries !== updateObj.leaseTries
+          || current.isSending !== true
+          || current.sendingAt !== updateObj.leaseSendingAt
+          || current.isCancelled === true
+          || current.isFailed === true) {
+          return false;
+        }
       }
-      Object.assign(current, updateObj);
-      Object.assign(task, updateObj);
+      const persistObj = { ...updateObj };
+      delete persistObj.leaseTries;
+      delete persistObj.leaseSendingAt;
+      delete persistObj.appendMailOption;
+      Object.assign(current, persistObj);
+      Object.assign(task, persistObj);
       return true;
     }
   };

@@ -1059,4 +1059,336 @@ describe('Helpers, equals, and deep merge corner cases', () => {
     await queue.ready();
     await expect(queue.cancel('cancelled')).resolves.toBe(false);
   });
+
+  it('mongo update appendMailOption atomically extends mailOptions', async () => {
+    const collection = createMongoCollection({
+      updateOne: jest.fn(async () => ({ modifiedCount: 1 })),
+    });
+    const queue = new MongoQueue({ db: createMongoDb(collection), prefix: 'append' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await queue.ready();
+
+    await expect(queue.update({ _id: 'id-a', uuid: 'append-1' }, {
+      appendMailOption: { to: 'user@example.com', text: 'x' },
+    })).resolves.toBe(true);
+
+    expect(collection.updateOne).toHaveBeenCalledWith({
+      _id: 'id-a',
+      isSent: false,
+      isFailed: false,
+      isCancelled: false,
+      isSending: { $ne: true },
+    }, {
+      $push: { mailOptions: { to: 'user@example.com', text: 'x' } },
+    });
+  });
+
+  it('mongo getPendingTo excludes in-flight rows', async () => {
+    const collection = createMongoCollection({
+      findOne: jest.fn(async () => null),
+    });
+    const queue = new MongoQueue({ db: createMongoDb(collection), prefix: 'pending-m' });
+    await queue.getPendingTo('user@example.com', Date.now());
+    expect(collection.findOne.mock.calls[0][0].isSending).toEqual({ $ne: true });
+  });
+
+  it('mongo update honors lease release guard after claim', async () => {
+    const collection = createMongoCollection({
+      updateOne: jest.fn(async () => ({ modifiedCount: 1, matchedCount: 1 })),
+    });
+    const queue = new MongoQueue({ db: createMongoDb(collection), prefix: 'lease' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await queue.ready();
+
+    const task = { _id: 'id-1', uuid: 'lease-1', tries: 1, isSending: true, sendingAt: 12345 };
+    await expect(queue.update(task, {
+      isSending: false,
+      sendingAt: 0,
+      leaseTries: 1,
+      leaseSendingAt: 12345,
+    })).resolves.toBe(true);
+
+    const updateCall = collection.updateOne.mock.calls.at(-1);
+    expect(updateCall[0]).toMatchObject({
+      _id: 'id-1',
+      tries: 1,
+      isSending: true,
+      sendingAt: 12345,
+      isCancelled: false,
+      isFailed: false,
+    });
+  });
+
+  it('mongo lease release predicate rejects cancelled and failed rows', async () => {
+    const collection = createMongoCollection({
+      updateOne: jest.fn(async () => ({ modifiedCount: 1, matchedCount: 1 })),
+      deleteOne: jest.fn(async () => ({ deletedCount: 1 })),
+    });
+    const queue = new MongoQueue({ db: createMongoDb(collection), prefix: 'lease-cancel' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await queue.ready();
+
+    await queue.update({ _id: 'id-c', uuid: 'cancel-1', tries: 1, isSending: true, sendingAt: 99 }, {
+      isSent: true,
+      isSending: false,
+      sendingAt: 0,
+      leaseTries: 1,
+      leaseSendingAt: 99,
+    });
+    expect(collection.updateOne.mock.calls.at(-1)[0]).toMatchObject({
+      isCancelled: false,
+      isFailed: false,
+    });
+
+    await queue.remove({ _id: 'id-c', uuid: 'cancel-1' }, { leaseTries: 1, leaseSendingAt: 99 });
+    expect(collection.deleteOne.mock.calls.at(-1)[0]).toMatchObject({
+      tries: 1,
+      isSending: true,
+      sendingAt: 99,
+      isCancelled: false,
+      isFailed: false,
+    });
+  });
+
+  it('mongo claim accepts matchedCount when modifiedCount is zero', async () => {
+    const collection = createMongoCollection({
+      updateOne: jest.fn(async () => ({ modifiedCount: 0, matchedCount: 1 })),
+    });
+    const queue = new MongoQueue({ db: createMongoDb(collection), prefix: 'matched' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await queue.ready();
+
+    await expect(queue.update({
+      _id: 'id-2',
+      uuid: 'matched-1',
+      tries: 0,
+      isSent: false,
+      isFailed: false,
+      isCancelled: false,
+    }, {
+      isSending: true,
+      sendingAt: Date.now(),
+      tries: 1,
+    })).resolves.toBe(true);
+  });
+
+  it('redis update honors lease release guard and appendMailOption', async () => {
+    const client = createRedisClient();
+    const queue = new RedisQueue({ client, prefix: 'lease-r' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await queue.ready();
+
+    const task = {
+      uuid: 'lease-redis',
+      tries: 1,
+      sendAt: Date.now(),
+      isSent: false,
+      isFailed: false,
+      isCancelled: false,
+      isSending: true,
+      sendingAt: 999,
+      mailOptions: [{ to: 'a@example.com' }],
+    };
+    client.values.set(queue.__getKey(task.uuid), JSON.stringify(task));
+    client.values.set(queue.__getKey(task.uuid, 'sendat'), `${task.sendAt}`);
+
+    await expect(queue.update(task, {
+      isSending: false,
+      sendingAt: 0,
+      leaseTries: 1,
+      leaseSendingAt: 999,
+    })).resolves.toBe(true);
+
+    const stored = JSON.parse(client.values.get(queue.__getKey(task.uuid)));
+    expect(stored.isSending).toBe(false);
+
+    client.values.set(queue.__getKey(task.uuid), JSON.stringify({
+      ...task,
+      isSending: false,
+      mailOptions: [{ to: 'a@example.com' }],
+    }));
+    await expect(queue.update(task, {
+      appendMailOption: { to: 'a@example.com', text: 'more' },
+    })).resolves.toBe(true);
+    const appended = JSON.parse(client.values.get(queue.__getKey(task.uuid)));
+    expect(appended.mailOptions).toHaveLength(2);
+
+    client.values.set(queue.__getKey(task.uuid), JSON.stringify({
+      ...task,
+      isSending: true,
+      sendingAt: 888,
+    }));
+    await expect(queue.update(task, {
+      isSending: false,
+      leaseTries: 1,
+      leaseSendingAt: 999,
+    })).resolves.toBe(false);
+  });
+
+  it('redis remove honors lease guard', async () => {
+    const client = createRedisClient();
+    const queue = new RedisQueue({ client, prefix: 'lease-remove' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await queue.ready();
+
+    const task = {
+      uuid: 'remove-lease',
+      to: 'user@example.com',
+      tries: 1,
+      sendAt: Date.now(),
+      isSent: false,
+      isFailed: false,
+      isCancelled: false,
+      isSending: true,
+      sendingAt: 555,
+    };
+    client.values.set(queue.__getKey(task.uuid), JSON.stringify(task));
+    client.values.set(queue.__getKey(task.uuid, 'sendat'), `${task.sendAt}`);
+    client.values.set(queue.__getKey(task.to, 'concatletter'), task.uuid);
+
+    await expect(queue.remove(task, { leaseTries: 1, leaseSendingAt: 555 })).resolves.toBe(true);
+    expect(client.values.has(queue.__getKey(task.uuid))).toBe(false);
+
+    client.values.set(queue.__getKey(task.uuid), JSON.stringify(task));
+    await expect(queue.remove(task, { leaseTries: 2, leaseSendingAt: 555 })).resolves.toBe(false);
+
+    client.values.set(queue.__getKey(task.uuid), JSON.stringify({ ...task, isCancelled: true }));
+    await expect(queue.remove(task, { leaseTries: 1, leaseSendingAt: 555 })).resolves.toBe(false);
+
+    client.values.set(queue.__getKey(task.uuid), JSON.stringify({ ...task, isFailed: true }));
+    await expect(queue.remove(task, { leaseTries: 1, leaseSendingAt: 555 })).resolves.toBe(false);
+  });
+
+  it('redis lease release rejects cancelled or failed rows', async () => {
+    const client = createRedisClient();
+    const queue = new RedisQueue({ client, prefix: 'lease-cancel-r' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await queue.ready();
+
+    const task = {
+      uuid: 'lease-cancel-redis',
+      tries: 1,
+      sendAt: Date.now(),
+      isSent: false,
+      isFailed: false,
+      isCancelled: true,
+      isSending: true,
+      sendingAt: 1234,
+      mailOptions: [{ to: 'a@example.com' }],
+    };
+    client.values.set(queue.__getKey(task.uuid), JSON.stringify(task));
+    client.values.set(queue.__getKey(task.uuid, 'sendat'), `${task.sendAt}`);
+
+    await expect(queue.update(task, {
+      isSent: true,
+      isSending: false,
+      sendingAt: 0,
+      leaseTries: 1,
+      leaseSendingAt: 1234,
+    })).resolves.toBe(false);
+
+    client.values.set(queue.__getKey(task.uuid), JSON.stringify({ ...task, isCancelled: false, isFailed: true }));
+    await expect(queue.update(task, {
+      isSent: true,
+      isSending: false,
+      sendingAt: 0,
+      leaseTries: 1,
+      leaseSendingAt: 1234,
+    })).resolves.toBe(false);
+  });
+
+  it('redis getPendingTo skips in-flight concat rows', async () => {
+    const client = createRedisClient();
+    const queue = new RedisQueue({ client, prefix: 'pending' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await queue.ready();
+
+    const task = {
+      uuid: 'pending-sending',
+      to: 'user@example.com',
+      sendAt: Date.now() + 1000,
+      isSent: false,
+      isFailed: false,
+      isCancelled: false,
+      isSending: true,
+      sendingAt: Date.now(),
+      mailOptions: [],
+    };
+    client.values.set(queue.__getKey(task.to, 'concatletter'), task.uuid);
+    client.values.set(queue.__getKey(task.uuid), JSON.stringify(task));
+
+    await expect(queue.getPendingTo('user@example.com', Date.now() + 2000)).resolves.toBeNull();
+  });
+
+  it('redis append without watch falls back to guarded read-modify-write', async () => {
+    const client = createRedisClient();
+    delete client.watch;
+    delete client.multi;
+    const queue = new RedisQueue({ client, prefix: 'append-fallback' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await queue.ready();
+
+    const task = {
+      uuid: 'append-fb',
+      tries: 0,
+      sendAt: Date.now(),
+      isSent: false,
+      isFailed: false,
+      isCancelled: false,
+      isSending: false,
+      sendingAt: 0,
+      mailOptions: [{ to: 'a@example.com' }],
+    };
+    client.values.set(queue.__getKey(task.uuid), JSON.stringify(task));
+
+    await expect(queue.update(task, {
+      appendMailOption: { to: 'a@example.com', text: 'more' },
+    })).resolves.toBe(true);
+
+    const stored = JSON.parse(client.values.get(queue.__getKey(task.uuid)));
+    expect(stored.mailOptions).toHaveLength(2);
+  });
+
+  it('postgres update includes lease release WHERE clause', async () => {
+    const client = createPostgresClient();
+    const queue = new PostgresQueue({ client, prefix: 'pg-lease' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await queue.ready();
+
+    await queue.update({
+      id: 1,
+      uuid: 'pg-lease-1',
+      tries: 1,
+      isSending: true,
+      sendingAt: 777,
+    }, {
+      isSent: true,
+      isSending: false,
+      sendingAt: 0,
+      leaseTries: 1,
+      leaseSendingAt: 777,
+    });
+
+    const updateQuery = client.queries.findLast(({ queryText }) => queryText.includes('UPDATE mail_time_queue'));
+    expect(updateQuery.queryText).toContain('is_sending = true');
+    expect(updateQuery.queryText).toContain('sending_at = $');
+    expect(updateQuery.queryText).toContain('is_cancelled = false');
+    expect(updateQuery.queryText).toContain('is_failed = false');
+    expect(updateQuery.values).toContain(1);
+    expect(updateQuery.values).toContain(777);
+  });
+
+  it('postgres lease remove WHERE clause guards cancelled and failed', async () => {
+    const client = createPostgresClient();
+    const queue = new PostgresQueue({ client, prefix: 'pg-lease-remove' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await queue.ready();
+
+    await queue.remove({ id: 7, uuid: 'pg-lease-rm' }, { leaseTries: 2, leaseSendingAt: 555 });
+    const removeQuery = client.queries.findLast(({ queryText }) => queryText.includes('DELETE FROM mail_time_queue'));
+    expect(removeQuery.queryText).toContain('is_sending = true');
+    expect(removeQuery.queryText).toContain('sending_at = $4');
+    expect(removeQuery.queryText).toContain('is_cancelled = false');
+    expect(removeQuery.queryText).toContain('is_failed = false');
+  });
 });
