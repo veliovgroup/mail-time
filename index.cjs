@@ -613,6 +613,26 @@ const canClaimTask = (currentTask, task, now, sendingTimeout) => {
   return true;
 };
 
+const isIterateCandidate = (candidate, now, sendingTimeout, maxTries) => {
+  if (!candidate || typeof candidate !== 'object') {
+    return false;
+  }
+  if (candidate.isSent === true || candidate.isFailed === true || candidate.isCancelled === true) {
+    return false;
+  }
+  const tries = typeof candidate.tries === 'number' ? candidate.tries : 0;
+  if (tries >= maxTries) {
+    return false;
+  }
+  if (candidate.isSending === true) {
+    const sendingAt = typeof candidate.sendingAt === 'number' ? candidate.sendingAt : 0;
+    if (sendingAt > now - sendingTimeout) {
+      return false;
+    }
+  }
+  return true;
+};
+
 const parseUuidFromKey = (key, uniqueName) => {
   const prefix = `${uniqueName}:sendat:`;
   if (!key.startsWith(prefix)) {
@@ -735,6 +755,9 @@ class RedisQueue {
       const limit = (opts && typeof opts.limit === 'number' && Number.isFinite(opts.limit) && opts.limit > 0)
         ? Math.floor(opts.limit)
         : 0;
+      const maxTries = (this.mailTimeInstance && typeof this.mailTimeInstance.maxTries === 'number')
+        ? this.mailTimeInstance.maxTries
+        : 60;
       let dispatched = 0;
 
       const matchPattern = this.__getKey('*', 'sendat');
@@ -761,11 +784,8 @@ class RedisQueue {
             continue;
           }
           const candidate = JSON.parse(taskJSON);
-          if (candidate.isSending === true) {
-            const sendingAt = typeof candidate.sendingAt === 'number' ? candidate.sendingAt : 0;
-            if (sendingAt > now - sendingTimeout) {
-              continue;
-            }
+          if (!isIterateCandidate(candidate, now, sendingTimeout, maxTries)) {
+            continue;
           }
           await this.mailTimeInstance.___dispatch(candidate);
           dispatched++;
@@ -943,7 +963,15 @@ class RedisQueue {
     const sendingTimeout = this.mailTimeInstance?.sendingTimeout || 300000;
 
     try {
-      if (isClaim && typeof this.client.watch === 'function' && typeof this.client.multi === 'function') {
+      if (isClaim && (typeof this.client.watch !== 'function' || typeof this.client.multi !== 'function')) {
+        if (!RedisQueue.__atomicClaimWarned) {
+          RedisQueue.__atomicClaimWarned = true;
+          logError('[update] Redis client must support watch() and multi() for atomic send claims');
+        }
+        return false;
+      }
+
+      if (isClaim) {
         await this.client.watch(letterKey);
         const taskJSON = await this.client.get(letterKey);
         if (!taskJSON) {
@@ -976,10 +1004,6 @@ class RedisQueue {
       }
 
       const currentTask = JSON.parse(taskJSON);
-      if (isClaim && !canClaimTask(currentTask, task, now, sendingTimeout)) {
-        return false;
-      }
-
       const updatedTask = { ...currentTask, ...updateObj };
       await this.client.set(letterKey, JSON.stringify(updatedTask));
 
@@ -1873,6 +1897,9 @@ class MailTime {
     this.prefix = (typeof opts.prefix === 'string') ? opts.prefix : '';
 
     if (typeof opts.retries === 'number') {
+      if (opts.retries < 0) {
+        throw new Error('[mail-time] {retries} must be a non-negative number');
+      }
       this.maxTries = opts.retries + 1;
     } else if (typeof opts.maxTries === 'number') {
       this.maxTries = (opts.maxTries < 1) ? 1 : opts.maxTries;
@@ -2125,7 +2152,7 @@ class MailTime {
   async sendMail(opts = {}) {
     this.__debug('[sendMail]', opts);
     if (!opts.html && !opts.text) {
-      throw new Error('[mail-time] [sendMail] `html` nor `text` field is presented, at least one of those fields is required');
+      throw new Error('[mail-time] [sendMail] `html` nor `text` field is present, at least one of those fields is required');
     }
 
     let sendAt = opts.sendAt;
@@ -2271,6 +2298,11 @@ class MailTime {
    */
   async ___addToQueue(opts) {
     this.__debug('[private addToQueue]', opts);
+    let transportIndex = this.transport;
+    if (this.strategy === 'balancer' && this.transports.length > 0) {
+      transportIndex = this.___nextHealthyTransport(this.transport);
+      this.transport = transportIndex;
+    }
     const task = {
       uuid: node_crypto.randomUUID(),
       tries: 0,
@@ -2280,7 +2312,7 @@ class MailTime {
       isSending: false,
       sendingAt: 0,
       template: opts.template,
-      transport: this.transport,
+      transport: transportIndex,
       isCancelled: false,
       mailOptions: [opts.mailOptions],
       concatSubject: opts.concatSubject,
@@ -2540,20 +2572,12 @@ class MailTime {
       task.isSending = true;
       task.sendingAt = sendingAt;
 
-      let transportIndex;
-      let transport;
-      if (this.strategy === 'balancer') {
-        this.transport = this.___nextHealthyTransport(this.transport);
-        transportIndex = this.transport;
-        transport = this.transports[transportIndex];
-      } else {
-        transportIndex = task.transport;
-        if (!this.___isHealthyTransport(transportIndex)) {
-          transportIndex = this.___nextHealthyTransport(transportIndex);
-          task.transport = transportIndex;
-        }
-        transport = this.transports[transportIndex];
+      let transportIndex = task.transport;
+      if (!this.___isHealthyTransport(transportIndex)) {
+        transportIndex = this.___nextHealthyTransport(transportIndex);
+        task.transport = transportIndex;
       }
+      const transport = this.transports[transportIndex];
 
       const compiledOpts = this.___compileMailOpts(transport, task);
 
