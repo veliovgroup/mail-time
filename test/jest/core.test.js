@@ -87,6 +87,10 @@ describe('MailTime core options', () => {
     })).toThrow('[mail-time] {josk.adapter.client} option required');
   });
 
+  it('rejects negative retries', () => {
+    expect(() => createMailTime({ retries: -1 })).toThrow('[mail-time] {retries} must be a non-negative number');
+  });
+
   it('normalizes legacy aliases and defaults', () => {
     const mailTime = createMailTime({
       type: 'unknown',
@@ -1442,6 +1446,36 @@ describe('MailTime transport verification on ready()', () => {
     expect(goodSent).toEqual(['user@example.com']);
     expect(task.tries).toBe(1);
     expect(mailTime.queue.records.has(uuid)).toBe(false);
+  });
+
+  it('balancer assigns transport per task at enqueue and uses it under parallel concurrency', async () => {
+    const transportUsed = [];
+    const make = (index) => createTransport((mail, done) => {
+      transportUsed.push({ index, to: mail.to });
+      setTimeout(() => done(null, { accepted: [mail.to], response: 'ok' }), 5);
+    });
+    const mailTime = createMailTime({
+      transports: [make(0), make(1)],
+      strategy: 'balancer',
+      concurrency: 2
+    });
+    await mailTime.ready();
+
+    const uuidA = await mailTime.sendMail({ to: 'a@example.com', text: 'a' });
+    const uuidB = await mailTime.sendMail({ to: 'b@example.com', text: 'b' });
+    const taskA = mailTime.queue.records.get(uuidA);
+    const taskB = mailTime.queue.records.get(uuidB);
+    expect(taskA.transport).not.toBe(taskB.transport);
+
+    await Promise.all([
+      mailTime.___dispatch(taskA),
+      mailTime.___dispatch(taskB),
+    ]);
+    await mailTime.drain();
+
+    expect(transportUsed).toHaveLength(2);
+    expect(transportUsed.find((entry) => entry.to === 'a@example.com').index).toBe(taskA.transport);
+    expect(transportUsed.find((entry) => entry.to === 'b@example.com').index).toBe(taskB.transport);
   });
 
   it('balancer strategy: skips unhealthy transports when picking the next one', async () => {

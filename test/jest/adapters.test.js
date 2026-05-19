@@ -11,6 +11,38 @@ const createMailTimeHarness = (keepHistory = false) => ({
   ___send: jest.fn()
 });
 
+const attachRedisWatchMulti = (client) => {
+  client.watch = jest.fn(async () => void 0);
+  client.unwatch = jest.fn(async () => void 0);
+  client.multi = jest.fn(() => {
+    const commands = [];
+    const multi = {
+      set: jest.fn((key, value) => {
+        commands.push(['set', key, value]);
+        return multi;
+      }),
+      del: jest.fn((...keys) => {
+        commands.push(['del', ...keys]);
+        return multi;
+      }),
+      exec: jest.fn(async () => {
+        for (const command of commands) {
+          if (command[0] === 'set') {
+            client.values.set(command[1], command[2]);
+          } else if (command[0] === 'del') {
+            for (const key of command.slice(1)) {
+              client.values.delete(key);
+            }
+          }
+        }
+        return commands.length ? ['OK'] : null;
+      })
+    };
+    return multi;
+  });
+  return client;
+};
+
 const createRedisClient = () => {
   const values = new Map();
   const client = {
@@ -30,7 +62,7 @@ const createRedisClient = () => {
     ping: jest.fn(async () => 'PONG'),
     scanIterator: jest.fn(() => (async function* () {})())
   };
-  return client;
+  return attachRedisWatchMulti(client);
 };
 
 const createMongoCollection = (overrides = {}) => ({
@@ -425,6 +457,84 @@ describe('RedisQueue unit behavior', () => {
       sendingAt: Date.now(),
       tries: 1
     })).resolves.toBe(true);
+  });
+
+  it('redis iterate skips terminal rows and tasks at retry budget', async () => {
+    const client = createRedisClient();
+    const queue = new RedisQueue({ client, prefix: 'iter-filter' });
+    queue.mailTimeInstance = createMailTimeHarness();
+
+    const ready = {
+      uuid: 'ready',
+      sendAt: Date.now() - 1,
+      isSent: false,
+      isFailed: false,
+      isCancelled: false,
+      isSending: false,
+      sendingAt: 0,
+      tries: 0
+    };
+    const sent = {
+      uuid: 'sent',
+      sendAt: Date.now() - 1,
+      isSent: true,
+      isFailed: false,
+      isCancelled: false,
+      isSending: false,
+      sendingAt: 0,
+      tries: 1
+    };
+    const exhausted = {
+      uuid: 'exhausted',
+      sendAt: Date.now() - 1,
+      isSent: false,
+      isFailed: false,
+      isCancelled: false,
+      isSending: false,
+      sendingAt: 0,
+      tries: 3
+    };
+    for (const task of [ready, sent, exhausted]) {
+      client.values.set(queue.__getKey(task.uuid), JSON.stringify(task));
+      client.values.set(queue.__getKey(task.uuid, 'sendat'), `${task.sendAt}`);
+    }
+
+    client.scanIterator = () => (async function* () {
+      yield [
+        queue.__getKey(ready.uuid, 'sendat'),
+        queue.__getKey(sent.uuid, 'sendat'),
+        queue.__getKey(exhausted.uuid, 'sendat'),
+      ];
+    })();
+
+    await queue.iterate();
+    expect(queue.mailTimeInstance.___dispatch).toHaveBeenCalledTimes(1);
+    expect(queue.mailTimeInstance.___dispatch).toHaveBeenCalledWith(expect.objectContaining({ uuid: 'ready' }));
+  });
+
+  it('redis send claims require watch and multi on the client', async () => {
+    const client = createRedisClient();
+    delete client.watch;
+    delete client.multi;
+    const queue = new RedisQueue({ client, prefix: 'no-watch' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    const task = {
+      uuid: 'no-watch',
+      tries: 0,
+      sendAt: Date.now(),
+      isSent: false,
+      isFailed: false,
+      isCancelled: false,
+      isSending: false,
+      sendingAt: 0
+    };
+    client.values.set(queue.__getKey(task.uuid), JSON.stringify(task));
+
+    await expect(queue.update(task, {
+      isSending: true,
+      sendingAt: Date.now(),
+      tries: 1
+    })).resolves.toBe(false);
   });
 
   it('redis iterate honors mode "one" via opts.limit and skips fresh isSending rows', async () => {
