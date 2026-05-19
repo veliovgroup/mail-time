@@ -25,7 +25,7 @@ Many clients + one or more servers coexist behind the same `prefix` in the same 
 - 🎯 **Per-recipient retries** — when a multi-`to` send is partially rejected, only the un-accepted addresses are retried; delivered ones never see a duplicate.
 - 📮 **Email concatenation** — fold same-`to` emails arriving inside a window into one letter.
 - 🎛️ **One-line setup** — built-in [presets](#settings-presets) for `transactional`, `otp`, `newsletter`, `marketing`, `notifications`, `alerts`.
-- 🛢️ **Three first-party storages** — MongoDB, Redis, PostgreSQL. Plus a [custom-adapter contract](docs/queue-api.md).
+- 🛢️ **Three first-party storages** — MongoDB, Redis, PostgreSQL. Plus a [custom-adapter contract](https://github.com/veliovgroup/mail-time/blob/master/docs/queue-api.md).
 - 📦 **Bun ≥ 1.1.0 & Node ≥ 20.9.0** — same code, both runtimes.
 - 🤖 **Ships with AI agent skills** — see [AI agent skills](#ai-agent-skills) below.
 - 📐 **Hand-tuned ESM + CJS + TypeScript declarations**.
@@ -113,7 +113,7 @@ For a dedicated mail machine (rDNS / PTR records), use `type: 'client'` on app s
 |=================================================| |=======| |===============|
 ```
 
-See [docs/multi-instance.md](docs/multi-instance.md) and [docs/dedicated-mail-host.md](docs/dedicated-mail-host.md) for full topologies.
+See [docs/multi-instance.md](https://github.com/veliovgroup/mail-time/blob/master/docs/multi-instance.md) and [docs/dedicated-mail-host.md](https://github.com/veliovgroup/mail-time/blob/master/docs/dedicated-mail-host.md) for full topologies.
 
 ## Installation
 
@@ -132,9 +132,9 @@ bun add mail-time nodemailer
 > `nodemailer` and adapter drivers are peers (not bundled) so you can pin your own versions.
 
 > [!IMPORTANT]
-> Upgrading from v3? See [Migration from 3.x](#migration-from-3x) and the full [v4.0.0 release notes](docs/v4.md).
+> Upgrading from v3? See [Migration from 3.x](#migration-from-3x) and the full [v4.0.0 release notes](https://github.com/veliovgroup/mail-time/blob/master/docs/v4.md).
 
-For Meteor.js usage see [docs/meteor.md](docs/meteor.md).
+For Meteor.js usage see [docs/meteor.md](https://github.com/veliovgroup/mail-time/blob/master/docs/meteor.md).
 
 ## AI agent skills
 
@@ -321,17 +321,17 @@ Presets are equally useful on `type: 'client'` instances — keys that don't app
 - **Different `prefix`** per class so namespaces don't collide.
 - **Never** reuse `prefix` across two instances with different `concatEmails`, `retryDelay`, or other mail policy.
 
-Full example wiring three classes (OTP / transactional / marketing) on one Redis connection, plus app-pod `client` setup, lives in [docs/multi-instance.md](docs/multi-instance.md).
+Full example wiring three classes (OTP / transactional / marketing) on one Redis connection, plus app-pod `client` setup, lives in [docs/multi-instance.md](https://github.com/veliovgroup/mail-time/blob/master/docs/multi-instance.md).
 
 ## Dedicated mail host
 
 On a **single mail VM** (good rDNS / PTR, fixed SMTP credentials), run **2–8 `server` processes** (~one per CPU core) — typically **one process per email class**. Same `prefix` cluster-wide = one JoSk lease tick at a time, so extra pods on the same `prefix` buy **failover/HA**, not throughput.
 
-Full systemd unit + worker layout: [docs/dedicated-mail-host.md](docs/dedicated-mail-host.md).
+Full systemd unit + worker layout: [docs/dedicated-mail-host.md](https://github.com/veliovgroup/mail-time/blob/master/docs/dedicated-mail-host.md).
 
 ## Tuning
 
-Defaults fit moderate traffic in a single region. Reach for a [preset](#settings-presets) first; tune individual knobs only when the preset doesn't cover your case. Full guide: [docs/tuning.md](docs/tuning.md).
+Defaults fit moderate traffic in a single region. Reach for a [preset](#settings-presets) first; tune individual knobs only when the preset doesn't cover your case. Full guide: [docs/tuning.md](https://github.com/veliovgroup/mail-time/blob/master/docs/tuning.md).
 
 ### Option reference (when to touch)
 
@@ -393,7 +393,7 @@ await mailQueue.sendMail({
 
 | Option                        | Type                                                | Default                    | Notes                                                                                                                                                                                       |
 | ----------------------------- | --------------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `queue`                       | `MongoQueue \| RedisQueue \| PostgresQueue \| CustomQueue` | —                    | **Required.** Storage adapter for letters. Custom adapters: see [docs/queue-api.md](docs/queue-api.md).                                                                                     |
+| `queue`                       | `MongoQueue \| RedisQueue \| PostgresQueue \| CustomQueue` | —                    | **Required.** Storage adapter for letters. Custom adapters: see [docs/queue-api.md](https://github.com/veliovgroup/mail-time/blob/master/docs/queue-api.md).                                                                                     |
 | `type`                        | `'server' \| 'client'`                              | `'server'`                 | `'client'` only enqueues — no `transports` / `josk` required.                                                                                                                               |
 | `transports`                  | `nodemailer.Transport[]`                            | —                          | **Required for `server`**. Non-empty.                                                                                                                                                       |
 | `josk`                        | `MailTimeJoSkOptions`                               | —                          | **Required for `server`**. See [JoSk options](#josk-options) below.                                                                                                                         |
@@ -451,11 +451,11 @@ For deeper JoSk semantics, install the JoSk skill: **`npx skills add veliovgroup
 
 | Constructor                              | Required option                                      | Optional                                                                                                     |
 | ---------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `new RedisQueue({ client, prefix? })`    | `client` from `await redis.createClient().connect()` | `prefix` — inherited from `MailTime` when omitted.                                                           |
+| `new RedisQueue({ client, prefix? })`    | connected `redis@^4/^5` client with `watch()` + `multi()` | `prefix` — inherited from `MailTime` when omitted. Redis Cluster prefixes must map to one hash slot.        |
 | `new MongoQueue({ db, prefix? })`        | `db` from `MongoClient#db()`                         | `prefix` — inherited from `MailTime` when omitted. Indexes auto-created on first `ready()`.                  |
 | `new PostgresQueue({ client, prefix? })` | `pg.Pool` (recommended) or `pg.Client`               | `prefix` — inherited from `MailTime` when omitted. `mail_time_queue` table auto-migrated on first `ready()`. |
 
-For custom adapters see [docs/queue-api.md](docs/queue-api.md).
+For custom adapters see [docs/queue-api.md](https://github.com/veliovgroup/mail-time/blob/master/docs/queue-api.md).
 
 ### Module functions
 
@@ -469,13 +469,13 @@ For custom adapters see [docs/queue-api.md](docs/queue-api.md).
 
 ## Migration from 3.x
 
-Full v4 highlights, adapter changes, and type exports live in [docs/v4.md](docs/v4.md). Quick checklist:
+Full v4 highlights, adapter changes, and type exports live in [docs/v4.md](https://github.com/veliovgroup/mail-time/blob/master/docs/v4.md). Quick checklist:
 
 1. **Node ≥ 20.9.0**, Bun ≥ 1.1.0. Bump your runtime first.
 2. **Swap adapter imports** to the new `MongoQueue` / `RedisQueue` / `PostgresQueue` constructors.
 3. **Pass `josk`** — it's now required for `type: 'server'`.
 4. **`josk.zombieTime` default raised to `60000` ms** (was `32786`). Set it explicitly if you relied on the old value.
-5. **Custom queue adapters** — `update`'s claim guard now triggers on `{ isSending: true, sendingAt, tries }` (was `{ isSent: true, tries }`) and must include the stale-lock-recovery clause `(isSending === false OR sendingAt <= now - sendingTimeout)`. The iterate path must call `await mailTimeInstance.___dispatch(row)` instead of `___send` and honor `opts.limit` / `opts.sendingTimeout`. See [docs/queue-api.md](docs/queue-api.md) and `adapters/blank-example.js`.
+5. **Custom queue adapters** — `update`'s claim guard now triggers on `{ isSending: true, sendingAt, tries }` (was `{ isSent: true, tries }`) and must include the stale-lock-recovery clause `(isSending === false OR sendingAt <= now - sendingTimeout)`. The iterate path must call `await mailTimeInstance.___dispatch(row)` instead of `___send` and honor `opts.limit` / `opts.sendingTimeout`. See [docs/queue-api.md](https://github.com/veliovgroup/mail-time/blob/master/docs/queue-api.md) and [`adapters/blank-example.js`](https://github.com/veliovgroup/mail-time/blob/master/adapters/blank-example.js).
 6. **Default behavior unchanged** — `concurrency: 1` keeps the post-upgrade send rate identical to v3. Opt into parallel sends by raising `concurrency`.
 
 New v4 surface to opt into: [`mailTimePreset`](#settings-presets), `concurrency`, `mode`, `sendingTimeout`, `drain()`, per-recipient retries, and the [AI agent skills](#ai-agent-skills) bundle.
