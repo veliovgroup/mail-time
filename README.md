@@ -1,9 +1,17 @@
 
 # MailTime
 
-[![npm version](https://img.shields.io/npm/v/mail-time.svg?label=mail-time)](https://www.npmjs.com/package/mail-time)
-[![CI](https://img.shields.io/github/actions/workflow/status/veliovgroup/mail-time/ci.yml?branch=master)](https://github.com/veliovgroup/mail-time/actions)
-[![license](https://img.shields.io/npm/l/mail-time.svg)](LICENSE)
+[![npm version](https://img.shields.io/npm/v/mail-time.svg)](https://www.npmjs.com/package/mail-time)
+[![npm downloads](https://img.shields.io/npm/dm/mail-time.svg)](https://www.npmjs.com/package/mail-time)
+[![CI](https://github.com/veliovgroup/mail-time/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/veliovgroup/mail-time/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/badge/coverage-~93%25-brightgreen)](#testing)
+[![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](LICENSE)
+[![Node.js](https://img.shields.io/node/v/mail-time)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-ready-blue)](#quick-start)
+[![Bun](https://img.shields.io/badge/Bun-%3E%3D1.1.0-black?logo=bun)](#bun)
+[![dependencies](https://img.shields.io/badge/dependencies-1-brightgreen)](https://www.npmjs.com/package/mail-time?activeTab=dependencies)
+[![bundle size](https://img.shields.io/bundlephobia/minzip/mail-time)](https://bundlephobia.com/package/mail-time)
+[![Meteor](https://img.shields.io/badge/Meteor-ostrio%3Amailer-DE4F4F)](https://packosphere.com/ostrio/mailer)
 [![GitHub Sponsors](https://img.shields.io/github/sponsors/dr-dimitru?label=Sponsor)](https://github.com/sponsors/dr-dimitru)
 [![Donate](https://img.shields.io/badge/Donate-PayPal-00457C?logo=paypal&logoColor=white)](https://paypal.me/veliovgroup)
 
