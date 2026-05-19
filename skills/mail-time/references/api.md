@@ -97,7 +97,7 @@ Pass-through to the underlying `JoSk` constructor. The most useful keys:
 
 | Option | Default in MailTime | Notes |
 |---|---|---|
-| `adapter` | — (required) | Either a constructed adapter instance (`new RedisAdapter({...})`) **or** a config object `{ type: 'redis'\|'mongo'\|'postgres', client \| db, prefix?, resetOnInit? }`. MailTime constructs the adapter from the config object. |
+| `adapter` | — (required) | Either a constructed adapter instance (`new RedisAdapter({...})`) **or** a config object `{ type: 'redis'\|'mongo'\|'postgres', client \| db, prefix?, resetOnInit?, useHashTags? }`. MailTime constructs the adapter from the config object. Set `useHashTags: true` on Redis/KeyDB Cluster. |
 | `adapter.type` | — | One of `'redis'`, `'mongo'`, `'postgres'`. |
 | `adapter.client` / `adapter.db` | — | Already-connected `redis` client / `pg.Pool` / Mongo `Db`. |
 | `adapter.prefix` | `'mailTimeQueue<MailTime.prefix>'` | Defaulted from `MailTime.prefix`. |
@@ -109,6 +109,7 @@ Pass-through to the underlying `JoSk` constructor. The most useful keys:
 | `concurrency` | `Infinity` | Cap overlapping JoSk handler runs on this process (`1` if ticks pile up). |
 | `lockOwnerId` | (JoSk default `'josk-<uuid>'`) | Stable owner id; recommended for observability. |
 | `onError` | (default routes to `console.error` via MailTime) | `(title, { description, error, uid, task? }) => void`. |
+| `onExecuted` | — | `(uid, { uid, date, delay, timestamp }) => void`. Optional tick observability hook. |
 
 ### Constructor errors (thrown synchronously)
 
@@ -197,15 +198,15 @@ make sure it is available and properly configured
 
 …with `.cause` set to the underlying ping error. Call at startup when you want fast failure on misconfigured storage.
 
-### `mailTime.destroy()` → `boolean`
+### `mailTime.destroy(opts?)` → `boolean | Promise<boolean>`
 
-Stops the scheduler timer and the queue-iteration loop. Returns `true` on the first call, `false` afterwards. Always wire to `SIGINT` / `SIGTERM` / `beforeExit` and to test teardown. For graceful shutdown, `await mailTime.drain()` first so in-flight sends complete.
+Stops the scheduler timer and blocks future dispatches. Returns `true` on the first call, `false` afterwards. Pass `{ drain: true }` to also wait for in-flight SMTP pool work (returns a Promise). Always wire to `SIGINT` / `SIGTERM` / test teardown.
 
 ### `mailTime.drain()` → `Promise<void>`
 
 Resolves once every in-flight SMTP send started by the internal pool has settled. The pool is bounded by `concurrency`. Use cases:
 
-- **Graceful shutdown.** `await mailTime.drain(); mailTime.destroy();` lets the current sends finish before exit.
+- **Graceful shutdown.** `await mailTime.destroy({ drain: true })` or `mailTime.destroy(); await mailTime.drain();`
 - **Tests that drive iterate.** Calling `await mailTime.___iterate()` or `await mailTime.queue.iterate()` only awaits the scan + claim phase. SMTP work happens in the pool; `await mailTime.drain()` waits for it.
 
 Tests that call `mailTime.___send(task)` directly do **not** need `drain()` — that method runs the full lifecycle synchronously.
@@ -309,6 +310,7 @@ type MailTimeIterateOptions = {
   - **Will-retry** — updated to `{ isSending: false, sendingAt: 0, sendAt: now + retryDelay }`.
   - **Final failure** — `isFailed=true, isSending=false, sendingAt=0` (or row deleted when `keepHistory: false`).
 - If a worker dies between claim and release, the row stays `isSending=true` until `sendingAt + sendingTimeout` is in the past. The next iterate tick then includes it in the eligibility predicate, and a recovery worker can re-claim it.
+- Post-claim completion updates (`remove`, retry release, `isSent`/`isFailed`) carry a **lease guard** (`leaseTries` + `leaseSendingAt`). A late SMTP callback from a superseded worker cannot complete or delete the row.
 
 ### Per-recipient delivery state
 

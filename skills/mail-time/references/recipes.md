@@ -321,11 +321,9 @@ await mailQueue.cancelMail(pending);
 
 ```js
 const shutdown = async () => {
-  // 1. Stop the scheduler so no new ticks fire.
-  mailQueue.destroy();
-  // 2. Let any in-flight SMTP sends finish (bounded by `concurrency`).
-  await mailQueue.drain();
-  // 3. Close downstream connections AFTER drain.
+  // Stop scheduler and wait for in-flight SMTP sends in one call:
+  await mailQueue.destroy({ drain: true });
+  // Or: mailQueue.destroy(); await mailQueue.drain();
   await redisClient?.quit?.();
   await pgPool?.end?.();
   await mongoClient?.close?.();

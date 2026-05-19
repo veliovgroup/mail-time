@@ -67,7 +67,7 @@ Missing any → name it for the user:
 2. JoSk scheduler store + client (often same as 1)
 3. Nodemailer transports with `.options` (server only)
 4. `onSent` / `onError` (strongly recommended)
-5. Shutdown: `destroy()`; after iterate in tests also `await drain()`
+5. Shutdown: `destroy()` or `await destroy({ drain: true })`; after iterate in tests also `await drain()` when not using `{ drain: true }`
 
 ## Pick the queue adapter
 

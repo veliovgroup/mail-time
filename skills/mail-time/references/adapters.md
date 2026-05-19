@@ -225,7 +225,7 @@ Start from `adapters/blank-example.js` in the source tree — it is the canonica
 - **`iterate(opts)` calls `await mailTimeInstance.___dispatch(task)`** — *not* `___send` — for every row matching: `isSent === false && isFailed === false && isCancelled === false && sendAt <= Date.now() && tries < maxTries && (isSending === false || sendingAt <= Date.now() - opts.sendingTimeout)`. `___dispatch` acquires a slot from MailTime's bounded send pool (the `concurrency` option) and starts the full send lifecycle detached. Stop the scan after `opts.limit` dispatches when `opts.limit` is set (MailTime sends `1` when configured with `mode: 'one'`).
 - **Persist `isSending` and `sendingAt`** alongside the other fields in `push`. New rows start with `isSending: false, sendingAt: 0`.
 - **Honor `mailTimeInstance.keepHistory`** in `cancel`. When `false`, delete the row; when `true`, mark `isCancelled: true`.
-- **`getPendingTo`** returns at most one active task addressed to `to` with `sendAt <= passed-sendAt`. Used by `concatEmails`.
+- **`getPendingTo`** returns at most one active task addressed to `to` with `sendAt <= passed-sendAt`, `isSending === false`, and `tries < maxTries`. Used by `concatEmails`.
 - **`ready()`** is optional but recommended if the storage needs migrations / indexes.
 
 ### Task object shape (what to pass to `___dispatch`)
