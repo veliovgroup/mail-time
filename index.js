@@ -206,6 +206,9 @@ class MailTime {
     this.prefix = (typeof opts.prefix === 'string') ? opts.prefix : '';
 
     if (typeof opts.retries === 'number') {
+      if (opts.retries < 0) {
+        throw new Error('[mail-time] {retries} must be a non-negative number');
+      }
       this.maxTries = opts.retries + 1;
     } else if (typeof opts.maxTries === 'number') {
       this.maxTries = (opts.maxTries < 1) ? 1 : opts.maxTries;
@@ -458,7 +461,7 @@ class MailTime {
   async sendMail(opts = {}) {
     this.__debug('[sendMail]', opts);
     if (!opts.html && !opts.text) {
-      throw new Error('[mail-time] [sendMail] `html` nor `text` field is presented, at least one of those fields is required');
+      throw new Error('[mail-time] [sendMail] `html` nor `text` field is present, at least one of those fields is required');
     }
 
     let sendAt = opts.sendAt;
@@ -604,6 +607,11 @@ class MailTime {
    */
   async ___addToQueue(opts) {
     this.__debug('[private addToQueue]', opts);
+    let transportIndex = this.transport;
+    if (this.strategy === 'balancer' && this.transports.length > 0) {
+      transportIndex = this.___nextHealthyTransport(this.transport);
+      this.transport = transportIndex;
+    }
     const task = {
       uuid: randomUUID(),
       tries: 0,
@@ -613,7 +621,7 @@ class MailTime {
       isSending: false,
       sendingAt: 0,
       template: opts.template,
-      transport: this.transport,
+      transport: transportIndex,
       isCancelled: false,
       mailOptions: [opts.mailOptions],
       concatSubject: opts.concatSubject,
@@ -873,20 +881,12 @@ class MailTime {
       task.isSending = true;
       task.sendingAt = sendingAt;
 
-      let transportIndex;
-      let transport;
-      if (this.strategy === 'balancer') {
-        this.transport = this.___nextHealthyTransport(this.transport);
-        transportIndex = this.transport;
-        transport = this.transports[transportIndex];
-      } else {
-        transportIndex = task.transport;
-        if (!this.___isHealthyTransport(transportIndex)) {
-          transportIndex = this.___nextHealthyTransport(transportIndex);
-          task.transport = transportIndex;
-        }
-        transport = this.transports[transportIndex];
+      let transportIndex = task.transport;
+      if (!this.___isHealthyTransport(transportIndex)) {
+        transportIndex = this.___nextHealthyTransport(transportIndex);
+        task.transport = transportIndex;
       }
+      const transport = this.transports[transportIndex];
 
       const compiledOpts = this.___compileMailOpts(transport, task);
 
