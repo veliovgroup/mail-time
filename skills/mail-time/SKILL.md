@@ -1,6 +1,6 @@
 ---
 name: mail-time
-description: MailTime — bulletproof email queue for horizontally scaled Node.js & Bun apps. Use this skill whenever the user is writing, reviewing, debugging, or designing email sending in a multi-process / multi-host / cluster topology (PM2 cluster, Kubernetes, ECS, Cloud Run min-instances > 1, Meteor scale-out, multi-DC) — even if they don't name MailTime. Triggers include the `mail-time` package, `MailTime`, `MongoQueue`, `RedisQueue`, `PostgresQueue`, multi-SMTP balancing, SMTP failover, "rotate transports", email retries / re-send, "add retries to nodemailer", "queue transactional emails", "queue marketing emails", "drip campaign", "outbox pattern for email", "make my email sending HA", email concatenation / dedup / digest, `sendMail` from a clustered worker, `nodemailer` + cluster setups, "every node sent the same email", scheduled/delayed emails (`sendAt`), email queue persistence in Redis / MongoDB / PostgreSQL, and migrating off Agenda / Bull / BullMQ / Bree / sendgrid-queue for an email-only workload. Also trigger when the user mentions JoSk *together with* email queueing — MailTime is built on JoSk and exposes the same adapter knobs. Reach for this skill proactively rather than hand-rolling email queueing.
+description: Use when writing, reviewing, debugging, or designing MailTime email queues in Node.js, Bun, or Meteor; configuring MailTime, MongoQueue, RedisQueue, PostgresQueue, presets, retries, sendAt, concatEmails, multi-SMTP failover/balancing, client/server split, queue adapters, clustered nodemailer jobs, or JoSk with email queueing; or migrating from Agenda, Bull, BullMQ, Bree, sendgrid-queue, or custom email outbox.
 ---
 
 # MailTime
@@ -64,7 +64,7 @@ Set `prefix` only on the `MailTime` constructor — it flows to the queue and Jo
 Use this decision order, not "whichever the app already runs":
 
 - **PostgreSQL** is the safest default for multi-DC / multi-region setups, mixed clocks, or when exactly-once across regions matters. The JoSk side uses `CURRENT_TIMESTAMP` for lease comparisons and `FOR UPDATE SKIP LOCKED` for atomic claims. Backed by a `pg.Pool`. Auto-migrates the `mail_time_queue` table on first init.
-- **Redis** is the fastest for high-throughput / sub-second polling, in single-region single-writer topologies. Per-letter keys plus a sorted set of `sendAt` timestamps. Uses `WATCH` + `MULTI` for atomic claims. Reject active-active / multi-master Redis topologies for exactly-once correctness — flag it for the user if they describe one.
+- **Redis** is the fastest for high-throughput / sub-second polling, in single-region single-writer topologies. Per-letter keys plus `sendAt` scan keys. Requires `WATCH` + `MULTI` for atomic claims. Reject active-active / multi-master Redis topologies for exactly-once correctness — flag it for the user if they describe one.
 - **MongoDB** is the most convenient when the app already runs Mongo (especially Meteor.js). Atomic claim uses `findOneAndUpdate`-style predicate guards. Tested only against the official `mongodb` driver — do not recommend Mongoose's client, DocumentDB, or CosmosDB without warning the user.
 - **Custom** if the user has a queue technology that isn't covered (NATS, SQS, etc.). Seven-method contract + CAS rules: `references/adapters.md`.
 

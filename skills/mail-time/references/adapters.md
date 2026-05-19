@@ -7,7 +7,7 @@ Three built-in queue adapters plus the contract for writing custom ones. Pick by
 | Adapter | Best for | Prerequisite NPM | Server requirement | Atomic claim |
 |---|---|---|---|---|
 | `PostgresQueue` | Multi-DC, mixed clocks, strict exactly-once. | `pg` | `postgres ≥ 12` | `UPDATE … WHERE tries = $task.tries` (predicate guard) |
-| `RedisQueue` | High-throughput single-region, sub-second polling. | `redis@^4 \|\| ^5` | `redis-server ≥ 5.0.0` | `WATCH` + `MULTI` (with non-transactional fallback) |
+| `RedisQueue` | High-throughput single-region, sub-second polling. | `redis@^4 \|\| ^5` | `redis-server ≥ 5.0.0` | `WATCH` + `MULTI` |
 | `MongoQueue` | Apps already running Mongo (especially Meteor.js). | `mongodb` (official) | `mongod ≥ 4.0.0` | `updateOne` with predicate guard |
 
 All adapters expose the same seven-method interface (`ping`, `iterate`, `getPendingTo`, `push`, `cancel`, `remove`, `update`) plus an optional `ready` that resolves once startup migrations / indexes are in place.
@@ -79,7 +79,7 @@ const mailQueue = new MailTime({
 
 | Option | Type | Default | Notes |
 |---|---|---|---|
-| `client` | `RedisClient` | — | **Required.** Already-connected `redis@^4` or `redis@^5` client (`RedisClientType` or `RedisClusterType`). |
+| `client` | `RedisClient` | — | **Required.** Already-connected `redis@^4` or `redis@^5` client (`RedisClientType` or `RedisClusterType`) with `watch()` and `multi()`. |
 | `prefix` | `string` | `'default'` | Scopes keys under `mailtime:<prefix>:…`. |
 
 ### Keys (for `prefix: 'default'`)
@@ -90,11 +90,11 @@ const mailQueue = new MailTime({
 
 ### Topology guidelines
 
-- One writable primary endpoint, or a Redis Cluster endpoint where the prefix maps to a single hash slot.
+- One writable primary endpoint, or a Redis Cluster endpoint where the prefix maps to one hash slot via hash-tagged prefixes.
 - **Do not** route reads to replicas. Lease writes must be immediately visible.
 - **Do not** use Redis active-active / multi-master or KeyDB active-replication. Conflict resolution can allow duplicate claims across writers.
 - The `push` path uses `MULTI` when the client supports it, falling back to three sequential `SET`s otherwise.
-- The send-claim path uses `WATCH` + `MULTI` (atomic compare-and-set). When `watch` / `multi` are absent (older / minimal clients), it falls back to a predicate-guard read-then-set; this is best-effort under high concurrency — prefer real Redis.
+- The send-claim path requires `WATCH` + `MULTI` for atomic compare-and-set. Minimal clients without those methods cannot safely claim rows.
 
 ## `MongoQueue`
 
