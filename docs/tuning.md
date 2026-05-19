@@ -37,7 +37,7 @@ Reach for a [preset](../README.md#settings-presets) first; tune only what the pr
 | Multi-DC or clock skew               | Postgres queue + Postgres scheduler; stable `lockOwnerId` per worker                                                       |
 | Mongo letters + fast polls           | Mongo `queue`, Redis `josk.adapter` (see [Storage layouts](../README.md#storage-layouts))                                  |
 | SMTP rate limits                     | Fewer mail workers, `josk.concurrency: 1`, consider `strategy: 'backup'` with real fallback transports                     |
-| Large backlog / slow SMTP            | Raise `josk.zombieTime` above worst-case `iterate` duration (Postgres drains up to **100** letters per tick, sequentially) |
+| Large backlog / slow SMTP            | Raise `josk.zombieTime` above worst-case `iterate` duration (Postgres caps each tick at **1000** letters; Mongo and Redis stream every due row sequentially) |
 | Tests                                | `retries: 0`, `mailTime.destroy()` in teardown; `josk.adapter.resetOnInit: true` dev-only                                  |
 
 ## Production JoSk block (any storage)

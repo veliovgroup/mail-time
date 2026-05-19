@@ -32,13 +32,13 @@ List of required methods and their arguments.
 - async `Queue#update(email, updateObj) — {Promise<boolean>}`
   - `{object} email` — email's object (*see its structure below*)
   - `{object} updateObj` — fields with new values to update
-  - **Atomic claim guard.** When `updateObj` contains `{ isSending: true, tries: Number }`, MailTime is *claiming* a row for sending. This update **must be atomic** and must succeed only if all of the following hold for the stored row:
+  - **Atomic claim guard.** When `updateObj` contains `{ isSending: true, sendingAt: Number, tries: Number }`, MailTime is *claiming* a row for sending. This update **must be atomic** and must succeed only if all of the following hold for the stored row:
     - `isSent === false`
     - `isFailed === false`
     - `isCancelled === false`
-    - `tries === email.tries` (caller's snapshot value, before the bump)
+    - `tries === email.tries` (caller's snapshot value, **before** the bump — this is the compare-and-set; do not predicate on `tries < maxTries`)
     - `isSending === false` **OR** `sendingAt <= now - sendingTimeout` (stale-lock recovery)
-  - When the predicate fails, return `false` so the racing worker (in this process or another node) drops the row and JoSk picks up something else on the next tick. Return `true` only when the storage layer atomically flipped `isSending` to `true`.
+  - Use `updateObj.sendingAt` (fall back to `Date.now()`) as the `now` reference for the stale-lock arm. When the predicate fails, return `false` so the racing worker (in this process or another node) drops the row and JoSk picks up something else on the next tick. Return `true` only when the storage layer atomically flipped `isSending` to `true`.
 
 ## Iterate predicate
 
