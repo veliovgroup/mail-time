@@ -12,12 +12,23 @@ if (!process.env.REDIS_URL) {
 }
 
 const wait       = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const waitUntil  = async (fn, { timeout = 8000, interval = 64 } = {}) => {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeout) {
+    const value = fn();
+    if (value) {
+      return value;
+    }
+    await wait(interval);
+  }
+  return fn();
+};
 const mongoAddr  = (process.env.MONGO_URL || '');
 const dbName     = mongoAddr.split('/').pop().replace(/\/$/, '');
 const transports = [];
 const DEBUG      = process.env.DEBUG === 'true' ? true : false;
 const domain     = process.env.EMAIL_DOMAIN || 'example.com';
-const TEST_TITLE = 'mail-time-test-suite-mongo-redis';
+const TEST_TITLE = `mail-time-test-suite-mongo-redis-${Date.now()}`;
 
 const createTransport = (options) => ({
   options,
@@ -546,15 +557,15 @@ describe('Mongo - Redis', function () {
             html: '<p>sending email to invalid email address</p>',
           });
 
-          await wait(6500);
+          const callback = await waitUntil(() => callbacks[uuid], { timeout: 7500 });
 
           assert.isString(uuid, 'uuid is String');
-          assert.isObject(callbacks[uuid], 'error collected in callback');
-          assert.isTrue(callbacks[uuid].task.isFailed, 'task.isFailed');
-          assert.isFalse(callbacks[uuid].task.isSent, 'task.isSent');
-          assert.isFalse(callbacks[uuid].task.isCancelled, 'task.isCancelled');
-          assert.equal(callbacks[uuid].task.tries, 1, 'task.tries === 1');
-          assert.oneOf(callbacks[uuid].error.toString(), ['Error: Message not accepted or Greeting never received', 'Error: Sending failed'], 'correct error received');
+          assert.isObject(callback, 'error collected in callback');
+          assert.isTrue(callback.task.isFailed, 'task.isFailed');
+          assert.isFalse(callback.task.isSent, 'task.isSent');
+          assert.isFalse(callback.task.isCancelled, 'task.isCancelled');
+          assert.equal(callback.task.tries, 1, 'task.tries === 1');
+          assert.oneOf(callback.error.toString(), ['Error: Message not accepted or Greeting never received', 'Error: Sending failed'], 'correct error received');
         });
 
         it('onError - Retry', async function () {
@@ -572,18 +583,20 @@ describe('Mongo - Redis', function () {
             html: '<p>sending email to invalid email address</p>',
           });
 
-          await wait(10000);
+          try {
+            const callback = await waitUntil(() => callbacks[uuid], { timeout: 11000 });
 
-          assert.isString(uuid, 'uuid is String');
-          assert.isObject(callbacks[uuid], 'error collected in callback');
-          assert.isTrue(callbacks[uuid].task.isFailed, 'task.isFailed');
-          assert.isFalse(callbacks[uuid].task.isSent, 'task.isSent');
-          assert.isFalse(callbacks[uuid].task.isCancelled, 'task.isCancelled');
-          assert.equal(callbacks[uuid].task.tries, 2, 'task.tries === 2');
-          assert.oneOf(callbacks[uuid].error.toString(), ['Error: Message not accepted or Greeting never received', 'Error: Sending failed'], 'correct error received');
-
-          mailTimes[type].maxTries = 1;
-          mailTimes[type].concatDelay = 60000;
+            assert.isString(uuid, 'uuid is String');
+            assert.isObject(callback, 'error collected in callback');
+            assert.isTrue(callback.task.isFailed, 'task.isFailed');
+            assert.isFalse(callback.task.isSent, 'task.isSent');
+            assert.isFalse(callback.task.isCancelled, 'task.isCancelled');
+            assert.equal(callback.task.tries, 2, 'task.tries === 2');
+            assert.oneOf(callback.error.toString(), ['Error: Message not accepted or Greeting never received', 'Error: Sending failed'], 'correct error received');
+          } finally {
+            mailTimes[type].maxTries = 1;
+            mailTimes[type].concatDelay = 60000;
+          }
         });
 
         it('onSent', async function () {
@@ -595,15 +608,15 @@ describe('Mongo - Redis', function () {
             html: '<p>sending email to invalid email address</p>',
           });
 
-          await wait(6500);
+          const callback = await waitUntil(() => callbacks[uuid], { timeout: 7500 });
 
           assert.isString(uuid, 'uuid is String');
-          assert.isObject(callbacks[uuid], 'Data collected in callback');
-          assert.isFalse(callbacks[uuid].task.isFailed, 'task.isFailed');
-          assert.isTrue(callbacks[uuid].task.isSent, 'task.isSent');
-          assert.isFalse(callbacks[uuid].task.isCancelled, 'task.isCancelled');
-          assert.equal(callbacks[uuid].task.tries, 1, 'task.tries === 1');
-          assert.isUndefined(callbacks[uuid].error, 'No error collected');
+          assert.isObject(callback, 'Data collected in callback');
+          assert.isFalse(callback.task.isFailed, 'task.isFailed');
+          assert.isTrue(callback.task.isSent, 'task.isSent');
+          assert.isFalse(callback.task.isCancelled, 'task.isCancelled');
+          assert.equal(callback.task.tries, 1, 'task.tries === 1');
+          assert.isUndefined(callback.error, 'No error collected');
         });
       });
     });

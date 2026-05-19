@@ -283,6 +283,7 @@ describe('Postgres queue and scheduler combinations', function () {
 
       assert.equal(await countQueue(queueType, queue, prefix, uuid), 1, 'queued task exists');
       await mailTime.queue.iterate();
+      await mailTime.drain();
       assert.isObject(sent[uuid], 'onSent callback called');
       assert.equal(await countQueue(queueType, queue, prefix, uuid), 0, 'sent task removed');
 
