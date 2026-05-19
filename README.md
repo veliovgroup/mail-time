@@ -3,6 +3,11 @@
 
 # MailTime
 
+[![npm version](https://img.shields.io/npm/v/mail-time.svg?label=mail-time)](https://www.npmjs.com/package/mail-time)
+[![CI](https://img.shields.io/github/actions/workflow/status/veliovgroup/mail-time/ci.yml?branch=master)](https://github.com/veliovgroup/mail-time/actions)
+[![license](https://img.shields.io/npm/l/mail-time.svg)](LICENSE)
+[![GitHub Sponsors](https://img.shields.io/github/sponsors/dr-dimitru?label=Sponsor)](https://github.com/sponsors/dr-dimitru)
+
 Bulletproof email queue for [horizontally scaled](#sending-emails-from-a-cluster) Node.js & Bun apps. Built on top of [`nodemailer`](https://github.com/nodemailer/nodemailer) and [`josk`](https://github.com/veliovgroup/josk). Single runtime dependency, ESM + CJS, full TypeScript declarations.
 
 `MailTime` runs in one of two modes:
@@ -24,7 +29,7 @@ Many clients + one or more servers coexist behind the same `prefix` in the same 
 - 📦 **Bun ≥ 1.1.0 & Node ≥ 20.9.0** — same code, both runtimes.
 - 🤖 **Ships with AI agent skills** — see [AI agent skills](#ai-agent-skills) below.
 - 📐 **Hand-tuned ESM + CJS + TypeScript declarations**.
-- 🧪 **>95% Jest coverage** + Mocha integration tests for every adapter.
+- 🧪 **95%+ Jest coverage** (85% threshold enforced) + Mocha integration tests for every adapter.
 
 ## How it works
 
@@ -162,7 +167,7 @@ const { MailTime, MongoQueue, PostgresQueue, RedisQueue, mailTimePreset } = requ
 
 ### 2. Create nodemailer transports
 
-Each transport must expose `.options` (set automatically by `nodemailer.createTransport({...})`). MailTime reads `options.from` and merges any `options.mailOptions` defaults onto every letter.
+Each transport must expose `.options` (set automatically by `nodemailer.createTransport({...})`). MailTime merges any `options.mailOptions` defaults onto every letter. To produce a `From:` header *from* a transport's `options.from`, set the constructor's `from: (t) => t.options.from` callback (the next example does this). Without that callback, `From:` falls back to per-letter `sendMail({ from })` or `options.mailOptions.from` on the transport itself.
 
 ```js
 // transports.js
@@ -341,7 +346,7 @@ Defaults fit moderate traffic in a single region. Reach for a [preset](#settings
 | `josk.concurrency`                             | `Infinity`       | Set `1` if scheduler ticks overlap while `iterate` still runs                                                                      |
 | `josk.execute`                                 | `'batch'`        | Usually leave default; MailTime only registers one JoSk task per instance                                                          |
 | `josk.lockOwnerId`                             | random           | Set in production for observability                                                                                                |
-| `retries` / `retryDelay`                       | `60` / `60s`     | Per email class; transactional shorter, marketing longer                                                                           |
+| `retries` / `retryDelay`                       | `59` / `60s`     | `retries` is *after* the first attempt; default `59` means 60 total attempts. Per email class — transactional shorter, marketing longer. |
 | `concatEmails` / `concatDelay`                 | `false` / `60s`  | On for notification batching; off for OTP and receipts                                                                             |
 | `prefix`                                       | `''`             | **Same** on all `client` + `server` for one queue; **different** only per email class / shard                                      |
 
@@ -394,7 +399,7 @@ await mailQueue.sendMail({
 | `josk`                        | `MailTimeJoSkOptions`                               | —                          | **Required for `server`**. See [JoSk options](#josk-options) below.                                                                                                                         |
 | `strategy`                    | `'backup' \| 'balancer'`                            | `'backup'`                 | Multi-SMTP rotation policy.                                                                                                                                                                 |
 | `failsToNext`                 | `number`                                            | `4`                        | (`backup`) failures-in-a-row before rotating.                                                                                                                                               |
-| `retries`                     | `number`                                            | `60`                       | Re-send attempts after first failure.                                                                                                                                                       |
+| `retries`                     | `number`                                            | `59`                       | Re-send attempts after first failure. Total attempts = `retries + 1` (defaults to 60). Legacy alias `maxTries` is honored when `retries` is absent: `new MailTime({ maxTries: N })` sets total attempts to `N`.                |
 | `retryDelay`                  | `number` (ms)                                       | `60000`                    | Wait between attempts.                                                                                                                                                                      |
 | `keepHistory`                 | `boolean`                                           | `false`                    | Keep sent/failed/cancelled rows.                                                                                                                                                            |
 | `concatEmails`                | `boolean \| { subject?: string }`                   | `false`                    | Fold same-`to` letters into one. Pass `{ subject: 'X' }` to set the folded-letter subject inline; the string supports the `{{count}}` placeholder and overrides `concatSubject`.            |
@@ -505,6 +510,10 @@ import { MailTime } from 'mail-time'; // works in both
 ```
 
 Mixed clusters (some Node, some Bun) share one schedule under the same `prefix` — the lease lives in storage, runtime-agnostic.
+
+## License
+
+[BSD-3-Clause](LICENSE).
 
 ## Support this project
 
