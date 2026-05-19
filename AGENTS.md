@@ -175,3 +175,20 @@ REDIS_URL=redis://127.0.0.1:6379 MONGO_URL=mongodb://127.0.0.1:27017/test PG_URL
 - For major API changes add a migration note to `CHANGELOG.md`.
 
 Update this AGENTS.md on major refactors.
+
+## Learned User Preferences
+
+- Refactor only when change has real production or maintainability impact; skip style-only diffs and broad rewrites.
+- README: human use-cases and examples; AGENTS.md and `skills/mail-time/` terse for agents — avoid duplicating the same prose across README, AGENTS, and every skill reference.
+- CHANGELOG.md: one-liner to GitHub releases; version migration detail lives in `docs/*.md` (e.g. `docs/v4.md`), not long CHANGELOG sections.
+- When implementing from an attached plan file, change code/docs targets only — do not edit the plan file.
+- Skills `description` frontmatter: ~700–900 chars (WHAT, WHEN, discovery triggers); avoid >1024 dumps and very short (<450) triggers that miss routing.
+- Doc maintenance on API/tuning changes: JSDoc + one human surface (usually README) + one agent surface (`AGENTS.md` or a skill reference), not all files at once.
+
+## Learned Workspace Facts
+
+- Mocha integration tests (`test/npm-*.js`): after iterate-driven work call `await mailTime.drain()`; prefer poll-until (`waitUntil`) over multi-second fixed sleeps.
+- npm tarball excludes `docs/` — README links to in-repo guides must use GitHub `blob/master/docs/...` URLs for npmjs.com readers.
+- `RedisQueue` send claims require Redis client `watch()` and `multi()`; without them claims fail closed (no non-atomic fallback).
+- Meteor: ship `package-types.json` (keep out of `.meteorignore`) so `zodern:types` can read `typesEntry`.
+- Dedicated mail host: systemd `mailtime@<class>` — one `server` process per email class; second unit on same `prefix` is hot-standby only, not throughput.
