@@ -219,7 +219,7 @@ Start from `adapters/blank-example.js` in the source tree — it is the canonica
   - `isSent === false`
   - `isFailed === false`
   - `isCancelled === false`
-  - stored `tries === task.tries` (the caller's snapshot, before the bump)
+  - stored `tries === task.tries` (the caller's snapshot — **not** `tries < maxTries`. The snapshot match is the compare-and-set: two workers each loaded the row at `tries=N`, but only one can write `tries=N+1` back. Using `<` lets both succeed and you double-send.)
   - stored `isSending === false` **OR** stored `sendingAt <= updateObj.sendingAt - sendingTimeout` (stale-lock recovery)
   Return `false` whenever the predicate fails, so parallel workers (in this process or another node) drop the row and JoSk picks something else up next tick. Return `true` only when the storage layer atomically flipped `isSending` to `true`.
 - **`iterate(opts)` calls `await mailTimeInstance.___dispatch(task)`** — *not* `___send` — for every row matching: `isSent === false && isFailed === false && isCancelled === false && sendAt <= Date.now() && tries < maxTries && (isSending === false || sendingAt <= Date.now() - opts.sendingTimeout)`. `___dispatch` acquires a slot from MailTime's bounded send pool (the `concurrency` option) and starts the full send lifecycle detached. Stop the scan after `opts.limit` dispatches when `opts.limit` is set (MailTime sends `1` when configured with `mode: 'one'`).

@@ -41,8 +41,10 @@ const mailQueue = new MailTime({
 
 await mailQueue.ready();
 
-process.on('SIGTERM', () => {
-  mailQueue.destroy();
+process.on('SIGTERM', async () => {
+  mailQueue.destroy();        // stop new scheduler ticks
+  await mailQueue.drain();    // let any in-flight SMTP roundtrips settle
+  // close the underlying storage client(s) here
 });
 
 export { mailQueue };
@@ -155,7 +157,12 @@ import { otpMail, transactionalMail, marketingMail } from './mail-instances.js';
 
 const mailers = [otpMail, transactionalMail, marketingMail];
 await Promise.all(mailers.map((m) => m.ready()));
-process.on('SIGTERM', () => mailers.forEach((m) => m.destroy()));
+
+process.on('SIGTERM', async () => {
+  mailers.forEach((m) => m.destroy());                  // 1. stop new ticks
+  await Promise.all(mailers.map((m) => m.drain()));     // 2. let in-flight SMTPs finish
+  // 3. close shared clients (redisClient.quit() / pgPool.end() / mongoClient.close()) here
+});
 ```
 
 High volume on one logical queue → shard prefixes (`marketing-0`, `marketing-1`). See `tuning.md`.

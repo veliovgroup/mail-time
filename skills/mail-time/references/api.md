@@ -88,7 +88,7 @@ Constructor. The scheduler starts immediately when `opts.type === 'server'`.
 | `verifyTransports` | `boolean` | `true` | Probe each transport via `transport.verify()` once at `ready()`. Failing transports are marked unusable (skipped during rotation/fallback) and surfaced through `onError(err, null, { transportIndex, phase: 'verify' })`. `ready()` rejects if every transport fails. Transports without a `verify()` method are treated as healthy. Set to `false` to disable. |
 | `template` | `string` | `'{{{html}}}'` | Mustache-like default template wrapping every letter. |
 | `debug` | `boolean` | `false` | Verbose logs. |
-| `onSent` | `(email, details?) => void` | — | Called after a letter is handed to the SMTP server. |
+| `onSent` | `(task, info?) => void` | — | Called **once** after every recipient is accepted (full delivery). Not called per attempt or per partially-accepted recipient — see "Per-recipient delivery state" below. |
 | `onError` | `(error, email, details?) => void` | — | Called after the final retry attempt fails. Also fires once per transport that fails `verify()` at startup, with `email === null` and `details = { transportIndex, phase: 'verify' }`. |
 
 ### JoSk integration (`opts.josk`)
@@ -267,7 +267,7 @@ Whitespace around the key is allowed: `{{ userName }}` works the same as `{{user
 ```ts
 type MailTimeRejectedRecipient = { address: string; error: string };
 
-type MailTimeMailOption = {
+type MailTimeMailOptions = {
   to: string | string[];
   cc?: string | string[];
   bcc?: string | string[];
@@ -289,7 +289,7 @@ type MailTimeTask = {
   template?: string | false;
   transport: number;                    // index into MailTime.transports
   concatSubject?: string | false;
-  mailOptions: MailTimeMailOption[];    // [0] for single email, [0..N] for concatenated batch
+  mailOptions: MailTimeMailOptions[];   // [0] for single email, [0..N] for concatenated batch
 };
 
 type MailTimeIterateOptions = {
