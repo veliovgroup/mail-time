@@ -66,17 +66,9 @@ Use this decision order, not "whichever the app already runs":
 - **PostgreSQL** is the safest default for multi-DC / multi-region setups, mixed clocks, or when exactly-once across regions matters. The JoSk side uses `CURRENT_TIMESTAMP` for lease comparisons and `FOR UPDATE SKIP LOCKED` for atomic claims. Backed by a `pg.Pool`. Auto-migrates the `mail_time_queue` table on first init.
 - **Redis** is the fastest for high-throughput / sub-second polling, in single-region single-writer topologies. Per-letter keys plus a sorted set of `sendAt` timestamps. Uses `WATCH` + `MULTI` for atomic claims. Reject active-active / multi-master Redis topologies for exactly-once correctness — flag it for the user if they describe one.
 - **MongoDB** is the most convenient when the app already runs Mongo (especially Meteor.js). Atomic claim uses `findOneAndUpdate`-style predicate guards. Tested only against the official `mongodb` driver — do not recommend Mongoose's client, DocumentDB, or CosmosDB without warning the user.
-- **Custom** if the user has a queue technology that isn't covered (NATS, SQS, etc.). Implement the seven-method contract: `ping`, `iterate`, `getPendingTo`, `push`, `cancel`, `remove`, `update`. The `update` call carries a `{ isSending: true, sendingAt: <ms>, tries: N }` claim that **must** be atomic on `isSent=false AND isFailed=false AND isCancelled=false AND tries=email.tries AND (isSending=false OR sendingAt <= now - sendingTimeout)`. `iterate(opts)` must honor `opts.limit` (set by `mode: 'one'`) and `opts.sendingTimeout`, and dispatch each due row via `await mailTimeInstance.___dispatch(row)`. See `references/adapters.md`.
+- **Custom** if the user has a queue technology that isn't covered (NATS, SQS, etc.). Seven-method contract + CAS rules: `references/adapters.md`.
 
-The queue and scheduler **can** use different stores. Common pairings:
-
-| Queue | Scheduler | When |
-|---|---|---|
-| Mongo | Mongo | App already runs Mongo, single-region. |
-| Mongo | Redis | Mongo for durable email storage, Redis for tight polling intervals. |
-| Redis | Redis | Highest throughput, single-region writer. |
-| Redis | Mongo | Redis for letter storage, Mongo for scheduler lock if existing infra. |
-| Postgres | Postgres | Strongest exactly-once, multi-DC / mixed clocks. |
+Queue and scheduler may use different stores (pairing table, custom adapter scaffold): `references/adapters.md`.
 
 ## Pick the strategy when you have multiple SMTPs
 
@@ -121,18 +113,7 @@ Full signatures, every option, every error, every default → `references/api.md
 | `notifications` | App / social activity bursts (60-s fold window, concat on). |
 | `alerts` | Ops / admin alerts — fast retry, many retries for ongoing issues. |
 
-The function deep-clones the preset and deep-merges overrides: scalars win, nested `josk` composes so the user's `adapter` / `lockOwnerId` / `onError` slot in beside the preset's `zombieTime` / jitter. The raw map is exported as `presets`; names as `presetNames`. Full table + values: README §"Settings presets". Source: `presets.js`.
-
-```js
-import { MailTime, RedisQueue, mailTimePreset } from 'mail-time';
-
-const mailTime = new MailTime(mailTimePreset('otp', {
-  prefix: 'otp',
-  queue: new RedisQueue({ client }),
-  transports: [otpTransport],
-  josk: { adapter: { type: 'redis', client } },
-}));
-```
+Deep-merge overrides: scalars win, nested `josk` composes. Raw map: `presets`; names: `presetNames`. Numeric values: `presets.js` / README §"Settings presets". Wiring examples: `references/recipes.md`.
 
 ## JoSk / tuning
 
@@ -155,20 +136,16 @@ Full code in `references/recipes.md`. Quick map:
 
 ## Common red flags to call out
 
-- **No `onError` / `onSent` hooks.** Silent failures. Suggest wiring them to the user's logger.
-- **`retries: 0` with a single transport.** First failure = permanent failure. Confirm the user wants that.
-- **`concatEmails: true` with transactional emails (OTPs, password resets).** Folds letters together — use a separate instance (`prefix: 'otp'`). See `references/recipes.md` / `references/tuning.md`.
-- **Two classes sharing one `prefix`.** Collides or mixes policy — one `prefix` per class; clients and servers for that class use the same `prefix`.
-- **Many `server` pods, one `prefix`, expecting N× send rate.** One JoSk lease per `prefix` cluster-wide. Scale via more prefixes / dedicated mail workers — see `references/tuning.md`. (Duplicate-prefix `server` *is* a valid failover/HA pattern — warm standby takes the lease the next tick if the leader dies — just not a throughput one.)
-- **Long-running SMTP timeouts (>60s) with default `josk.zombieTime`.** Increase `zombieTime` above the worst-case send time, or another server will re-claim the in-flight letter.
-- **`MongoAdapter` against CosmosDB / DocumentDB / Mongoose's wrapped client.** Tested only against the official `mongodb` driver. Flag and recommend Postgres or Redis instead, or warn that behavior is unverified.
-- **Active-active / multi-master Redis (or KeyDB active-replication).** Lease conflict resolution can allow duplicate claims across writers — exactly-once breaks. Use a single primary endpoint or switch to Postgres.
-- **`keepHistory: true` without a retention policy.** Storage grows unboundedly. Recommend a TTL job (Mongo TTL index, Redis EXPIRE, Postgres scheduled cleanup) on `isSent: true` rows older than N days.
-- **`failsToNext` set very low on `'backup'` strategy with only one transport.** Has no effect; rotate happens against `transports.length`. Confirm the user actually has fallback transports.
-- **`sendingTimeout` below worst-case SMTP roundtrip.** A healthy still-sending worker can lose its `isSending` lock to a recovery worker, causing a duplicate delivery. Keep `sendingTimeout` comfortably above the slowest legitimate send (its default `300000` ms / 5 min is conservative).
-- **Custom queue calling `___send` from `iterate` instead of `___dispatch`.** Skips the bounded send pool and forces the JoSk lease to be held for the duration of SMTP. Always use `await this.mailTimeInstance.___dispatch(row)`.
-- **Custom queue's `update` predicate uses `tries < maxTries` (or omits the `tries === task.tries` snapshot match) on the atomic claim.** Two workers each load `tries=N` and both succeed at writing `tries=N+1` — duplicate send. The whole exactly-once guarantee rides on the snapshot CAS. See `references/adapters.md`.
-- **Tests/scripts that create a `MailTime` server instance without `mailTime.destroy()` (and `await mailTime.drain()` if iterate ran).** The scheduler timer keeps the process alive; the test hangs or the script never exits. See `references/recipes.md` § Graceful shutdown.
+- **No `onError` / `onSent` hooks** — silent failures; wire to the user's logger.
+- **`concatEmails: true` on OTP / password-reset traffic** — separate `prefix` + instance (`references/recipes.md`).
+- **`MongoAdapter` on CosmosDB / DocumentDB / Mongoose client** — official `mongodb` driver only; suggest Postgres or Redis.
+- **Active-active / multi-master Redis** — duplicate claims possible; single primary or Postgres.
+- **`sendingTimeout` below worst-case SMTP roundtrip** — healthy worker loses lock → duplicate send.
+- **Custom `iterate` calls `___send` not `___dispatch`** — holds JoSk lease through SMTP; bypasses send pool.
+- **Custom `update` claim omits `tries === task.tries` snapshot** — duplicate send across workers (`references/adapters.md`).
+- **Server instance without `destroy()` (+ `drain()` after iterate)** — process hangs (`references/recipes.md`).
+
+Topology, throughput, `zombieTime`, `keepHistory`, `failsToNext`, `retries: 0`: `references/tuning.md`.
 
 ## Bun / Node compatibility
 

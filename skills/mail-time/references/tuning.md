@@ -66,14 +66,16 @@ The atomic CAS on `isSending` is the single mechanism that prevents duplicate de
 
 Built-in: `mailTimePreset(name, overrides)` (exported from `mail-time`). Returns a fresh, mutable MailTime config; deep-merges overrides onto a frozen preset. Names: `transactional`, `otp`, `newsletter`, `marketing`, `notifications`, `alerts`. Source/values: `presets.js`.
 
-| Preset | Shape highlights |
+| Preset | Best for |
 |---|---|
-| `transactional` | `retries: 30`, `retryDelay: 10s`, `concatEmails: false`, `concurrency: 1`, `josk.zombieTime: 120s` |
-| `otp` | `retries: 5`, `retryDelay: 2s`, `revolvingInterval: 1024` + jitter `256/1024`, `concurrency: 4`, `sendingTimeout: 60s` |
-| `newsletter` | `concatEmails: true` (5-min fold), `retries: 5`, `retryDelay: 60s`, `concurrency: 2`, `sendingTimeout: 10min`, `josk.zombieTime: 5min` |
-| `marketing` | `retries: 10`, `retryDelay: 30s`, `concatEmails: false`, `concurrency: 5`, `josk.zombieTime: 3min` |
-| `notifications` | `concatEmails: true` (60-s fold), `retries: 8`, `retryDelay: 30s`, `concurrency: 3`, `josk.zombieTime: 3min` |
-| `alerts` | `retries: 20`, `retryDelay: 5s`, `revolvingInterval: 1024` + jitter `256/1024`, `concurrency: 2`, `sendingTimeout: 60s` |
+| `transactional` | Receipts, password resets, account mail |
+| `otp` | Sign-in codes, 2FA — fast retry, parallel SMTP |
+| `newsletter` | Concat digests / weekly summaries |
+| `marketing` | Campaign blasts, parallel sends, no concat |
+| `notifications` | Activity bursts with concat fold |
+| `alerts` | Ops alerts — fast retry, many attempts |
+
+Numeric knobs per preset: `presets.js` or README §"Settings presets".
 
 Every preset pins `mode: 'batch'` explicitly. `'one'` only earns its keep when multiple `server` pods compete on the same `prefix` (rare — same-`prefix` duplicates exist for failover/HA, not throughput) — none of the preset use-cases benefit from it. Override per-call with `mailTimePreset(name, { mode: 'one' })` if a downstream forces it.
 
