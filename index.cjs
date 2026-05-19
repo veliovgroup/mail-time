@@ -456,6 +456,7 @@ class MongoQueue {
       isFailed: false,
       isCancelled: false,
       isSending: { $ne: true },
+      tries: { $lt: this.mailTimeInstance.maxTries },
       sendAt: {
         $lte: sendAt,
       },
@@ -888,7 +889,7 @@ class RedisQueue {
     }
 
     const task = JSON.parse(taskJSON);
-    if (!task || task.isSent === true || task.isCancelled === true || task.isFailed === true || task.sendAt > sendAt || task.isSending === true) {
+    if (!task || task.isSent === true || task.isCancelled === true || task.isFailed === true || task.sendAt > sendAt || task.isSending === true || task.tries >= this.mailTimeInstance.maxTries) {
       return null;
     }
 
@@ -1449,9 +1450,10 @@ class PostgresQueue {
         AND is_failed = false
         AND is_cancelled = false
         AND is_sending = false
+        AND tries < $4
         AND send_at <= $3
       ORDER BY send_at DESC
-      LIMIT 1`, [this.prefix, to, sendAt]);
+      LIMIT 1`, [this.prefix, to, sendAt, this.mailTimeInstance.maxTries]);
 
     return normalizeRow(res.rows?.[0]);
   }
@@ -2024,11 +2026,11 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
  */
 
 /**
- * @typedef {{ [key: string]: any, type?: 'mongo' | 'redis' | 'postgres', client?: MailTimeStorageClient, db?: MailTimeMongoDb, prefix?: string, resetOnInit?: boolean }} MailTimeJoSkAdapterOptions
+ * @typedef {{ [key: string]: any, type?: 'mongo' | 'redis' | 'postgres', client?: MailTimeStorageClient, db?: MailTimeMongoDb, prefix?: string, resetOnInit?: boolean, useHashTags?: boolean }} MailTimeJoSkAdapterOptions
  */
 
 /**
- * @typedef {{ [key: string]: any, adapter: MailTimeJoSkAdapterOptions | object, debug?: boolean, autoClear?: boolean, zombieTime?: number, minRevolvingDelay?: number, maxRevolvingDelay?: number, execute?: 'batch' | 'one', concurrency?: number, lockOwnerId?: string, resetOnInit?: boolean, onError?: (title: string, details: object) => void }} MailTimeJoSkOptions
+ * @typedef {{ [key: string]: any, adapter: MailTimeJoSkAdapterOptions | object, debug?: boolean, autoClear?: boolean, zombieTime?: number, minRevolvingDelay?: number, maxRevolvingDelay?: number, execute?: 'batch' | 'one', concurrency?: number, lockOwnerId?: string, resetOnInit?: boolean, onError?: (title: string, details: object) => void, onExecuted?: (uid: string, details: object) => void }} MailTimeJoSkOptions
  */
 
 /**
