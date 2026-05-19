@@ -78,7 +78,7 @@ export class BlankQueue {
      * @async
      * @memberOf BlankQueue
      * @name update
-     * @description remove email from queue
+     * @description update email in queue
      * @param email {object} - email's object
      * @param updateObj {object} - fields with new values to update
      * @returns {Promise<boolean>} returns `true` if updated or `false` if not found or no changes was made

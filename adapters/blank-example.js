@@ -105,6 +105,7 @@ class BlankQueue {
     //   isFailed    = false
     //   isCancelled = false
     //   sendAt      <= now
+    //   tries       < mailTimeInstance.maxTries
     //   (isSending  = false OR sendingAt <= now - sendingTimeout)  -- include stale-locked rows for recovery
     // STOP AFTER opts.limit dispatches when opts.limit is set (mode: 'one' passes 1).
     const now = Date.now();
@@ -116,6 +117,9 @@ class BlankQueue {
       isSent: false,
       isFailed: false,
       isCancelled: false,
+      tries: {
+        $lt: this.mailTimeInstance.maxTries
+      },
       sendAt: {
         $lte: now
       },
@@ -158,12 +162,15 @@ class BlankQueue {
       isFailed: false,
       isCancelled: false,
       isSending: false,
+      tries: {
+        $lt: this.mailTimeInstance.maxTries
+      },
       sendAt: {
         $lte: sendAt // Number (timestamp)
       }
     });
 
-    if (!email || email.isSent === true || email.isCancelled === true || email.isFailed === true || email.isSending === true) {
+    if (!email || email.isSent === true || email.isCancelled === true || email.isFailed === true || email.isSending === true || email.tries >= this.mailTimeInstance.maxTries) {
       return null;
     }
 
@@ -252,7 +259,7 @@ class BlankQueue {
    * @async
    * @memberOf BlankQueue
    * @name update
-   * @description remove email from queue
+   * @description update email in queue
    * @param email {object} - email's object
    * @param updateObj {object} - fields with new values to update
    * @returns {Promise<boolean>} returns `true` if updated or `false` if not found or no changes was made
