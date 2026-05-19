@@ -1,4 +1,12 @@
-import { debug, logError } from '../helpers.js';
+import {
+  debug,
+  logError,
+  isSendClaimUpdate,
+  isSendLeaseGuardedUpdate,
+  isAppendMailOptionUpdate,
+  stripInternalUpdateMeta,
+  isSendLeaseRemove,
+} from '../helpers.js';
 
 /**
  * @typedef {object} RedisClient
@@ -22,8 +30,13 @@ import { debug, logError } from '../helpers.js';
 const KEY_TYPES = new Set(['letter', 'sendat', 'concatletter']);
 const DEFAULT_PREFIX = 'default';
 
-const isSendClaimUpdate = (updateObj) => {
-  return updateObj.isSending === true && typeof updateObj.tries === 'number';
+const canReleaseLease = (currentTask, updateObj) => {
+  return currentTask
+    && currentTask.tries === updateObj.leaseTries
+    && currentTask.isSending === true
+    && (typeof currentTask.sendingAt === 'number' ? currentTask.sendingAt : 0) === updateObj.leaseSendingAt
+    && currentTask.isCancelled !== true
+    && currentTask.isFailed !== true;
 };
 
 const canClaimTask = (currentTask, task, now, sendingTimeout) => {
@@ -259,7 +272,7 @@ class RedisQueue {
     }
 
     const task = JSON.parse(taskJSON);
-    if (!task || task.isSent === true || task.isCancelled === true || task.isFailed === true || task.sendAt > sendAt) {
+    if (!task || task.isSent === true || task.isCancelled === true || task.isFailed === true || task.sendAt > sendAt || task.isSending === true) {
       return null;
     }
 
@@ -351,15 +364,52 @@ class RedisQueue {
    * @name remove
    * @description remove task from queue
    * @param task {object} - task's object
+   * @param {{ leaseTries: number, leaseSendingAt: number }} [opts] - lease guard: only remove if this worker still holds the lease (tries + sendingAt match, row not cancelled/failed)
    * @returns {Promise<boolean>} returns `true` if removed or `false` if not found
    */
-  async remove(task) {
+  async remove(task, opts) {
     this.__debug('[remove]', task?.uuid);
     if (!task || typeof task !== 'object' || typeof task.uuid !== 'string') {
       return false;
     }
 
     const letterKey = this.__getKey(task.uuid, 'letter');
+    if (isSendLeaseRemove(opts)) {
+      if (typeof this.client.watch !== 'function' || typeof this.client.multi !== 'function') {
+        return false;
+      }
+      try {
+        await this.client.watch(letterKey);
+        const taskJSON = await this.client.get(letterKey);
+        if (!taskJSON) {
+          await this.client.unwatch?.();
+          return false;
+        }
+        const currentTask = JSON.parse(taskJSON);
+        if (currentTask.tries !== opts.leaseTries
+          || currentTask.isSending !== true
+          || (typeof currentTask.sendingAt === 'number' ? currentTask.sendingAt : 0) !== opts.leaseSendingAt
+          || currentTask.isCancelled === true
+          || currentTask.isFailed === true) {
+          await this.client.unwatch?.();
+          return false;
+        }
+        const keysToDelete = [letterKey, this.__getKey(task.uuid, 'sendat')];
+        if (task.to) {
+          keysToDelete.push(this.__getKey(task.to, 'concatletter'));
+        }
+        const multi = this.client.multi();
+        for (const key of keysToDelete) {
+          multi.del(key);
+        }
+        const result = await multi.exec();
+        return result !== null;
+      } catch (opError) {
+        logError('[remove] [lease] [opError]', opError);
+        return false;
+      }
+    }
+
     const exists = await this.client.exists(letterKey);
     if (!exists) {
       return false;
@@ -391,19 +441,58 @@ class RedisQueue {
     const letterKey = this.__getKey(task.uuid, 'letter');
     const sendatKey = this.__getKey(task.uuid, 'sendat');
     const isClaim = isSendClaimUpdate(updateObj);
+    const isAppend = isAppendMailOptionUpdate(updateObj);
+    const isLeaseRelease = isSendLeaseGuardedUpdate(updateObj);
     const now = isClaim && typeof updateObj.sendingAt === 'number' ? updateObj.sendingAt : Date.now();
     const sendingTimeout = this.mailTimeInstance?.sendingTimeout || 300000;
 
     try {
-      if (isClaim && (typeof this.client.watch !== 'function' || typeof this.client.multi !== 'function')) {
-        if (!RedisQueue.__atomicClaimWarned) {
+      if (isAppend) {
+        if (typeof this.client.watch !== 'function' || typeof this.client.multi !== 'function') {
+          if (!RedisQueue.__atomicAppendWarned) {
+            RedisQueue.__atomicAppendWarned = true;
+            logError('[update] Redis client without watch()/multi() — concat appendMailOption falls back to non-atomic read-modify-write; concurrent folds into the same row may lose letters');
+          }
+          const taskJSON = await this.client.get(letterKey);
+          if (!taskJSON) {
+            return false;
+          }
+          const currentTask = JSON.parse(taskJSON);
+          if (currentTask.isSending === true || currentTask.isSent === true || currentTask.isFailed === true || currentTask.isCancelled === true) {
+            return false;
+          }
+          currentTask.mailOptions = [...(currentTask.mailOptions || []), updateObj.appendMailOption];
+          await this.client.set(letterKey, JSON.stringify(currentTask));
+          return true;
+        }
+
+        await this.client.watch(letterKey);
+        const taskJSON = await this.client.get(letterKey);
+        if (!taskJSON) {
+          await this.client.unwatch?.();
+          return false;
+        }
+        const currentTask = JSON.parse(taskJSON);
+        if (currentTask.isSending === true || currentTask.isSent === true || currentTask.isFailed === true || currentTask.isCancelled === true) {
+          await this.client.unwatch?.();
+          return false;
+        }
+        currentTask.mailOptions = [...(currentTask.mailOptions || []), updateObj.appendMailOption];
+        const multi = this.client.multi();
+        multi.set(letterKey, JSON.stringify(currentTask));
+        const result = await multi.exec();
+        return result !== null;
+      }
+
+      if ((isClaim || isLeaseRelease) && (typeof this.client.watch !== 'function' || typeof this.client.multi !== 'function')) {
+        if (isClaim && !RedisQueue.__atomicClaimWarned) {
           RedisQueue.__atomicClaimWarned = true;
           logError('[update] Redis client must support watch() and multi() for atomic send claims');
         }
         return false;
       }
 
-      if (isClaim) {
+      if (isClaim || isLeaseRelease) {
         await this.client.watch(letterKey);
         const taskJSON = await this.client.get(letterKey);
         if (!taskJSON) {
@@ -412,12 +501,16 @@ class RedisQueue {
         }
 
         const currentTask = JSON.parse(taskJSON);
-        if (!canClaimTask(currentTask, task, now, sendingTimeout)) {
+        if (isClaim && !canClaimTask(currentTask, task, now, sendingTimeout)) {
+          await this.client.unwatch?.();
+          return false;
+        }
+        if (isLeaseRelease && !canReleaseLease(currentTask, updateObj)) {
           await this.client.unwatch?.();
           return false;
         }
 
-        const updatedTask = { ...currentTask, ...updateObj };
+        const updatedTask = { ...currentTask, ...stripInternalUpdateMeta(updateObj) };
         const multi = this.client.multi();
         multi.set(letterKey, JSON.stringify(updatedTask));
         if (updatedTask.isSent === true || updatedTask.isFailed === true || updatedTask.isCancelled === true) {
@@ -436,7 +529,7 @@ class RedisQueue {
       }
 
       const currentTask = JSON.parse(taskJSON);
-      const updatedTask = { ...currentTask, ...updateObj };
+      const updatedTask = { ...currentTask, ...stripInternalUpdateMeta(updateObj) };
       await this.client.set(letterKey, JSON.stringify(updatedTask));
 
       if (updatedTask.isSent === true || updatedTask.isFailed === true || updatedTask.isCancelled === true) {
