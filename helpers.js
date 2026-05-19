@@ -175,4 +175,43 @@ const filterAddressField = (field, acceptedSet) => {
   return field;
 };
 
-export { debug, logError, isPlainObject, deepMerge, equals, extractEmail, toAddressList, filterAddressField };
+const isSendClaimUpdate = (updateObj) => {
+  return updateObj && updateObj.isSending === true && typeof updateObj.tries === 'number';
+};
+
+const isSendLeaseGuardedUpdate = (updateObj) => {
+  return updateObj && typeof updateObj.leaseTries === 'number' && typeof updateObj.leaseSendingAt === 'number';
+};
+
+const isAppendMailOptionUpdate = (updateObj) => {
+  return updateObj && updateObj.appendMailOption !== void 0;
+};
+
+/** Strip MailTime-internal update keys before persisting to storage. */
+const stripInternalUpdateMeta = (updateObj) => {
+  const out = { ...updateObj };
+  delete out.leaseTries;
+  delete out.leaseSendingAt;
+  delete out.appendMailOption;
+  return out;
+};
+
+const isSendLeaseRemove = (opts) => {
+  return opts && typeof opts.leaseTries === 'number' && typeof opts.leaseSendingAt === 'number';
+};
+
+export {
+  debug,
+  logError,
+  isPlainObject,
+  deepMerge,
+  equals,
+  extractEmail,
+  toAddressList,
+  filterAddressField,
+  isSendClaimUpdate,
+  isSendLeaseGuardedUpdate,
+  isAppendMailOptionUpdate,
+  stripInternalUpdateMeta,
+  isSendLeaseRemove,
+};

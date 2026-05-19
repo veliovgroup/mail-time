@@ -66,7 +66,10 @@ export type CustomQueue = {
     getPendingTo: (to: string, sendAt: number) => Promise<MailTimeTask | object | null>;
     push: (email: MailTimeTask) => Promise<void> | void;
     cancel: (uuid: string) => Promise<boolean>;
-    remove: (email: MailTimeTask | object) => Promise<boolean>;
+    remove: (email: MailTimeTask | object, opts?: {
+        leaseTries: number;
+        leaseSendingAt: number;
+    }) => Promise<boolean>;
     update: (email: MailTimeTask | object, updateObj: object) => Promise<boolean>;
     ready?: () => Promise<void>;
 };
@@ -149,7 +152,7 @@ export type MailTimeOptions = {
  * @typedef {{ limit?: number, sendingTimeout?: number }} MailTimeIterateOptions
  */
 /**
- * @typedef {{ ping: () => Promise<MailTimePingResult>, iterate: (opts?: MailTimeIterateOptions) => Promise<void> | void, getPendingTo: (to: string, sendAt: number) => Promise<MailTimeTask | object | null>, push: (email: MailTimeTask) => Promise<void> | void, cancel: (uuid: string) => Promise<boolean>, remove: (email: MailTimeTask | object) => Promise<boolean>, update: (email: MailTimeTask | object, updateObj: object) => Promise<boolean>, ready?: () => Promise<void> }} CustomQueue
+ * @typedef {{ ping: () => Promise<MailTimePingResult>, iterate: (opts?: MailTimeIterateOptions) => Promise<void> | void, getPendingTo: (to: string, sendAt: number) => Promise<MailTimeTask | object | null>, push: (email: MailTimeTask) => Promise<void> | void, cancel: (uuid: string) => Promise<boolean>, remove: (email: MailTimeTask | object, opts?: { leaseTries: number, leaseSendingAt: number }) => Promise<boolean>, update: (email: MailTimeTask | object, updateObj: object) => Promise<boolean>, ready?: () => Promise<void> }} CustomQueue
  */
 /**
  * @typedef {{ address: string, error: string }} MailTimeRejectedRecipient
@@ -232,10 +235,13 @@ export class MailTime {
     /**
      * @memberOf MailTime
      * @name destroy
-     * @description Destroy scheduler instance and stop future queue iterations
-     * @returns {boolean}
+     * @description Stop the scheduler and block future dispatches. Pass `{ drain: true }` to also wait for in-flight SMTP attempts (returns a Promise).
+     * @param {{ drain?: boolean }} [opts]
+     * @returns {boolean | Promise<boolean>}
      */
-    destroy(): boolean;
+    destroy(opts?: {
+        drain?: boolean;
+    }): boolean | Promise<boolean>;
     /**
      * @async
      * @memberOf MailTime

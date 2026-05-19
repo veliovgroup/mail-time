@@ -10,6 +10,20 @@ import { debug, logError, deepMerge, equals, isPlainObject, extractEmail, toAddr
 const noop = () => {};
 const queueMethods = ['ping', 'iterate', 'getPendingTo', 'push', 'remove', 'update', 'cancel'];
 
+const __withLease = (task, updateObj) => {
+  if (task?.isSending === true && typeof task.tries === 'number' && typeof task.sendingAt === 'number') {
+    return { ...updateObj, leaseTries: task.tries, leaseSendingAt: task.sendingAt };
+  }
+  return updateObj;
+};
+
+const __leaseRemoveOpts = (task) => {
+  if (task?.isSending === true && typeof task.tries === 'number' && typeof task.sendingAt === 'number') {
+    return { leaseTries: task.tries, leaseSendingAt: task.sendingAt };
+  }
+  return void 0;
+};
+
 const createPool = (concurrency) => {
   const limit = Math.max(1, concurrency | 0);
   const queue = [];
@@ -23,7 +37,9 @@ const createPool = (concurrency) => {
       job.resolveSlot();
       Promise.resolve()
         .then(job.fn)
-        .catch(() => {})
+        .catch((poolError) => {
+          logError('[pool] unhandled send error', poolError);
+        })
         .finally(() => {
           active--;
           if (active === 0 && queue.length === 0 && drainResolvers.length > 0) {
@@ -155,7 +171,7 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
  */
 
 /**
- * @typedef {{ ping: () => Promise<MailTimePingResult>, iterate: (opts?: MailTimeIterateOptions) => Promise<void> | void, getPendingTo: (to: string, sendAt: number) => Promise<MailTimeTask | object | null>, push: (email: MailTimeTask) => Promise<void> | void, cancel: (uuid: string) => Promise<boolean>, remove: (email: MailTimeTask | object) => Promise<boolean>, update: (email: MailTimeTask | object, updateObj: object) => Promise<boolean>, ready?: () => Promise<void> }} CustomQueue
+ * @typedef {{ ping: () => Promise<MailTimePingResult>, iterate: (opts?: MailTimeIterateOptions) => Promise<void> | void, getPendingTo: (to: string, sendAt: number) => Promise<MailTimeTask | object | null>, push: (email: MailTimeTask) => Promise<void> | void, cancel: (uuid: string) => Promise<boolean>, remove: (email: MailTimeTask | object, opts?: { leaseTries: number, leaseSendingAt: number }) => Promise<boolean>, update: (email: MailTimeTask | object, updateObj: object) => Promise<boolean>, ready?: () => Promise<void> }} CustomQueue
  */
 
 /**
@@ -407,11 +423,12 @@ class MailTime {
   /**
    * @memberOf MailTime
    * @name destroy
-   * @description Destroy scheduler instance and stop future queue iterations
-   * @returns {boolean}
+   * @description Stop the scheduler and block future dispatches. Pass `{ drain: true }` to also wait for in-flight SMTP attempts (returns a Promise).
+   * @param {{ drain?: boolean }} [opts]
+   * @returns {boolean | Promise<boolean>}
    */
-  destroy() {
-    this.__debug('[destroy]');
+  destroy(opts) {
+    this.__debug('[destroy]', opts);
     if (this.__isDestroyed) {
       return false;
     }
@@ -419,6 +436,9 @@ class MailTime {
     this.__isDestroyed = true;
     if (this.scheduler && typeof this.scheduler.destroy === 'function') {
       this.scheduler.destroy();
+    }
+    if (opts && opts.drain === true && this.__pool) {
+      return this.__pool.drain().then(() => true);
     }
     return true;
   }
@@ -497,11 +517,12 @@ class MailTime {
           }
         }
 
-        pendingMailOptions.push(mailOptions);
-        await this.queue.update(task, {
-          mailOptions: pendingMailOptions,
+        const appended = await this.queue.update(task, {
+          appendMailOption: mailOptions,
         });
-        return task.uuid;
+        if (appended) {
+          return task.uuid;
+        }
       }
     }
 
@@ -558,22 +579,33 @@ class MailTime {
     }
 
     if (task.tries >= this.maxTries) {
+      this.___finalizeRejected(task, info);
+
+      const leaseRemove = __leaseRemoveOpts(task);
+      const leaseUpdate = __withLease(task, {
+        isSent: false,
+        isFailed: true,
+        isSending: false,
+        sendingAt: 0,
+        mailOptions: task.mailOptions,
+      });
+
+      let finalized = false;
+      if (!this.keepHistory) {
+        finalized = await this.queue.remove(task, leaseRemove);
+      } else {
+        finalized = await this.queue.update(task, leaseUpdate);
+      }
+
+      if (!finalized) {
+        this.__debug('[private handleError] lease lost before final failure update, skipping onError', task.uuid);
+        return;
+      }
+
+      // Persist first, then mirror to in-memory task — a superseded worker must not lie to onError.
       task.isSent = false;
       task.isFailed = true;
       task.isSending = false;
-      this.___finalizeRejected(task, info);
-
-      if (!this.keepHistory) {
-        await this.queue.remove(task);
-      } else {
-        await this.queue.update(task, {
-          isSent: false,
-          isFailed: true,
-          isSending: false,
-          sendingAt: 0,
-          mailOptions: task.mailOptions,
-        });
-      }
 
       this.__debug(`[private handleError] Giving up trying send email after ${task.tries} attempts to: `, task.mailOptions[0].to, error);
       this.onError(error, task, info);
@@ -586,12 +618,17 @@ class MailTime {
       transportIndex = this.___nextHealthyTransport(transportIndex);
     }
 
-    await this.queue.update(task, {
+    const released = await this.queue.update(task, __withLease(task, {
       isSending: false,
       sendingAt: 0,
       sendAt: Date.now() + this.retryDelay,
       transport: transportIndex,
-    });
+    }));
+
+    if (!released) {
+      this.__debug('[private handleError] lease lost before retry release, skipping', task.uuid);
+      return;
+    }
 
     this.__debug(`[private handleError] Next re-send attempt at ${new Date(Date.now() + this.retryDelay)}: #${task.tries}/${this.maxTries}, transport #${transportIndex} to: `, task.mailOptions[0].to, error);
   }
@@ -817,7 +854,7 @@ class MailTime {
    * @internal
    * @memberOf MailTime
    * @name ___dispatch
-   * @description Queue full-lifecycle send for `task` under the bounded send pool. Resolves as soon as a pool slot is acquired and the send has started — the SMTP roundtrip continues in the background so the adapter's `iterate` can move on to the next due row and the JoSk lease can be released. Use `mailTime.drain()` (or `destroy()`) to await in-flight sends.
+   * @description Queue full-lifecycle send for `task` under the bounded send pool. Resolves as soon as a pool slot is acquired and the send has started — the SMTP roundtrip continues in the background so the adapter's `iterate` can move on to the next due row and the JoSk lease can be released. Call `await mailTime.drain()` to await in-flight sends; use `destroy({ drain: true })` for graceful shutdown.
    * @param {MailTimeTask} task - email's task object from Storage
    * @returns {Promise<void 0>}
    */
@@ -835,6 +872,9 @@ class MailTime {
     this.__inFlight.add(task.uuid);
     await this.__pool.dispatch(async () => {
       try {
+        if (this.__isDestroyed) {
+          return;
+        }
         await this.___send(task);
       } finally {
         this.__inFlight.delete(task.uuid);
@@ -923,42 +963,62 @@ class MailTime {
             if (isFullyDelivered) {
               this.__debug(`email successfully sent, attempts: #${task.tries}, transport #${transportIndex} to: `, compiledOpts.to);
 
+              const leaseRemove = __leaseRemoveOpts(task);
+              const leaseUpdate = __withLease(task, {
+                isSent: true,
+                isSending: false,
+                sendingAt: 0,
+                mailOptions: task.mailOptions,
+              });
+
+              let completed = false;
+              if (!this.keepHistory) {
+                completed = await this.queue.remove(task, leaseRemove);
+              } else {
+                completed = await this.queue.update(task, leaseUpdate);
+              }
+
+              if (!completed) {
+                this.__debug('[private send] lease lost before success completion, skipping onSent', task.uuid);
+                return;
+              }
+
+              // Persist first, then mirror to in-memory task — a superseded worker must not lie to onSent.
               task.isSent = true;
               task.isSending = false;
               task.sendingAt = 0;
-
-              if (!this.keepHistory) {
-                await this.queue.remove(task);
-              } else {
-                await this.queue.update(task, {
-                  isSent: true,
-                  isSending: false,
-                  sendingAt: 0,
-                  mailOptions: task.mailOptions,
-                });
-              }
-
               this.onSent(task, info);
               return;
             }
 
             if (task.tries >= this.maxTries) {
+              this.___finalizeRejected(task, info);
+
+              const leaseRemove = __leaseRemoveOpts(task);
+              const leaseUpdate = __withLease(task, {
+                isSent: false,
+                isFailed: true,
+                isSending: false,
+                sendingAt: 0,
+                mailOptions: task.mailOptions,
+              });
+
+              let finalized = false;
+              if (!this.keepHistory) {
+                finalized = await this.queue.remove(task, leaseRemove);
+              } else {
+                finalized = await this.queue.update(task, leaseUpdate);
+              }
+
+              if (!finalized) {
+                this.__debug('[private send] lease lost before partial-failure completion, skipping onError', task.uuid);
+                return;
+              }
+
+              // Persist first, then mirror to in-memory task — a superseded worker must not lie to onError.
               task.isSent = false;
               task.isFailed = true;
               task.isSending = false;
-              this.___finalizeRejected(task, info);
-
-              if (!this.keepHistory) {
-                await this.queue.remove(task);
-              } else {
-                await this.queue.update(task, {
-                  isSent: false,
-                  isFailed: true,
-                  isSending: false,
-                  sendingAt: 0,
-                  mailOptions: task.mailOptions,
-                });
-              }
 
               const rejectedAddrs = [];
               for (const mo of task.mailOptions) {
@@ -973,12 +1033,16 @@ class MailTime {
             }
 
             const nextSendAt = Date.now() + this.retryDelay;
-            await this.queue.update(task, {
+            const released = await this.queue.update(task, __withLease(task, {
               isSending: false,
               sendingAt: 0,
               sendAt: nextSendAt,
               mailOptions: task.mailOptions,
-            });
+            }));
+            if (!released) {
+              this.__debug('[private send] lease lost before partial retry release', task.uuid);
+              return;
+            }
             this.__debug(`[private send] Partial delivery, next attempt at ${new Date(nextSendAt)}: #${task.tries}/${this.maxTries} for remaining recipients`);
           } finally {
             resolve();
