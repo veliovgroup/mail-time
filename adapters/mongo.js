@@ -1,10 +1,14 @@
-import { debug, logError } from '../helpers.js';
+import {
+  debug,
+  logError,
+  isSendClaimUpdate,
+  isSendLeaseGuardedUpdate,
+  isAppendMailOptionUpdate,
+  stripInternalUpdateMeta,
+  isSendLeaseRemove,
+} from '../helpers.js';
 
 const DEFAULT_PREFIX = '';
-
-const isSendClaimUpdate = (updateObj) => {
-  return updateObj.isSending === true && typeof updateObj.tries === 'number';
-};
 
 /**
  * @typedef {object} MongoCollection
@@ -254,6 +258,7 @@ class MongoQueue {
       isSent: false,
       isFailed: false,
       isCancelled: false,
+      isSending: { $ne: true },
       sendAt: {
         $lte: sendAt,
       },
@@ -335,16 +340,26 @@ class MongoQueue {
    * @name remove
    * @description remove task from queue
    * @param task {object} - task's object
+   * @param {{ leaseTries: number, leaseSendingAt: number }} [opts] - lease guard: only remove if this worker still holds the lease (tries + sendingAt match, row not cancelled/failed)
    * @returns {Promise<boolean>} returns `true` if removed or `false` if not found
    */
-  async remove(task) {
+  async remove(task, opts) {
     this.__debug('[remove]', task?.uuid);
     if (!task || typeof task !== 'object') {
       return false;
     }
     this.__ensurePrefix();
 
-    const res = await this.collection.deleteOne({ _id: task._id });
+    const query = { _id: task._id };
+    if (isSendLeaseRemove(opts)) {
+      query.tries = opts.leaseTries;
+      query.isSending = true;
+      query.sendingAt = opts.leaseSendingAt;
+      query.isCancelled = false;
+      query.isFailed = false;
+    }
+
+    const res = await this.collection.deleteOne(query);
     return (res?.deletedCount || 0) >= 1;
   }
 
@@ -364,6 +379,21 @@ class MongoQueue {
     }
     this.__ensurePrefix();
 
+    if (isAppendMailOptionUpdate(updateObj)) {
+      const res = await this.collection.updateOne({
+        _id: task._id,
+        isSent: false,
+        isFailed: false,
+        isCancelled: false,
+        isSending: { $ne: true },
+      }, {
+        $push: {
+          mailOptions: updateObj.appendMailOption,
+        },
+      });
+      return (res?.modifiedCount || 0) >= 1;
+    }
+
     const query = {
       _id: task._id,
     };
@@ -379,11 +409,20 @@ class MongoQueue {
         { isSending: { $ne: true } },
         { sendingAt: { $lte: now - sendingTimeout } },
       ];
+    } else if (isSendLeaseGuardedUpdate(updateObj)) {
+      query.tries = updateObj.leaseTries;
+      query.isSending = true;
+      query.sendingAt = updateObj.leaseSendingAt;
+      query.isCancelled = false;
+      query.isFailed = false;
     }
 
     const res = await this.collection.updateOne(query, {
-      $set: updateObj,
+      $set: stripInternalUpdateMeta(updateObj),
     });
+    if (isSendClaimUpdate(updateObj)) {
+      return (res?.modifiedCount || res?.matchedCount || 0) >= 1;
+    }
     return (res?.modifiedCount || 0) >= 1;
   }
 }
