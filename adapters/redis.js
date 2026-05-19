@@ -272,7 +272,7 @@ class RedisQueue {
     }
 
     const task = JSON.parse(taskJSON);
-    if (!task || task.isSent === true || task.isCancelled === true || task.isFailed === true || task.sendAt > sendAt || task.isSending === true) {
+    if (!task || task.isSent === true || task.isCancelled === true || task.isFailed === true || task.sendAt > sendAt || task.isSending === true || task.tries >= this.mailTimeInstance.maxTries) {
       return null;
     }
 

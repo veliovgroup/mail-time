@@ -279,9 +279,10 @@ class PostgresQueue {
         AND is_failed = false
         AND is_cancelled = false
         AND is_sending = false
+        AND tries < $4
         AND send_at <= $3
       ORDER BY send_at DESC
-      LIMIT 1`, [this.prefix, to, sendAt]);
+      LIMIT 1`, [this.prefix, to, sendAt, this.mailTimeInstance.maxTries]);
 
     return normalizeRow(res.rows?.[0]);
   }

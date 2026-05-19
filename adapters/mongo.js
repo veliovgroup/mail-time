@@ -259,6 +259,7 @@ class MongoQueue {
       isFailed: false,
       isCancelled: false,
       isSending: { $ne: true },
+      tries: { $lt: this.mailTimeInstance.maxTries },
       sendAt: {
         $lte: sendAt,
       },
