@@ -1,5 +1,3 @@
-[support](https://github.com/sponsors/dr-dimitru)
-[support](https://paypal.me/veliovgroup)
 
 # MailTime
 
@@ -7,6 +5,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/veliovgroup/mail-time/ci.yml?branch=master)](https://github.com/veliovgroup/mail-time/actions)
 [![license](https://img.shields.io/npm/l/mail-time.svg)](LICENSE)
 [![GitHub Sponsors](https://img.shields.io/github/sponsors/dr-dimitru?label=Sponsor)](https://github.com/sponsors/dr-dimitru)
+[![Donate](https://img.shields.io/badge/Donate-PayPal-00457C?logo=paypal&logoColor=white)](https://paypal.me/veliovgroup)
 
 Bulletproof email queue for [horizontally scaled](#sending-emails-from-a-cluster) Node.js & Bun apps. Built on top of [`nodemailer`](https://github.com/nodemailer/nodemailer) and [`josk`](https://github.com/veliovgroup/josk). Single runtime dependency, ESM + CJS, full TypeScript declarations.
 
@@ -132,7 +131,7 @@ bun add mail-time nodemailer
 > `nodemailer` and adapter drivers are peers (not bundled) so you can pin your own versions.
 
 > [!IMPORTANT]
-> Upgrading from v3? See [Migration from 3.x](#migration-from-3x) and the full [v4.0.0 release notes](https://github.com/veliovgroup/mail-time/blob/master/docs/v4.md).
+> Upgrading from v3? See [Migration from 3.x](#migration-from-3x) and the full [v4.0.0 release notes](https://github.com/veliovgroup/mail-time/blob/master/docs/migration-v3-v4.md).
 
 For Meteor.js usage see [docs/meteor.md](https://github.com/veliovgroup/mail-time/blob/master/docs/meteor.md).
 
@@ -254,12 +253,13 @@ export const mailQueue = new MailTime({
 
 ```js
 process.on('SIGTERM', async () => {
-  await mailQueue.drain();   // wait for in-flight SMTPs (optional but recommended)
-  mailQueue.destroy();
+  await mailQueue.destroy({ drain: true }); // stop scheduler, then wait for in-flight SMTPs
 });
 ```
 
-`destroy()` is idempotent and stops the scheduler. Always call it from tests.
+Or explicitly: `mailQueue.destroy(); await mailQueue.drain();`
+
+`destroy()` is idempotent and stops the scheduler. Always call it from tests; pair with `drain()` when iterate-driven sends ran.
 
 ## Storage layouts
 
@@ -424,7 +424,7 @@ await mailQueue.sendMail({
 
 | Key                       | Default           | Notes                                                                                                          |
 | ------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------- |
-| `adapter`                 | —                 | Either a constructed adapter or a config object: `{ type: 'redis' \| 'mongo' \| 'postgres', client \| db, prefix?, resetOnInit? }`. MailTime constructs the adapter from the config object. |
+| `adapter`                 | —                 | Either a constructed adapter or a config object: `{ type: 'redis' \| 'mongo' \| 'postgres', client \| db, prefix?, resetOnInit?, useHashTags? }`. MailTime constructs the adapter from the config object. Set `useHashTags: true` on Redis/KeyDB Cluster. |
 | `minRevolvingDelay`       | `512`             | Lower bound of poll window.                                                                                    |
 | `maxRevolvingDelay`       | `2048`            | Upper bound.                                                                                                   |
 | `zombieTime`              | `60000`           | Re-claim if `queue.iterate()` runs longer than this. **Do not drop below 60s.**                                |
@@ -433,6 +433,7 @@ await mailQueue.sendMail({
 | `autoClear`               | `false`           | Remove orphan tasks from storage.                                                                              |
 | `lockOwnerId`             | `josk-<uuid>`     | Stable owner id; recommended per worker.                                                                       |
 | `onError(title, details)` | (logs to console) | Wire to your logger.                                                                                           |
+| `onExecuted(uid, details)` | —                 | Optional hook after each successful JoSk tick (observability).                                                 |
 
 For deeper JoSk semantics, install the JoSk skill: **`npx skills add veliovgroup/josk`** (the same author).
 
@@ -444,7 +445,7 @@ For deeper JoSk semantics, install the JoSk skill: **`npx skills add veliovgroup
 - `cancel(uuid)` — alias of `cancelMail`.
 - `ping()` → `Promise<{status, code, statusCode, error?}>`. Pings scheduler then queue.
 - `ready()` → `Promise<MailTime>`. Awaits all startup work; rejects with `.cause` on storage failure.
-- `destroy()` → `boolean`. Stops scheduler. Idempotent. Pair with `drain()` for graceful shutdown.
+- `destroy(opts?)` → `boolean` or `Promise<boolean>` when `{ drain: true }`. Stops scheduler. Idempotent. Use `destroy({ drain: true })` or `await drain()` after `destroy()` for graceful shutdown.
 - `drain()` → `Promise<void>`. Resolves once every in-flight SMTP attempt finishes. Useful in tests and graceful-shutdown paths.
 
 ### Queue constructors
@@ -469,7 +470,7 @@ For custom adapters see [docs/queue-api.md](https://github.com/veliovgroup/mail-
 
 ## Migration from 3.x
 
-Full v4 highlights, adapter changes, and type exports live in [docs/v4.md](https://github.com/veliovgroup/mail-time/blob/master/docs/v4.md). Quick checklist:
+Full v4 highlights, adapter changes, and type exports live in [docs/migration-v3-v4.md](https://github.com/veliovgroup/mail-time/blob/master/docs/migration-v3-v4.md). Quick checklist:
 
 1. **Node ≥ 20.9.0**, Bun ≥ 1.1.0. Bump your runtime first.
 2. **Swap adapter imports** to the new `MongoQueue` / `RedisQueue` / `PostgresQueue` constructors.
