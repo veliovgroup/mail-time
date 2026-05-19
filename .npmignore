@@ -1,4 +1,5 @@
 *.md
+.gitignore
 .DS_Store
 .claude
 .cursor

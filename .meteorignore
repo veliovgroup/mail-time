@@ -29,7 +29,6 @@ local-testing.mjs
 node_modules
 package.json
 package-lock.json
-package-types.json
 README.md
 rollup.config.js
 scripts
