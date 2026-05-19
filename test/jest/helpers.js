@@ -39,7 +39,7 @@ export const createQueue = () => {
     },
     async getPendingTo(to, sendAt) {
       for (const task of records.values()) {
-        if (task.to === to && task.isSent === false && task.isFailed === false && task.isCancelled === false && task.isSending !== true && task.sendAt <= sendAt) {
+        if (task.to === to && task.isSent === false && task.isFailed === false && task.isCancelled === false && task.isSending !== true && task.sendAt <= sendAt && task.tries < queue.mailTimeInstance.maxTries) {
           return task;
         }
       }

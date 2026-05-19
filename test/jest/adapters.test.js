@@ -1088,8 +1088,10 @@ describe('Helpers, equals, and deep merge corner cases', () => {
       findOne: jest.fn(async () => null),
     });
     const queue = new MongoQueue({ db: createMongoDb(collection), prefix: 'pending-m' });
+    queue.mailTimeInstance = createMailTimeHarness();
     await queue.getPendingTo('user@example.com', Date.now());
     expect(collection.findOne.mock.calls[0][0].isSending).toEqual({ $ne: true });
+    expect(collection.findOne.mock.calls[0][0].tries).toEqual({ $lt: 3 });
   });
 
   it('mongo update honors lease release guard after claim', async () => {
@@ -1318,6 +1320,29 @@ describe('Helpers, equals, and deep merge corner cases', () => {
     client.values.set(queue.__getKey(task.uuid), JSON.stringify(task));
 
     await expect(queue.getPendingTo('user@example.com', Date.now() + 2000)).resolves.toBeNull();
+  });
+
+  it('redis getPendingTo skips rows that exhausted retries', async () => {
+    const client = createRedisClient();
+    const queue = new RedisQueue({ client, prefix: 'pending-exhausted' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await queue.ready();
+
+    const task = {
+      uuid: 'pending-exhausted',
+      to: 'user@example.com',
+      sendAt: Date.now(),
+      tries: 3,
+      isSent: false,
+      isFailed: false,
+      isCancelled: false,
+      isSending: false,
+      mailOptions: [],
+    };
+    client.values.set(queue.__getKey(task.to, 'concatletter'), task.uuid);
+    client.values.set(queue.__getKey(task.uuid, 'letter'), JSON.stringify(task));
+
+    await expect(queue.getPendingTo('user@example.com', Date.now() + 1000)).resolves.toBeNull();
   });
 
   it('redis append without watch falls back to guarded read-modify-write', async () => {
