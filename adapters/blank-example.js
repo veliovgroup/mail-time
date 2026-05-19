@@ -1,4 +1,11 @@
-import { logError } from '../helpers.js';
+import {
+  logError,
+  isSendClaimUpdate,
+  isSendLeaseGuardedUpdate,
+  isAppendMailOptionUpdate,
+  stripInternalUpdateMeta,
+  isSendLeaseRemove,
+} from '../helpers.js';
 
 /** Class representing Example Queue for MailTime */
 class BlankQueue {
@@ -150,12 +157,13 @@ class BlankQueue {
       isSent: false,
       isFailed: false,
       isCancelled: false,
+      isSending: false,
       sendAt: {
         $lte: sendAt // Number (timestamp)
       }
     });
 
-    if (!email || email.isSent === true || email.isCancelled === true || email.isFailed === true) {
+    if (!email || email.isSent === true || email.isCancelled === true || email.isFailed === true || email.isSending === true) {
       return null;
     }
 
@@ -218,16 +226,26 @@ class BlankQueue {
    * @name remove
    * @description remove email from queue
    * @param email {object} - email's object
+   * @param {{ leaseTries: number, leaseSendingAt: number }} [opts] - lease guard: only remove if this worker still holds the lease (tries + sendingAt match, row not cancelled/failed)
    * @returns {Promise<boolean>} returns `true` if removed or `false` if not found
    */
-  async remove(email) {
+  async remove(email, opts) {
     if (typeof email !== 'object' || typeof email.uuid !== 'string') {
       return false;
     }
 
-    return await this.requiredOption.remove({
-      uuid: email.uuid
-    });
+    const query = { uuid: email.uuid };
+    if (isSendLeaseRemove(opts)) {
+      Object.assign(query, {
+        tries: opts.leaseTries,
+        isSending: true,
+        sendingAt: opts.leaseSendingAt,
+        isCancelled: false,
+        isFailed: false,
+      });
+    }
+
+    return await this.requiredOption.remove(query);
   }
 
   /**
@@ -247,10 +265,19 @@ class BlankQueue {
     const query = {
       uuid: email.uuid
     };
+    if (isAppendMailOptionUpdate(updateObj)) {
+      Object.assign(query, {
+        isSent: false,
+        isFailed: false,
+        isCancelled: false,
+        isSending: false,
+      });
+      return await this.requiredOption.appendMailOption(query, updateObj.appendMailOption);
+    }
     // CLAIM GUARD: when the caller sets `isSending: true` with a new `tries` value,
     // this is the atomic-claim update. The storage layer MUST honor the predicate
     // below so two workers can never simultaneously claim the same row.
-    if (updateObj.isSending === true && typeof updateObj.tries === 'number') {
+    if (isSendClaimUpdate(updateObj)) {
       const now = typeof updateObj.sendingAt === 'number' ? updateObj.sendingAt : Date.now();
       const sendingTimeout = this.mailTimeInstance?.sendingTimeout || 300000;
       Object.assign(query, {
@@ -263,9 +290,17 @@ class BlankQueue {
           { sendingAt: { $lte: now - sendingTimeout } }
         ]
       });
+    } else if (isSendLeaseGuardedUpdate(updateObj)) {
+      Object.assign(query, {
+        tries: updateObj.leaseTries,
+        isSending: true,
+        sendingAt: updateObj.leaseSendingAt,
+        isCancelled: false,
+        isFailed: false,
+      });
     }
 
-    const updatedEmail = { ...email, ...updateObj };
+    const updatedEmail = { ...email, ...stripInternalUpdateMeta(updateObj) };
     return await this.requiredOption.update(query, updatedEmail);
   }
 }

@@ -67,9 +67,13 @@ export class BlankQueue {
      * @name remove
      * @description remove email from queue
      * @param email {object} - email's object
+     * @param {{ leaseTries: number, leaseSendingAt: number }} [opts] - lease guard: only remove if this worker still holds the lease (tries + sendingAt match, row not cancelled/failed)
      * @returns {Promise<boolean>} returns `true` if removed or `false` if not found
      */
-    remove(email: object): Promise<boolean>;
+    remove(email: object, opts?: {
+        leaseTries: number;
+        leaseSendingAt: number;
+    }): Promise<boolean>;
     /**
      * @async
      * @memberOf BlankQueue
