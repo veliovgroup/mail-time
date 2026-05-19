@@ -81,7 +81,7 @@ In order to process and send emails, `Queue#iterate` must call `await this.mailT
     subject: String,
     accepted: [String],
     rejected: [{ address: String, error: String }],
-    // and other nodeMailer `sendMail` options
+    // and other nodemailer `sendMail` options
     // or values for template placeholders
   }]
 })

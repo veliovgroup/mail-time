@@ -36,13 +36,13 @@ class BlankQueue {
     // transport   {number}  - Last used transport
     // concatSubject {string|boolean} - Email concatenation subject
     // ---
-    // mailOptions         {[object]}  - Array of nodeMailer's `mailOptions`
+    // mailOptions         {[object]}  - Array of nodemailer's `mailOptions`
     // mailOptions.to      {string|[string]} - [REQUIRED]
     // mailOptions.from    {string}
     // mailOptions.text    {string|boolean}
     // mailOptions.html    {string}
     // mailOptions.subject {string}
-    // mailOptions.Other nodeMailer `sendMail` options...
+    // mailOptions.Other nodemailer `sendMail` options...
   }
 
   /**
