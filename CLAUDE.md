@@ -13,7 +13,7 @@ This file is Claude Code's working brief for the `mail-time` repository. It comp
 - **Tuning a preset / adding one?** → `presets.js`. Test in `test/jest/presets.test.js`. The re-export from `index.js` is already wired.
 - **Testing?** → `test/jest/*.test.js` is the fast unit suite (no live DB). `test/npm-*.js` is the integration suite that needs `REDIS_URL` / `MONGO_URL` / `PG_URL`.
 - **TS types?** → JSDoc lives in `index.js`, `presets.js`, and `adapters/*.js`. The .d.ts is generated. To strip private members, `scripts/strip-internal-dts.mjs` runs as part of `prepublishOnly`.
-- **User docs?** → `README.md` (public), `docs/{multi-instance,dedicated-mail-host,tuning,queue-api,meteor,v4}.md` (dive-in examples), and `skills/mail-time/SKILL.md` (Claude-facing).
+- **User docs?** → `README.md` (public), `docs/{multi-instance,dedicated-mail-host,tuning,queue-api,meteor,migration-v3-v4}.md` (dive-in examples), and `skills/mail-time/SKILL.md` (Claude-facing).
 - **AI instructions and guidelines?** → `AGENTS.md` and this file `CLAUDE.md` (Claude-facing).
 
 ## Mental model for changes

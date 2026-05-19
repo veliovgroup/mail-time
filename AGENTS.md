@@ -180,7 +180,7 @@ Update this AGENTS.md on major refactors.
 
 - Refactor only when change has real production or maintainability impact; skip style-only diffs and broad rewrites.
 - README: human use-cases and examples; AGENTS.md and `skills/mail-time/` terse for agents — avoid duplicating the same prose across README, AGENTS, and every skill reference.
-- CHANGELOG.md: one-liner to GitHub releases; version migration detail lives in `docs/*.md` (e.g. `docs/v4.md`), not long CHANGELOG sections.
+- CHANGELOG.md: one-liner to GitHub releases; version migration detail lives in `docs/*.md` (e.g. `docs/migration-v3-v4.md`), not long CHANGELOG sections.
 - When implementing from an attached plan file, change code/docs targets only — do not edit the plan file.
 - Skills `description` frontmatter: ~700–900 chars (WHAT, WHEN, discovery triggers); avoid >1024 dumps and very short (<450) triggers that miss routing.
 - Doc maintenance on API/tuning changes: JSDoc + one human surface (usually README) + one agent surface (`AGENTS.md` or a skill reference), not all files at once.

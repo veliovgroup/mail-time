@@ -62,6 +62,13 @@ See [queue-api.md](./queue-api.md) and [`adapters/blank-example.js`](../adapters
 - Claim trigger: `{ isSending: true, sendingAt, tries }` (was `{ isSent: true, tries }`).
 - Predicate must include stale-lock recovery: `(isSending === false OR sendingAt <= now - sendingTimeout)`.
 - `iterate` must call `await mailTimeInstance.___dispatch(row)` and honor `opts.limit` / `opts.sendingTimeout`.
+- **Lease release guard** (added since 4.0.0). Post-claim completion / retry release updates carry `{ leaseTries, leaseSendingAt, ... }`. Adapters **must** match `tries === leaseTries AND isSending === true AND sendingAt === leaseSendingAt AND isCancelled === false AND isFailed === false` before persisting. Same predicate gates `remove(email, { leaseTries, leaseSendingAt })`. Internal keys (`leaseTries`, `leaseSendingAt`, `appendMailOption`) must be stripped before storage write.
+- **Atomic concat append** (added since 4.0.0). `update(email, { appendMailOption: object })` must atomically push one mailOption only if the row is not in-flight and not terminal.
+- **`getPendingTo` must exclude `isSending === true` rows** — concat folding cannot mutate a letter already being sent.
+
+### Postgres schema
+
+`is_sending BOOLEAN` and `sending_at BIGINT` were introduced with v4.0.0 and auto-migrated via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`. The lease-guard / concat-append additions on top of v4 use these existing columns — no further migration is required.
 
 ### Existing storage
 
