@@ -81,3 +81,7 @@ await otpClient.sendMail({ to: user.email, subject: 'Sign-in code', text: code }
 - [Settings presets](../README.md#settings-presets) — what each preset shapes.
 - [docs/dedicated-mail-host.md](./dedicated-mail-host.md) — running 2–8 server processes on one mail VM.
 - [docs/tuning.md](./tuning.md) — throughput levers and pitfalls.
+
+## Pitfalls
+
+Same rules as [docs/tuning.md](./tuning.md#pitfalls): many `server` pods on one `prefix` buy failover not N× throughput; set `lockOwnerId` per worker (`${HOSTNAME}-${process.pid}`); keep `sendingTimeout` above worst-case SMTP; use primary/writer endpoints only; never mix mail policy under one `prefix`.
