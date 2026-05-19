@@ -80,9 +80,13 @@ export class PostgresQueue {
      * @name remove
      * @description remove task from queue
      * @param task {object} - task's object
+     * @param {{ leaseTries: number, leaseSendingAt: number }} [opts] - lease guard: only remove if this worker still holds the lease (tries + sendingAt match, row not cancelled/failed)
      * @returns {Promise<boolean>} returns `true` if removed or `false` if not found
      */
-    remove(task: object): Promise<boolean>;
+    remove(task: object, opts?: {
+        leaseTries: number;
+        leaseSendingAt: number;
+    }): Promise<boolean>;
     /**
      * @async
      * @memberOf PostgresQueue

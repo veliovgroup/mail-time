@@ -1,4 +1,12 @@
-import { debug, logError } from '../helpers.js';
+import {
+  debug,
+  logError,
+  isSendClaimUpdate,
+  isSendLeaseGuardedUpdate,
+  isAppendMailOptionUpdate,
+  stripInternalUpdateMeta,
+  isSendLeaseRemove,
+} from '../helpers.js';
 
 /**
  * @typedef {object} PostgresQueryResult
@@ -33,10 +41,6 @@ const fieldMap = {
   transport: 'transport',
   concatSubject: 'concat_subject',
   mailOptions: 'mail_options',
-};
-
-const isSendClaimUpdate = (updateObj) => {
-  return updateObj.isSending === true && typeof updateObj.tries === 'number';
 };
 
 const parseMailOptions = (mailOptions) => {
@@ -267,13 +271,14 @@ class PostgresQueue {
     await this.ready();
 
     const res = await this.client.query(`SELECT id, uuid, to_address, tries, send_at, is_sent, is_cancelled, is_failed,
-             template, transport, concat_subject, mail_options
+             is_sending, sending_at, template, transport, concat_subject, mail_options
       FROM mail_time_queue
       WHERE prefix = $1
         AND to_address = $2
         AND is_sent = false
         AND is_failed = false
         AND is_cancelled = false
+        AND is_sending = false
         AND send_at <= $3
       ORDER BY send_at DESC
       LIMIT 1`, [this.prefix, to, sendAt]);
@@ -379,9 +384,10 @@ class PostgresQueue {
    * @name remove
    * @description remove task from queue
    * @param task {object} - task's object
+   * @param {{ leaseTries: number, leaseSendingAt: number }} [opts] - lease guard: only remove if this worker still holds the lease (tries + sendingAt match, row not cancelled/failed)
    * @returns {Promise<boolean>} returns `true` if removed or `false` if not found
    */
-  async remove(task) {
+  async remove(task, opts) {
     this.__debug('[remove]', task?.uuid);
     if (!task || typeof task !== 'object') {
       return false;
@@ -391,9 +397,16 @@ class PostgresQueue {
 
     const where = task.id ? 'id = $2' : 'uuid = $2';
     const value = task.id || task.uuid;
+    let leaseWhere = '';
+    const params = [this.prefix, value];
+    if (isSendLeaseRemove(opts)) {
+      params.push(opts.leaseTries, opts.leaseSendingAt);
+      leaseWhere = ` AND tries = $3 AND is_sending = true AND sending_at = $4 AND is_cancelled = false AND is_failed = false`;
+    }
+
     const res = await this.client.query(`DELETE FROM mail_time_queue
       WHERE prefix = $1
-        AND ${where}`, [this.prefix, value]);
+        AND ${where}${leaseWhere}`, params);
     return (res.rowCount || 0) >= 1;
   }
 
@@ -414,14 +427,34 @@ class PostgresQueue {
 
     await this.ready();
 
+    if (isAppendMailOptionUpdate(updateObj)) {
+      const where = task.id ? 'id = $3' : 'uuid = $3';
+      const value = task.id || task.uuid;
+      const res = await this.client.query(`UPDATE mail_time_queue
+        SET mail_options = mail_options || $1::jsonb,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE prefix = $2
+          AND ${where}
+          AND is_sent = false
+          AND is_failed = false
+          AND is_cancelled = false
+          AND is_sending = false`, [
+        JSON.stringify([updateObj.appendMailOption]),
+        this.prefix,
+        value,
+      ]);
+      return (res.rowCount || 0) >= 1;
+    }
+
+    const persistObj = stripInternalUpdateMeta(updateObj);
     const sets = [];
     const values = [];
-    for (const key of Object.keys(updateObj)) {
+    for (const key of Object.keys(persistObj)) {
       if (!fieldMap[key]) {
         continue;
       }
 
-      let value = updateObj[key];
+      let value = persistObj[key];
       if (key === 'sendAt' && value instanceof Date) {
         value = +value;
       }
@@ -451,6 +484,18 @@ class PostgresQueue {
         AND is_cancelled = false
         AND tries = $${triesIndex}
         AND (is_sending = false OR sending_at <= $${staleIndex})
+      `;
+    } else if (isSendLeaseGuardedUpdate(updateObj)) {
+      values.push(updateObj.leaseTries);
+      const triesIndex = values.length;
+      values.push(updateObj.leaseSendingAt);
+      const sendingAtIndex = values.length;
+      claimWhere = `
+        AND tries = $${triesIndex}
+        AND is_sending = true
+        AND sending_at = $${sendingAtIndex}
+        AND is_cancelled = false
+        AND is_failed = false
       `;
     }
 
