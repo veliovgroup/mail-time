@@ -116,10 +116,12 @@ No `transports`, no `josk` — the client only writes letters to the shared stor
 
 ## Shutdown
 
-Meteor doesn't always signal a clean shutdown to Node, but for tests and graceful redeploys call `destroy()`:
+Meteor doesn't always signal a clean shutdown to Node, but for tests and graceful redeploys stop the scheduler and drain in-flight sends:
 
 ```js
-process.on('SIGTERM', () => mailQueue.destroy());
+process.on('SIGTERM', async () => {
+  await mailQueue.destroy({ drain: true });
+});
 ```
 
 ## Testing
