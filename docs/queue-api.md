@@ -24,6 +24,7 @@ List of required methods and their arguments.
   - `{string} to` — email address from `to` field
   - `{number} sendAt` — timestamp
   - Must exclude rows with `isSending === true` (concat must not mutate in-flight letters)
+  - Must exclude rows with `tries >= mailTimeInstance.maxTries` (concat must not append to exhausted rows awaiting finalization)
 - async `Queue#push(email) — {Promise<void 0>}`
   - `{object} email` — task object (see structure below). Persist `isSending` and `sendingAt` along with the other fields.
 - async `Queue#cancel(uuid) — {Promise<boolean>}`
