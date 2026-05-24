@@ -5,16 +5,46 @@ import { Pool } from 'pg';
 import { assert } from 'chai';
 import { randomUUID } from 'node:crypto';
 
-if (!process.env.MONGO_URL) {
-  throw new Error('MONGO_URL env.var is not defined! Please run test with MONGO_URL, like `MONGO_URL=mongodb://127.0.0.1:27017/dbname npm test`');
+/** @type {Record<string, { concat: boolean }>} */
+const METEOR_LABELS = {
+  MongoMongo: { concat: false },
+  MongoRedis: { concat: true },
+  RedisMongo: { concat: false },
+  RedisRedis: { concat: true },
+  PostgresPostgres: { concat: false },
+};
+
+/** @type {Record<string, string[]>} */
+const METEOR_SUITES = {
+  mongo: ['MongoMongo'],
+  redis: ['MongoRedis', 'RedisMongo', 'RedisRedis'],
+  postgres: ['PostgresPostgres'],
+};
+
+const meteorSuite = process.env.METEOR_TEST_SUITE;
+const activeLabels = meteorSuite
+  ? (METEOR_SUITES[meteorSuite] || meteorSuite.split(',').map((s) => s.trim()).filter(Boolean))
+  : Object.keys(METEOR_LABELS);
+
+for (const label of activeLabels) {
+  if (!METEOR_LABELS[label]) {
+    throw new Error(`[mail-time] [meteor] unknown METEOR_TEST_SUITE label "${label}"`);
+  }
 }
 
-if (!process.env.REDIS_URL) {
-  throw new Error('REDIS_URL env.var is not defined! Please run test with REDIS_URL, like `REDIS_URL=redis://127.0.0.1:6379 npm test`');
+const needsRedis = activeLabels.some((l) => l === 'MongoRedis' || l === 'RedisMongo' || l === 'RedisRedis');
+const needsPg = activeLabels.includes('PostgresPostgres');
+
+if (needsRedis && !process.env.REDIS_URL) {
+  throw new Error('REDIS_URL is required for redis METEOR_TEST_SUITE labels');
+}
+
+if (needsPg && !process.env.PG_URL) {
+  throw new Error('PG_URL is required for postgres METEOR_TEST_SUITE labels');
 }
 
 const DEBUG = process.env.DEBUG === 'true';
-const HAS_PG = !!process.env.PG_URL;
+const HAS_PG = needsPg && !!process.env.PG_URL;
 const db = MongoInternals.defaultRemoteCollectionDriver().mongo.db;
 const domain = process.env.EMAIL_DOMAIN || 'example.com';
 const TEST_TITLE = `testSuiteMeteor-${Date.now()}`;
@@ -152,51 +182,57 @@ const waitUntil = async (fn, { timeout = 10000, interval = 64, label = 'conditio
 before(async function () {
   this.timeout(30000);
 
-  redisClient = await createClient({ url: process.env.REDIS_URL }).connect();
-  cleanupFns.push(() => redisClient.quit());
+  if (needsRedis) {
+    redisClient = await createClient({ url: process.env.REDIS_URL }).connect();
+    cleanupFns.push(() => redisClient.quit());
+  }
 
   if (HAS_PG) {
     pgPool = new Pool({ connectionString: process.env.PG_URL });
     cleanupFns.push(() => pgPool.end());
   }
 
-  // Mongo queue + Redis scheduler — Meteor canonical setup.
-  mailQueues.MongoRedis = new MailTime({
-    ...defaultQueueOptions,
-    prefix: `${TEST_TITLE}-MongoRedis`,
-    queue: buildMongoQueue(`${TEST_TITLE}-MongoRedis`),
-    concatEmails: true,
-    josk: { adapter: { type: 'redis', client: redisClient } },
-  });
+  if (activeLabels.includes('MongoRedis')) {
+    mailQueues.MongoRedis = new MailTime({
+      ...defaultQueueOptions,
+      prefix: `${TEST_TITLE}-MongoRedis`,
+      queue: buildMongoQueue(`${TEST_TITLE}-MongoRedis`),
+      concatEmails: true,
+      josk: { adapter: { type: 'redis', client: redisClient } },
+    });
+  }
 
-  // Mongo queue + Mongo scheduler — single-backend deployment.
-  mailQueues.MongoMongo = new MailTime({
-    ...defaultQueueOptions,
-    prefix: `${TEST_TITLE}-MongoMongo`,
-    queue: buildMongoQueue(`${TEST_TITLE}-MongoMongo`),
-    concatEmails: false,
-    josk: { adapter: { type: 'mongo', db } },
-  });
+  if (activeLabels.includes('MongoMongo')) {
+    mailQueues.MongoMongo = new MailTime({
+      ...defaultQueueOptions,
+      prefix: `${TEST_TITLE}-MongoMongo`,
+      queue: buildMongoQueue(`${TEST_TITLE}-MongoMongo`),
+      concatEmails: false,
+      josk: { adapter: { type: 'mongo', db } },
+    });
+  }
 
-  // Redis queue + Mongo scheduler.
-  mailQueues.RedisMongo = new MailTime({
-    ...defaultQueueOptions,
-    prefix: `${TEST_TITLE}-RedisMongo`,
-    queue: buildRedisQueue(redisClient, `${TEST_TITLE}-RedisMongo`),
-    concatEmails: false,
-    josk: { adapter: { type: 'mongo', db } },
-  });
+  if (activeLabels.includes('RedisMongo')) {
+    mailQueues.RedisMongo = new MailTime({
+      ...defaultQueueOptions,
+      prefix: `${TEST_TITLE}-RedisMongo`,
+      queue: buildRedisQueue(redisClient, `${TEST_TITLE}-RedisMongo`),
+      concatEmails: false,
+      josk: { adapter: { type: 'mongo', db } },
+    });
+  }
 
-  // Redis queue + Redis scheduler — single-backend deployment.
-  mailQueues.RedisRedis = new MailTime({
-    ...defaultQueueOptions,
-    prefix: `${TEST_TITLE}-RedisRedis`,
-    queue: buildRedisQueue(redisClient, `${TEST_TITLE}-RedisRedis`),
-    concatEmails: true,
-    josk: { adapter: { type: 'redis', client: redisClient } },
-  });
+  if (activeLabels.includes('RedisRedis')) {
+    mailQueues.RedisRedis = new MailTime({
+      ...defaultQueueOptions,
+      prefix: `${TEST_TITLE}-RedisRedis`,
+      queue: buildRedisQueue(redisClient, `${TEST_TITLE}-RedisRedis`),
+      concatEmails: true,
+      josk: { adapter: { type: 'redis', client: redisClient } },
+    });
+  }
 
-  if (HAS_PG) {
+  if (activeLabels.includes('PostgresPostgres')) {
     mailQueues.PostgresPostgres = new MailTime({
       ...defaultQueueOptions,
       prefix: `${TEST_TITLE}-PostgresPostgres`,
@@ -208,13 +244,18 @@ before(async function () {
 
   await Promise.all(Object.values(mailQueues).map((mq) => mq.ready()));
 
-  // Wipe any leftovers from prior runs across every queue (each adapter
-  // separately — wildcard `TEST_TITLE-*` prefix lets a re-run with the same
-  // base title avoid colliding with the previous attempt).
-  await mailQueues.MongoRedis.queue.collection.deleteMany({}).catch(() => {});
-  await mailQueues.MongoMongo.queue.collection.deleteMany({}).catch(() => {});
-  await clearRedisPattern(redisClient, `mailtime:${TEST_TITLE}-RedisMongo:*`).catch(() => {});
-  await clearRedisPattern(redisClient, `mailtime:${TEST_TITLE}-RedisRedis:*`).catch(() => {});
+  if (mailQueues.MongoRedis) {
+    await mailQueues.MongoRedis.queue.collection.deleteMany({}).catch(() => {});
+  }
+  if (mailQueues.MongoMongo) {
+    await mailQueues.MongoMongo.queue.collection.deleteMany({}).catch(() => {});
+  }
+  if (mailQueues.RedisMongo) {
+    await clearRedisPattern(redisClient, `mailtime:${TEST_TITLE}-RedisMongo:*`).catch(() => {});
+  }
+  if (mailQueues.RedisRedis) {
+    await clearRedisPattern(redisClient, `mailtime:${TEST_TITLE}-RedisRedis:*`).catch(() => {});
+  }
   if (mailQueues.PostgresPostgres) {
     await pgPool.query(
       'DELETE FROM mail_time_queue WHERE prefix = $1',
@@ -458,10 +499,6 @@ const runTests = (label, concat) => {
   });
 };
 
-runTests('MongoRedis', true);
-runTests('MongoMongo', false);
-runTests('RedisMongo', false);
-runTests('RedisRedis', true);
-if (HAS_PG) {
-  runTests('PostgresPostgres', false);
+for (const label of activeLabels) {
+  runTests(label, METEOR_LABELS[label].concat);
 }

@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    name: ${{ matrix.runtime }} ${{ matrix.runtime-version }} · redis ${{ matrix.redis-client }} · mongo ${{ matrix.mongo-version }}/mongodb ${{ matrix.mongo-client }} · pg ${{ matrix.pg-version }}/pg ${{ matrix.pg-client }}
+    name: ${{ matrix.runtime }} ${{ matrix.runtime-version }} · ${{ matrix.mocha-suite }} · redis ${{ matrix.redis-client }} · mongo ${{ matrix.mongo-version }}/mongodb ${{ matrix.mongo-client }} · pg ${{ matrix.pg-version }}/pg ${{ matrix.pg-client }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -22,8 +22,10 @@ jobs:
         mongo-client: ['^7']
         pg-version: ['18']
         pg-client: ['^8']
+        # Default rows (Node × redis driver): Redis queue + Redis scheduler only.
+        mocha-suite: [redis]
         include:
-          # Bun runtime (latest server + driver of everything)
+          # Bun runtime (jest only)
           - runtime: bun
             runtime-version: 'latest'
             redis-client: '^5'
@@ -31,7 +33,8 @@ jobs:
             mongo-client: '^7'
             pg-version: '18'
             pg-client: '^8'
-          # MongoDB server LTS coverage (mongo 7) against current driver
+            mocha-suite: redis
+          # MongoDB server LTS coverage (mongo 7) — cross-adapter mongo + redis suites
           - runtime: node
             runtime-version: 'lts/*'
             redis-client: '^5'
@@ -39,7 +42,8 @@ jobs:
             mongo-client: '^7'
             pg-version: '18'
             pg-client: '^8'
-          # MongoDB driver LTS coverage (mongodb ^6) against current + LTS servers
+            mocha-suite: mongo
+          # MongoDB driver LTS coverage (mongodb ^6)
           - runtime: node
             runtime-version: 'lts/*'
             redis-client: '^5'
@@ -47,6 +51,7 @@ jobs:
             mongo-client: '^6'
             pg-version: '18'
             pg-client: '^8'
+            mocha-suite: mongo
           - runtime: node
             runtime-version: 'lts/*'
             redis-client: '^5'
@@ -54,7 +59,8 @@ jobs:
             mongo-client: '^6'
             pg-version: '18'
             pg-client: '^8'
-          # Postgres server LTS-and-up coverage (14, 15, 16, 17) against current driver
+            mocha-suite: mongo
+          # Postgres server LTS-and-up coverage (14–17)
           - runtime: node
             runtime-version: 'lts/*'
             redis-client: '^5'
@@ -62,6 +68,7 @@ jobs:
             mongo-client: '^7'
             pg-version: '14'
             pg-client: '^8'
+            mocha-suite: postgres
           - runtime: node
             runtime-version: 'lts/*'
             redis-client: '^5'
@@ -69,6 +76,7 @@ jobs:
             mongo-client: '^7'
             pg-version: '15'
             pg-client: '^8'
+            mocha-suite: postgres
           - runtime: node
             runtime-version: 'lts/*'
             redis-client: '^5'
@@ -76,6 +84,7 @@ jobs:
             mongo-client: '^7'
             pg-version: '16'
             pg-client: '^8'
+            mocha-suite: postgres
           - runtime: node
             runtime-version: 'lts/*'
             redis-client: '^5'
@@ -83,6 +92,7 @@ jobs:
             mongo-client: '^7'
             pg-version: '17'
             pg-client: '^8'
+            mocha-suite: postgres
 
     services:
       redis:
@@ -124,8 +134,7 @@ jobs:
       MONGO_URL: mongodb://127.0.0.1:27017/npm-mail-time-test
       PG_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
       # Canonical row: latest of everything on Node lts/*.
-      # Jest (mocked, DB-version-independent) and tsc (no driver type refs) only run here
-      # to avoid 14x redundant work; mocha integration runs on every row.
+      # Jest (mocked) and tsc only run here; mocha is scoped per matrix.mocha-suite.
       IS_CANONICAL_ROW: ${{ matrix.runtime == 'node' && matrix.runtime-version == 'lts/*' && matrix.redis-client == '^5' && matrix.mongo-version == '8' && matrix.mongo-client == '^7' && matrix.pg-version == '18' && matrix.pg-client == '^8' }}
 
     steps:
@@ -180,9 +189,13 @@ jobs:
         if: matrix.runtime == 'node' && env.IS_CANONICAL_ROW == 'true'
         run: npm run test:jest
 
-      - name: Mocha integration (node)
+      - name: Mocha integration (node, ${{ matrix.mocha-suite }})
         if: matrix.runtime == 'node'
-        run: npm run test:mocha
+        run: npm run test:mocha:${{ matrix.mocha-suite }}
+
+      - name: Mocha mongo-mongo (canonical row only)
+        if: matrix.runtime == 'node' && env.IS_CANONICAL_ROW == 'true'
+        run: mocha ./test/npm-mongo-mongo.js
 
       - name: TypeScript declarations (canonical row only)
         if: matrix.runtime == 'node' && env.IS_CANONICAL_ROW == 'true'
@@ -191,3 +204,97 @@ jobs:
       - name: Bun-runner jest suite
         if: matrix.runtime == 'bun'
         run: bun test ./test/jest
+
+  meteor-mongo:
+    name: meteor ${{ matrix.meteor-release }} · mongo (built-in)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        meteor-release: ['3.0.4', '3.4.0']
+    env:
+      METEOR_TEST_SUITE: mongo
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Meteor ${{ matrix.meteor-release }}
+        run: curl "https://install.meteor.com/?release=${{ matrix.meteor-release }}" | sh
+
+      - name: Install package deps
+        run: meteor npm install --no-audit --no-fund
+
+      - name: Meteor package tests (MongoMongo, built-in MongoDB)
+        run: meteor test-packages ./ --once --driver-package meteortesting:mocha
+
+  meteor-redis:
+    name: meteor ${{ matrix.meteor-release }} · redis ${{ matrix.redis-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        meteor-release: ['3.4.0']
+        redis-version: ['7-alpine', '6-alpine']
+    services:
+      redis:
+        image: redis:${{ matrix.redis-version }}
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    env:
+      METEOR_TEST_SUITE: redis
+      REDIS_URL: redis://127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Meteor ${{ matrix.meteor-release }}
+        run: curl "https://install.meteor.com/?release=${{ matrix.meteor-release }}" | sh
+
+      - name: Install package deps
+        run: meteor npm install --no-audit --no-fund
+
+      - name: Meteor package tests (MongoRedis, RedisMongo, RedisRedis)
+        run: meteor test-packages ./ --once --driver-package meteortesting:mocha
+
+  meteor-postgres:
+    name: meteor ${{ matrix.meteor-release }} · postgres ${{ matrix.pg-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        meteor-release: ['3.4.0']
+        pg-version: ['16', '18']
+    services:
+      postgres:
+        image: postgres:${{ matrix.pg-version }}-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    env:
+      METEOR_TEST_SUITE: postgres
+      PG_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Meteor ${{ matrix.meteor-release }}
+        run: curl "https://install.meteor.com/?release=${{ matrix.meteor-release }}" | sh
+
+      - name: Install package deps
+        run: meteor npm install --no-audit --no-fund
+
+      - name: Meteor package tests (PostgresPostgres)
+        run: meteor test-packages ./ --once --driver-package meteortesting:mocha

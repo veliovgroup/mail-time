@@ -130,13 +130,19 @@ The repository ships a `test/meteor.js` suite that exercises the package end-to-
 
 ```sh
 meteor npm install
+
+# All adapter combinations (local)
 REDIS_URL=redis://127.0.0.1:6379 \
-MONGO_URL=mongodb://127.0.0.1:27017/mail-time-test \
 PG_URL=postgres://127.0.0.1:5432/postgres \
   meteor test-packages ./ --driver-package=meteortesting:mocha
+
+# CI-style subsets via METEOR_TEST_SUITE
+METEOR_TEST_SUITE=mongo meteor test-packages ./ --driver-package=meteortesting:mocha
+METEOR_TEST_SUITE=redis REDIS_URL=redis://127.0.0.1:6379 meteor test-packages ./ --driver-package=meteortesting:mocha
+METEOR_TEST_SUITE=postgres PG_URL=postgres://127.0.0.1:5432/postgres meteor test-packages ./ --driver-package=meteortesting:mocha
 ```
 
-Provide whichever `*_URL` env vars match the queues you want to exercise; the suite skips combinations whose store isn't reachable. The test takes around two minutes.
+`METEOR_TEST_SUITE` accepts `mongo` (built-in MongoDB only), `redis`, `postgres`, or a comma-separated label list (`MongoMongo`, `MongoRedis`, …). Provide `REDIS_URL` / `PG_URL` only when the selected suite needs them.
 
 ## See also
 
