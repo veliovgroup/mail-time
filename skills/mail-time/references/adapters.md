@@ -49,7 +49,7 @@ PostgresQueue auto-creates one table on first `ready()` (idempotent):
   - `idx_mail_time_queue_due` — covers the iterate path (`prefix, is_sent, is_failed, is_cancelled, send_at, tries`).
   - `idx_mail_time_queue_pending_to` — covers `getPendingTo` (`prefix, to_address, is_sent, is_failed, is_cancelled, send_at`).
 
-The setup acquires `pg_advisory_lock(93824519)` so concurrent processes don't race on `CREATE TABLE`.
+The setup acquires a two-key, per-prefix advisory lock — `pg_advisory_lock(0x4D61696C, <int32 hash of prefix>)` — so concurrent processes don't race on `CREATE TABLE`, and co-tenant queues with distinct prefixes don't serialize each other's setup.
 
 ### Guidelines
 

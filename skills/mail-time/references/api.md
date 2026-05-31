@@ -181,11 +181,12 @@ type MailTimePingResult = {
   status: string;     // 'OK' on success
   code: number;       // 200 on success
   statusCode: number; // same as code
+  paused?: boolean;   // always set by MailTime#ping(); true if this instance is currently paused
   error?: unknown;    // present on failure
 };
 ```
 
-For `client` instances the scheduler is absent — only the queue is pinged.
+For `client` instances the scheduler is absent — only the queue is pinged. The result includes `paused: boolean` reflecting whether this instance is currently paused (always `false` on `client` instances).
 
 ### `mailTime.ready()` → `Promise<MailTime>`
 
@@ -210,6 +211,20 @@ Resolves once every in-flight SMTP send started by the internal pool has settled
 - **Tests that drive iterate.** Calling `await mailTime.___iterate()` or `await mailTime.queue.iterate()` only awaits the scan + claim phase. SMTP work happens in the pool; `await mailTime.drain()` waits for it.
 
 Tests that call `mailTime.___send(task)` directly do **not** need `drain()` — that method runs the full lifecycle synchronously.
+
+### `mailTime.pause()` → `boolean`
+
+Pauses this **server** instance from competing for the queue-drain lease: it stops scanning/sending, in-flight SMTP sends finish, and peer `server` instances keep draining. Reversible — unlike `destroy()`. Returns `true` if newly paused; `false` if already paused, a `client` instance, or destroyed. To stop scanning *and* wait for in-flight sends: `mailTime.pause(); await mailTime.drain();`.
+
+Use for backpressure: SMTP provider rate-limiting, rolling deploy / maintenance of a pod, or quota windows.
+
+### `mailTime.resume()` → `boolean`
+
+Resumes competing for the drain lease after `pause()` and triggers an immediate scan. Returns `true` if newly resumed; `false` if not paused, a `client` instance, or destroyed.
+
+### `mailTime.isPaused` → `boolean`
+
+Read-only getter; `true` while paused. Always `false` on `client` instances.
 
 ### `mailTimePreset(name, overrides?)` → `MailTimeOptions`
 
@@ -328,7 +343,7 @@ When a `to` / `cc` / `bcc` recipient list contains multiple addresses and the SM
 All exported from `mail-time` so TS projects can constrain handlers, custom adapters, and mail option shapes:
 
 ```ts
-export type MailTimePingResult;
+export type MailTimePingResult;    // includes paused?: boolean
 export type MailTimeStorageClient;
 export type MailTimeMongoDb;
 export type MailTimeTransport;

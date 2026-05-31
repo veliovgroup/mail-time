@@ -85,3 +85,18 @@ await otpClient.sendMail({ to: user.email, subject: 'Sign-in code', text: code }
 ## Pitfalls
 
 Same rules as [docs/tuning.md](./tuning.md#pitfalls): many `server` pods on one `prefix` buy failover not N× throughput; set `lockOwnerId` per worker (`${HOSTNAME}-${process.pid}`); keep `sendingTimeout` above worst-case SMTP; use primary/writer endpoints only; never mix mail policy under one `prefix`.
+
+## Backpressure: pause a saturated server
+
+When one `server` pod hits SMTP rate limits or needs maintenance, pause its participation in queue draining without removing it from the cluster. Peers keep draining the shared `prefix`; the paused pod's in-flight sends finish.
+
+```js
+// On the saturated / draining-for-deploy pod:
+mailQueue.pause();          // stop competing for the drain lease
+await mailQueue.drain();    // let in-flight SMTP settle, then it's safe to redeploy
+
+// When healthy again:
+mailQueue.resume();         // resume draining; an immediate scan runs
+```
+
+`mailQueue.isPaused` and `(await mailQueue.ping()).paused` expose the state for health checks and dashboards. `pause()`/`resume()` are server-only (no-ops on `client` instances).

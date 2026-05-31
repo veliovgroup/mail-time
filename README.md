@@ -269,6 +269,25 @@ Or explicitly: `mailQueue.destroy(); await mailQueue.drain();`
 
 `destroy()` is idempotent and stops the scheduler. Always call it from tests; pair with `drain()` when iterate-driven sends ran.
 
+#### Pause / resume a server (backpressure)
+
+`pause()` stops this **server** instance from competing for the queue-drain lease without tearing it down (unlike `destroy()`). In-flight SMTP sends finish; other `server` instances keep draining. `resume()` resumes and triggers an immediate scan.
+
+```js
+mailQueue.pause();              // stop draining on this pod
+// ...SMTP provider rate-limit clears / maintenance window ends...
+mailQueue.resume();             // resume; an immediate scan kicks off
+
+mailQueue.isPaused;             // boolean
+(await mailQueue.ping()).paused // boolean — observable in health checks
+
+// Stop draining AND wait for in-flight sends to settle:
+mailQueue.pause();
+await mailQueue.drain();
+```
+
+Both return `boolean` and are no-ops (returning `false`) on `client` instances or after `destroy()`. Use for SMTP rate-limit backpressure, rolling deploys, or quota windows.
+
 ## Storage layouts
 
 Queue storage and scheduler storage can be the same store or different ones. Use this matrix:
