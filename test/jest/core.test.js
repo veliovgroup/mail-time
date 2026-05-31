@@ -1751,4 +1751,13 @@ describe('MailTime pause/resume', () => {
     expect(mailTime.resume()).toBe(false);
     expect(mailTime.isPaused).toBe(false);
   });
+
+  it('ping() result includes the paused flag', async () => {
+    const mailTime = createMailTime();
+
+    await expect(mailTime.ping()).resolves.toMatchObject({ status: 'OK', paused: false });
+
+    mailTime.pause();
+    await expect(mailTime.ping()).resolves.toMatchObject({ paused: true });
+  });
 });

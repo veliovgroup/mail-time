@@ -139,7 +139,7 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
  */
 
 /**
- * @typedef {{ status: string, code: number, statusCode: number, error?: unknown }} MailTimePingResult
+ * @typedef {{ status: string, code: number, statusCode: number, paused?: boolean, error?: unknown }} MailTimePingResult
  */
 
 /**
@@ -403,10 +403,11 @@ class MailTime {
     if (this.scheduler) {
       const schedulerPing = await this.scheduler.ping();
       if (schedulerPing.status !== 'OK') {
-        return schedulerPing;
+        return { ...schedulerPing, paused: this.__isPaused };
       }
     }
-    return await this.queue.ping();
+    const queuePing = await this.queue.ping();
+    return { ...queuePing, paused: this.__isPaused };
   }
 
   /**
