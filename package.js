@@ -6,6 +6,46 @@ Package.describe({
   documentation: 'README.md'
 });
 
+/**
+ * Meteor test-packages runs package.js under each release's bundled Node.
+ * @returns {{ npm: Record<string, string>, mocha: string }}
+ */
+const meteorTestProfile = () => {
+  const nodeMajor = parseInt(String(process.versions.node).split('.')[0], 10);
+
+  if (nodeMajor >= 20) {
+    return {
+      npm: {
+        chai: '6.2.2',
+        pg: '8.20.0',
+        redis: '5.12.1',
+      }
+    };
+  }
+
+  if (nodeMajor >= 18) {
+    return {
+      npm: {
+        chai: '5.3.3',
+        redis: '4.7.1',
+        pg: '8.16.3',
+      }
+    };
+  }
+
+  if (nodeMajor >= 14) {
+    return {
+      npm: {
+        chai: '4.4.1',
+        redis: '4.7.1',
+        pg: '8.11.3',
+      }
+    };
+  }
+
+  throw new Error(`ostrio:mailer requires Node >= 14 (got ${process.version})`);
+};
+
 Package.onUse((api) => {
   Npm.depends({
     josk: '6.2.0',
@@ -21,16 +61,13 @@ Package.onUse((api) => {
 });
 
 Package.onTest((api) => {
-  Npm.depends({
-    chai: '6.2.2',
-    pg: '8.20.0',
-    redis: '5.12.1',
-  });
+  const profile = meteorTestProfile();
+  Npm.depends(profile.npm);
 
   api.use([
     'ecmascript',
     'mongo',
-    'meteortesting:mocha@1.2.0 || 2.1.0 || 3.2.0',
+    'meteortesting:mocha@1.2.0 || 2.1.0 || 3.3.0',
   ], 'server');
   api.addFiles('test/meteor.js', 'server');
 });
