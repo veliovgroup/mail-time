@@ -299,4 +299,85 @@ describe('Postgres queue and scheduler combinations', function () {
       assert.isTrue(mailTime.destroy(), 'MailTime destroyed');
     });
   }
+
+  it('pause() halts draining via ___iterate; resume() restores it', async function () {
+    const prefix = `${TEST_TITLE}-pause-resume`;
+    prefixes.push({ queueType: 'postgres', schedulerType: 'postgres', prefix });
+    await cleanupQueue('postgres', prefix);
+    await cleanupScheduler('postgres', prefix);
+
+    const sent = {};
+    const queue = createQueue('postgres', prefix);
+    const mailTime = new MailTime({
+      type: 'server',
+      prefix,
+      queue,
+      transports: [createTransport()],
+      josk: {
+        adapter: createSchedulerAdapter('postgres'),
+        execute: 'one',
+        lockOwnerId: `${prefix}-owner`,
+      },
+      retries: 0,
+      revolvingInterval: 600000,
+      from: `no-reply@${domain}`,
+      onSent(task) {
+        sent[task.uuid] = task;
+      },
+    });
+    mailTimes.push(mailTime);
+    await mailTime.ready();
+
+    const uuid = await mailTime.sendMail({
+      sendAt: Date.now() - 1000,
+      to: `mail-time-pause@${domain}`,
+      subject: 'Pause',
+      text: 'Pause body',
+    });
+
+    // Paused: a direct ___iterate() must not drain.
+    assert.isTrue(mailTime.pause(), 'pause() returns true');
+    assert.isTrue(mailTime.isPaused, 'isPaused true');
+    const pausedPing = await mailTime.ping();
+    assert.isTrue(pausedPing.paused, 'ping reports paused:true');
+    await mailTime.___iterate();
+    await mailTime.drain();
+    assert.isUndefined(sent[uuid], 'paused server did not send');
+    assert.equal(await countQueue('postgres', queue, prefix, uuid), 1, 'task still queued while paused');
+
+    // Resumed: ___iterate() drains and sends.
+    assert.isTrue(mailTime.resume(), 'resume() returns true');
+    assert.isFalse(mailTime.isPaused, 'isPaused false');
+    const resumedPing = await mailTime.ping();
+    assert.isFalse(resumedPing.paused, 'ping reports paused:false');
+    await mailTime.___iterate();
+    await mailTime.drain();
+    assert.isObject(sent[uuid], 'resumed server sent the mail');
+    assert.equal(await countQueue('postgres', queue, prefix, uuid), 0, 'task removed after resume');
+
+    assert.isTrue(mailTime.destroy(), 'destroyed');
+  });
+
+  it('distinct-prefix PostgresQueues complete __setup concurrently', async function () {
+    const prefixA = `${TEST_TITLE}-cotenant-a`;
+    const prefixB = `${TEST_TITLE}-cotenant-b`;
+    prefixes.push({ queueType: 'postgres', schedulerType: 'postgres', prefix: prefixA });
+    prefixes.push({ queueType: 'postgres', schedulerType: 'postgres', prefix: prefixB });
+
+    const queueA = createQueue('postgres', prefixA);
+    const queueB = createQueue('postgres', prefixB);
+
+    // Two-key per-prefix advisory lock: distinct prefixes must not deadlock or error.
+    let readyError;
+    await Promise.all([queueA.ready(), queueB.ready()]).catch((err) => {
+      readyError = err;
+    });
+    assert.isUndefined(readyError, 'both queues completed __setup without error');
+
+    // Verify the shared schema is accessible from both queue connections.
+    const resA = await pgPool.query('SELECT COUNT(*) FROM mail_time_queue WHERE prefix = $1', [prefixA]);
+    const resB = await pgPool.query('SELECT COUNT(*) FROM mail_time_queue WHERE prefix = $1', [prefixB]);
+    assert.isDefined(resA.rows, 'queue A schema accessible');
+    assert.isDefined(resB.rows, 'queue B schema accessible');
+  });
 });
