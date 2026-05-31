@@ -1843,3 +1843,181 @@ describe('MailTime pause/resume', () => {
     await expect(mailTime.ping()).resolves.toMatchObject({ paused: true });
   });
 });
+
+describe('MailTime branch coverage gaps', () => {
+  it('send pool reports size, drains when idle, and logs detached job errors', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const mailTime = createMailTime();
+
+    expect(mailTime.__pool.size).toBe(0);
+    await expect(mailTime.__pool.drain()).resolves.toBeUndefined();
+
+    await mailTime.__pool.dispatch(() => {
+      throw new Error('pool boom');
+    });
+    await mailTime.__pool.drain();
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it('dispatch aborts a queued job when the instance is destroyed before it runs', async () => {
+    const mailTime = createMailTime({ concurrency: 1 });
+    let release;
+    const blocker = new Promise((resolve) => {
+      release = resolve;
+    });
+    mailTime.___send = jest.fn(() => blocker);
+
+    const base = { isSent: false, isFailed: false, isCancelled: false };
+    await mailTime.___dispatch({ uuid: 'A', ...base });
+    const pendingB = mailTime.___dispatch({ uuid: 'B', ...base });
+
+    mailTime.__isDestroyed = true;
+    release();
+    await pendingB;
+    await mailTime.drain();
+
+    expect(mailTime.___send).toHaveBeenCalledTimes(1);
+  });
+
+  it('handleError skips work without lease metadata and when the instance is aborting', async () => {
+    const onError = jest.fn();
+    const mailTime = createMailTime({ retries: 0, onError });
+    const uuid = await mailTime.sendMail({ to: 'user@example.com', text: 'x' });
+    const task = mailTime.queue.records.get(uuid);
+    task.tries = mailTime.maxTries;
+    task.isSending = false;
+
+    await mailTime.___handleError(task, new Error('giving up'), { rejected: [], rejectedErrors: [] });
+    expect(onError).toHaveBeenCalledTimes(1);
+
+    mailTime.__abortInFlight = true;
+    onError.mockClear();
+    await expect(mailTime.___handleError(task, new Error('ignored'), {})).resolves.toBeUndefined();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('handleError stops when the retry release loses the lease', async () => {
+    const mailTime = createMailTime({ retries: 3 });
+    mailTime.queue.update = jest.fn(async () => false);
+    const task = {
+      uuid: 'lease-gone',
+      tries: 1,
+      isSending: true,
+      sendingAt: Date.now(),
+      transport: 0,
+      isSent: false,
+      isFailed: false,
+      isCancelled: false,
+      mailOptions: [{ to: 'user@example.com' }]
+    };
+    await expect(mailTime.___handleError(task, new Error('retry'), {})).resolves.toBeUndefined();
+    expect(mailTime.queue.update).toHaveBeenCalled();
+  });
+
+  it('buildRejectionErrorMap skips rejected entries with no parseable address', () => {
+    const mailTime = createMailTime();
+    const task = { mailOptions: [{ to: 'user@example.com' }] };
+    mailTime.___finalizeRejected(task, { rejected: ['', 'user@example.com'], rejectedErrors: [] });
+    expect(task.mailOptions[0].rejected).toEqual([
+      { address: 'user@example.com', error: 'Recipient rejected by transport' }
+    ]);
+  });
+
+  it('trackAcceptedRecipients and finalizeRejected return early on degenerate input', () => {
+    const mailTime = createMailTime();
+    expect(() => mailTime.___trackAcceptedRecipients({}, [])).not.toThrow();
+    expect(() => mailTime.___trackAcceptedRecipients({ mailOptions: [{ accepted: [] }] }, ['a@example.com'])).not.toThrow();
+    expect(() => mailTime.___finalizeRejected({}, {})).not.toThrow();
+  });
+
+  it('send returns quietly when the atomic claim throws a storage error', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const mailTime = createMailTime();
+    mailTime.queue.update = jest.fn(async () => {
+      throw new Error('claim storage error');
+    });
+    await expect(mailTime.___send({
+      uuid: 'claim-throw',
+      tries: 0,
+      isSent: false,
+      isFailed: false,
+      isCancelled: false,
+      transport: 0,
+      mailOptions: [{ to: 'user@example.com' }]
+    })).resolves.toBeUndefined();
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it('send rotates away from an unhealthy transport before delivering', async () => {
+    const onSent = jest.fn();
+    const mailTime = createMailTime({
+      transports: [createTransport(), createTransport()],
+      strategy: 'balancer',
+      onSent
+    });
+    mailTime.__unhealthyTransports.add(0);
+    const uuid = await mailTime.sendMail({ to: 'user@example.com', text: 'x' });
+    const task = mailTime.queue.records.get(uuid);
+    task.transport = 0;
+
+    await mailTime.___send(task);
+    expect(task.transport).toBe(1);
+    expect(onSent).toHaveBeenCalledTimes(1);
+  });
+
+  it('send skips onError when a final partial-failure completion loses the lease', async () => {
+    const partialTransport = createTransport((_mail, done) => done(null, {
+      accepted: ['a@example.com'],
+      rejected: ['b@example.com']
+    }));
+    const onError = jest.fn();
+    const mailTime = createMailTime({ transports: [partialTransport], retries: 0, onError });
+    const uuid = await mailTime.sendMail({ to: ['a@example.com', 'b@example.com'], text: 'x' });
+    const task = mailTime.queue.records.get(uuid);
+    mailTime.queue.remove = jest.fn(async () => false);
+
+    await mailTime.___send(task);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('send skips retry release when a partial delivery loses the lease before re-queue', async () => {
+    const partialTransport = createTransport((_mail, done) => done(null, {
+      accepted: ['a@example.com'],
+      rejected: ['b@example.com']
+    }));
+    const onError = jest.fn();
+    const mailTime = createMailTime({ transports: [partialTransport], retries: 3, onError });
+    const uuid = await mailTime.sendMail({ to: ['a@example.com', 'b@example.com'], text: 'x' });
+    const task = mailTime.queue.records.get(uuid);
+
+    mailTime.queue.update = jest.fn(async (_task, updateObj) => updateObj.isSending === true);
+
+    await mailTime.___send(task);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('send suppresses runtime exceptions thrown while the instance is aborting', async () => {
+    const throwingTransport = createTransport(() => {
+      throw new Error('synchronous transport failure');
+    });
+    const mailTime = createMailTime({ transports: [throwingTransport] });
+    const uuid = await mailTime.sendMail({ to: 'user@example.com', text: 'x' });
+    const task = mailTime.queue.records.get(uuid);
+    mailTime.__abortInFlight = true;
+
+    await expect(mailTime.___send(task)).resolves.toBeUndefined();
+  });
+
+  it('nextHealthyTransport returns the original index with no transports or none healthy', () => {
+    const empty = createMailTime();
+    empty.transports = [];
+    expect(empty.___nextHealthyTransport(0)).toBe(0);
+
+    const allBad = createMailTime({ transports: [createTransport(), createTransport()] });
+    allBad.__unhealthyTransports.add(0);
+    allBad.__unhealthyTransports.add(1);
+    expect(allBad.___nextHealthyTransport(0)).toBe(0);
+  });
+});

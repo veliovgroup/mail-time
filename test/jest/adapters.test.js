@@ -1452,3 +1452,470 @@ describe('PostgresQueue advisory lock', () => {
     expect(keyA).not.toBe(keyB);
   });
 });
+
+describe('RedisQueue branch coverage gaps', () => {
+  it('reports 503 when ping responds with a non-PONG payload', async () => {
+    const client = {
+      ...createRedisClient(),
+      ping: jest.fn(async () => 'NOPE')
+    };
+    const queue = new RedisQueue({ client, prefix: 'ping-odd' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await expect(queue.ping()).resolves.toMatchObject({ code: 503 });
+  });
+
+  it('iterate skips bogus keys, missing letters, and unparseable candidates', async () => {
+    const client = createRedisClient();
+    const queue = new RedisQueue({ client, prefix: 'iter-skip' });
+    queue.mailTimeInstance = createMailTimeHarness();
+
+    // key outside this queue's namespace -> parseUuidFromKey returns null
+    client.values.set('outsider:sendat:zzz', '1');
+    // valid sendat key but the letter row is gone -> taskJSON is null
+    client.values.set(queue.__getKey('gone', 'sendat'), '1');
+    // valid sendat key, but the letter body deserializes to null -> not an iterate candidate
+    client.values.set(queue.__getKey('nullone', 'sendat'), '1');
+    client.values.set(queue.__getKey('nullone'), 'null');
+
+    client.scanIterator = jest.fn(() => (async function* () {
+      yield ['outsider:sendat:zzz'];
+      yield queue.__getKey('gone', 'sendat');
+      yield queue.__getKey('nullone', 'sendat');
+    })());
+
+    await queue.iterate();
+    expect(queue.mailTimeInstance.___dispatch).not.toHaveBeenCalled();
+  });
+
+  it('iterate stops after reaching the dispatch limit', async () => {
+    const client = createRedisClient();
+    const queue = new RedisQueue({ client, prefix: 'iter-limit' });
+    queue.mailTimeInstance = createMailTimeHarness();
+
+    for (const uuid of ['a', 'b']) {
+      const task = {
+        uuid,
+        sendAt: Date.now() - 1,
+        tries: 0,
+        isSent: false,
+        isFailed: false,
+        isCancelled: false,
+        isSending: false,
+        sendingAt: 0
+      };
+      client.values.set(queue.__getKey(uuid), JSON.stringify(task));
+      client.values.set(queue.__getKey(uuid, 'sendat'), `${task.sendAt}`);
+    }
+
+    client.scanIterator = jest.fn(() => (async function* () {
+      yield [queue.__getKey('a', 'sendat'), queue.__getKey('b', 'sendat')];
+    })());
+
+    await queue.iterate({ limit: 1 });
+    expect(queue.mailTimeInstance.___dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('iterate swallows scan iterator errors', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const client = createRedisClient();
+    client.scanIterator = jest.fn(() => {
+      throw new Error('scan exploded');
+    });
+    const queue = new RedisQueue({ client, prefix: 'iter-err' });
+    queue.mailTimeInstance = createMailTimeHarness();
+
+    await expect(queue.iterate()).resolves.toBeUndefined();
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it('falls back to non-transactional writes when the client lacks multi()', async () => {
+    const client = createRedisClient();
+    delete client.multi;
+    const queue = new RedisQueue({ client, prefix: 'no-multi' });
+    queue.mailTimeInstance = createMailTimeHarness();
+
+    await queue.push({
+      uuid: 'plain',
+      to: 'user@example.com',
+      sendAt: Date.now() + 5000,
+      isSent: false,
+      isFailed: false,
+      isCancelled: false
+    });
+
+    expect(client.values.has(queue.__getKey('plain'))).toBe(true);
+    expect(client.values.has(queue.__getKey('plain', 'sendat'))).toBe(true);
+    expect(client.values.get(queue.__getKey('user@example.com', 'concatletter'))).toBe('plain');
+  });
+
+  it('cancel returns false for already-sent letters and updates when keeping history', async () => {
+    const client = createRedisClient();
+    const queue = new RedisQueue({ client, prefix: 'cancel-paths' });
+    queue.mailTimeInstance = createMailTimeHarness(true);
+
+    client.values.set(queue.__getKey('sent'), JSON.stringify({
+      uuid: 'sent',
+      isSent: true,
+      isFailed: false,
+      isCancelled: false
+    }));
+    await expect(queue.cancel('sent')).resolves.toBe(false);
+
+    client.values.set(queue.__getKey('keep'), JSON.stringify({
+      uuid: 'keep',
+      sendAt: Date.now(),
+      isSent: false,
+      isFailed: false,
+      isCancelled: false
+    }));
+    client.values.set(queue.__getKey('keep', 'sendat'), `${Date.now()}`);
+    await expect(queue.cancel('keep')).resolves.toBe(true);
+    expect(JSON.parse(client.values.get(queue.__getKey('keep'))).isCancelled).toBe(true);
+  });
+
+  it('lease-guarded remove handles missing transaction support, absent rows, and errors', async () => {
+    const leaseOpts = { leaseTries: 1, leaseSendingAt: 42 };
+
+    const noTx = createRedisClient();
+    delete noTx.watch;
+    delete noTx.multi;
+    const noTxQueue = new RedisQueue({ client: noTx, prefix: 'lease-notx' });
+    noTxQueue.mailTimeInstance = createMailTimeHarness();
+    await expect(noTxQueue.remove({ uuid: 'x' }, leaseOpts)).resolves.toBe(false);
+
+    const missing = createRedisClient();
+    const missingQueue = new RedisQueue({ client: missing, prefix: 'lease-missing' });
+    missingQueue.mailTimeInstance = createMailTimeHarness();
+    await expect(missingQueue.remove({ uuid: 'gone' }, leaseOpts)).resolves.toBe(false);
+    expect(missing.unwatch).toHaveBeenCalled();
+
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const throwing = createRedisClient();
+    throwing.watch = jest.fn(async () => {
+      throw new Error('watch failed');
+    });
+    const throwingQueue = new RedisQueue({ client: throwing, prefix: 'lease-throw' });
+    throwingQueue.mailTimeInstance = createMailTimeHarness();
+    await expect(throwingQueue.remove({ uuid: 'boom' }, leaseOpts)).resolves.toBe(false);
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it('non-lease remove returns false when the letter does not exist', async () => {
+    const client = createRedisClient();
+    const queue = new RedisQueue({ client, prefix: 'remove-missing' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await expect(queue.remove({ uuid: 'never' })).resolves.toBe(false);
+  });
+
+  it('appendMailOption falls back to read-modify-write without multi() and guards terminal rows', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    RedisQueue.__atomicAppendWarned = false;
+    const client = createRedisClient();
+    delete client.watch;
+    delete client.multi;
+    const queue = new RedisQueue({ client, prefix: 'append-fallback' });
+    queue.mailTimeInstance = createMailTimeHarness();
+
+    // missing row
+    await expect(queue.update({ uuid: 'missing' }, { appendMailOption: { to: 'x' } })).resolves.toBe(false);
+
+    // terminal row (already sending) cannot accept a fold
+    client.values.set(queue.__getKey('busy'), JSON.stringify({
+      uuid: 'busy',
+      isSending: true,
+      mailOptions: []
+    }));
+    await expect(queue.update({ uuid: 'busy' }, { appendMailOption: { to: 'x' } })).resolves.toBe(false);
+
+    // healthy row appends successfully
+    client.values.set(queue.__getKey('open'), JSON.stringify({
+      uuid: 'open',
+      isSending: false,
+      isSent: false,
+      isFailed: false,
+      isCancelled: false,
+      mailOptions: [{ to: 'first' }]
+    }));
+    await expect(queue.update({ uuid: 'open' }, { appendMailOption: { to: 'second' } })).resolves.toBe(true);
+    expect(JSON.parse(client.values.get(queue.__getKey('open'))).mailOptions).toHaveLength(2);
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it('transactional appendMailOption unwatches for missing and terminal rows', async () => {
+    const client = createRedisClient();
+    const queue = new RedisQueue({ client, prefix: 'append-tx' });
+    queue.mailTimeInstance = createMailTimeHarness();
+
+    await expect(queue.update({ uuid: 'missing' }, { appendMailOption: { to: 'x' } })).resolves.toBe(false);
+    expect(client.unwatch).toHaveBeenCalled();
+
+    client.values.set(queue.__getKey('done'), JSON.stringify({
+      uuid: 'done',
+      isSent: true,
+      mailOptions: []
+    }));
+    await expect(queue.update({ uuid: 'done' }, { appendMailOption: { to: 'x' } })).resolves.toBe(false);
+  });
+
+  it('transactional claim unwatches when the letter is missing or deserializes to null', async () => {
+    const client = createRedisClient();
+    const queue = new RedisQueue({ client, prefix: 'claim-edge' });
+    queue.mailTimeInstance = createMailTimeHarness();
+
+    // missing letter row
+    await expect(queue.update({ uuid: 'gone', tries: 0 }, {
+      isSending: true,
+      sendingAt: Date.now(),
+      tries: 1
+    })).resolves.toBe(false);
+    expect(client.unwatch).toHaveBeenCalled();
+
+    // letter present but deserializes to null -> canClaimTask rejects it
+    client.values.set(queue.__getKey('nully'), 'null');
+    await expect(queue.update({ uuid: 'nully', tries: 0 }, {
+      isSending: true,
+      sendingAt: Date.now(),
+      tries: 1
+    })).resolves.toBe(false);
+  });
+
+  it('lease-release that flips a row terminal drops the sendat index transactionally', async () => {
+    const client = createRedisClient();
+    const queue = new RedisQueue({ client, prefix: 'lease-terminal' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    const sendingAt = Date.now();
+    const task = {
+      uuid: 'leased',
+      tries: 0,
+      sendAt: sendingAt,
+      isSent: false,
+      isFailed: false,
+      isCancelled: false,
+      isSending: true,
+      sendingAt
+    };
+    client.values.set(queue.__getKey('leased'), JSON.stringify(task));
+    client.values.set(queue.__getKey('leased', 'sendat'), `${sendingAt}`);
+
+    await expect(queue.update(task, {
+      isFailed: true,
+      isSending: false,
+      sendingAt: 0,
+      leaseTries: 0,
+      leaseSendingAt: sendingAt
+    })).resolves.toBe(true);
+    expect(client.values.has(queue.__getKey('leased', 'sendat'))).toBe(false);
+    expect(JSON.parse(client.values.get(queue.__getKey('leased'))).isFailed).toBe(true);
+  });
+
+  it('plain update returns false when the storage read throws', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const client = {
+      ...createRedisClient(),
+      get: jest.fn(async () => {
+        throw new Error('get failed');
+      })
+    };
+    const queue = new RedisQueue({ client, prefix: 'update-throw' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await expect(queue.update({ uuid: 'task' }, { isSent: false, sendAt: 5 })).resolves.toBe(false);
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+});
+
+describe('MongoQueue branch coverage gaps', () => {
+  it('ensureIndex skips length-mismatched and name-mismatched existing indexes', async () => {
+    const collection = createMongoCollection({
+      createIndex: jest.fn(async () => {
+        throw { code: 85 };
+      }),
+      indexes: jest.fn(async () => [
+        { name: 'different-name', key: { other: 1 } },
+        { name: 'wrong-length', key: { a: 1, b: 1 } }
+      ])
+    });
+    const queue = new MongoQueue({ db: createMongoDb(collection), prefix: 'idx-mismatch' });
+    await expect(queue.ready()).resolves.toBeUndefined();
+    expect(collection.dropIndex).not.toHaveBeenCalled();
+  });
+
+  it('reports 503 when the ping command does not return ok:1', async () => {
+    const queue = new MongoQueue({
+      db: createMongoDb(createMongoCollection(), async () => ({ ok: 0 }))
+    });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await expect(queue.ping()).resolves.toMatchObject({ code: 503 });
+  });
+
+  it('applies the cursor limit during iterate', async () => {
+    const cursor = {
+      hasNext: jest.fn(async () => false),
+      next: jest.fn(),
+      close: jest.fn(async () => void 0),
+      limit: jest.fn(() => cursor)
+    };
+    const collection = createMongoCollection({ find: jest.fn(() => cursor) });
+    const queue = new MongoQueue({ db: createMongoDb(collection), prefix: 'limit' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await queue.ready();
+
+    await queue.iterate({ limit: 5 });
+    expect(cursor.limit).toHaveBeenCalledWith(5);
+  });
+});
+
+describe('PostgresQueue branch coverage gaps', () => {
+  it('normalizes rows whose mail_options are already parsed during iterate', async () => {
+    const client = {
+      async query(queryText) {
+        const sql = String(queryText);
+        if (sql.includes('SELECT 1 as ping')) {
+          return { rows: [{ ping: 1 }], rowCount: 1 };
+        }
+        if (sql.includes('send_at <= $2')) {
+          return {
+            rows: [{
+              id: 1,
+              uuid: 'parsed',
+              to_address: 'user@example.com',
+              tries: 0,
+              send_at: Date.now() - 1,
+              is_sent: false,
+              is_cancelled: false,
+              is_failed: false,
+              is_sending: false,
+              sending_at: 0,
+              template: null,
+              transport: 0,
+              concat_subject: null,
+              mail_options: [{ to: 'user@example.com', text: 'hi' }]
+            }],
+            rowCount: 1
+          };
+        }
+        return { rows: [], rowCount: 1 };
+      }
+    };
+    const queue = new PostgresQueue({ client, prefix: 'parsed' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await queue.ready();
+
+    await queue.iterate();
+    expect(queue.mailTimeInstance.___dispatch).toHaveBeenCalledWith(expect.objectContaining({
+      uuid: 'parsed',
+      mailOptions: [{ to: 'user@example.com', text: 'hi' }]
+    }));
+  });
+
+  it('swallows iterate query errors', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const client = {
+      async query(queryText) {
+        const sql = String(queryText);
+        if (sql.includes('SELECT 1 as ping')) {
+          return { rows: [{ ping: 1 }], rowCount: 1 };
+        }
+        if (sql.includes('send_at <= $2')) {
+          throw new Error('iterate query failed');
+        }
+        return { rows: [], rowCount: 1 };
+      }
+    };
+    const queue = new PostgresQueue({ client, prefix: 'iter-err' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await queue.ready();
+
+    await expect(queue.iterate()).resolves.toBeUndefined();
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it('cancel returns false for a missing row and removes the row when history is disabled', async () => {
+    const missing = new PostgresQueue({ client: createPostgresClient(), prefix: 'cancel-missing' });
+    missing.mailTimeInstance = createMailTimeHarness(false);
+    await missing.ready();
+    await expect(missing.cancel('nope')).resolves.toBe(false);
+
+    const client = {
+      queries: [],
+      async query(queryText, values) {
+        const sql = String(queryText);
+        this.queries.push({ sql, values });
+        if (sql.includes('SELECT 1 as ping')) {
+          return { rows: [{ ping: 1 }], rowCount: 1 };
+        }
+        if (sql.includes('SELECT') && sql.includes('uuid = $2')) {
+          return {
+            rows: [{
+              id: 7,
+              uuid: 'live',
+              to_address: 'user@example.com',
+              tries: 0,
+              send_at: Date.now(),
+              is_sent: false,
+              is_cancelled: false,
+              is_failed: false,
+              template: null,
+              transport: 0,
+              concat_subject: null,
+              mail_options: '[]'
+            }],
+            rowCount: 1
+          };
+        }
+        if (sql.includes('DELETE FROM mail_time_queue')) {
+          return { rows: [], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 1 };
+      }
+    };
+    const queue = new PostgresQueue({ client, prefix: 'cancel-remove' });
+    queue.mailTimeInstance = createMailTimeHarness(false);
+    await queue.ready();
+    await expect(queue.cancel('live')).resolves.toBe(true);
+    expect(client.queries.some(({ sql }) => sql.includes('DELETE FROM mail_time_queue'))).toBe(true);
+  });
+
+  it('applies appendMailOption updates by id and by uuid', async () => {
+    const byId = createPostgresClient();
+    const idQueue = new PostgresQueue({ client: byId, prefix: 'append-id' });
+    await idQueue.ready();
+    await expect(idQueue.update({ id: 9, uuid: 'a' }, { appendMailOption: { to: 'x' } })).resolves.toBe(true);
+    const idUpdate = byId.queries.findLast((q) => q.queryText.includes('mail_options || $1::jsonb'));
+    expect(idUpdate.queryText).toContain('id = $3');
+
+    const byUuid = createPostgresClient();
+    const uuidQueue = new PostgresQueue({ client: byUuid, prefix: 'append-uuid' });
+    await uuidQueue.ready();
+    await expect(uuidQueue.update({ uuid: 'b' }, { appendMailOption: { to: 'y' } })).resolves.toBe(true);
+    const uuidUpdate = byUuid.queries.findLast((q) => q.queryText.includes('mail_options || $1::jsonb'));
+    expect(uuidUpdate.queryText).toContain('uuid = $3');
+  });
+
+  it('coerces Date sendAt and serializes mailOptions on plain field updates', async () => {
+    const client = createPostgresClient();
+    const queue = new PostgresQueue({ client, prefix: 'plain-update' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await queue.ready();
+
+    const sendAt = new Date(Date.now() + 1000);
+    await expect(queue.update({
+      uuid: 'plain',
+      tries: 0,
+      isSent: false,
+      isFailed: false,
+      isCancelled: false
+    }, {
+      sendAt,
+      mailOptions: [{ to: 'x', text: 'hi' }]
+    })).resolves.toBe(true);
+
+    const update = client.queries.findLast((q) => q.queryText.includes('UPDATE mail_time_queue'));
+    expect(update.values).toContain(+sendAt);
+    expect(update.values).toContain(JSON.stringify([{ to: 'x', text: 'hi' }]));
+  });
+});
