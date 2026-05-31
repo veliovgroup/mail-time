@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import {
   debug,
   logError,
@@ -26,7 +27,21 @@ import {
  */
 
 const DEFAULT_PREFIX = 'default';
-const setupLockId = 93824519;
+
+// Two-key advisory lock, mirroring josk's PostgresAdapter: a stable MailTime namespace
+// plus a per-prefix hash. `pg_advisory_lock(int4, int4)` lives in its own keyspace, isolated
+// from single-int callers in the same database; distinct prefixes get distinct lock IDs, so
+// co-tenant MailTime queues no longer serialize each other's schema setup.
+const ADVISORY_LOCK_NAMESPACE = 0x4D61696C; // 'Mail' in ASCII as int32
+
+/**
+ * @internal
+ * @param {string} prefix
+ * @returns {number} signed int32 hash of the prefix string
+ */
+const advisoryLockKeyFor = (prefix) => {
+  return createHash('sha256').update(prefix).digest().readInt32BE(0);
+};
 
 const fieldMap = {
   to: 'to_address',
@@ -129,7 +144,8 @@ class PostgresQueue {
 
   /** @internal */
   async __setup() {
-    await this.client.query('SELECT pg_advisory_lock($1)', [setupLockId]);
+    const advisoryLockKey = advisoryLockKeyFor(this.prefix);
+    await this.client.query('SELECT pg_advisory_lock($1, $2)', [ADVISORY_LOCK_NAMESPACE, advisoryLockKey]);
 
     try {
       await this.client.query(`CREATE TABLE IF NOT EXISTS mail_time_queue (
@@ -160,7 +176,7 @@ class PostgresQueue {
       await this.client.query(`CREATE INDEX IF NOT EXISTS idx_mail_time_queue_pending_to
         ON mail_time_queue (prefix, to_address, is_sent, is_failed, is_cancelled, send_at)`);
     } finally {
-      await this.client.query('SELECT pg_advisory_unlock($1)', [setupLockId]);
+      await this.client.query('SELECT pg_advisory_unlock($1, $2)', [ADVISORY_LOCK_NAMESPACE, advisoryLockKey]);
     }
   }
 

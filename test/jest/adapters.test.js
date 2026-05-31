@@ -2,6 +2,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 
 import { MongoQueue, PostgresQueue, RedisQueue } from '../../index.js';
 import { createPostgresClient } from './helpers.js';
+import { createHash } from 'crypto';
 
 const createMailTimeHarness = (keepHistory = false) => ({
   keepHistory,
@@ -1415,5 +1416,39 @@ describe('Helpers, equals, and deep merge corner cases', () => {
     expect(removeQuery.queryText).toContain('sending_at = $4');
     expect(removeQuery.queryText).toContain('is_cancelled = false');
     expect(removeQuery.queryText).toContain('is_failed = false');
+  });
+});
+
+describe('PostgresQueue advisory lock', () => {
+  const expectedKeyFor = (prefix) => createHash('sha256').update(prefix).digest().readInt32BE(0);
+
+  it('__setup takes a two-key, per-prefix advisory lock (and releases it)', async () => {
+    const client = createPostgresClient();
+    const queue = new PostgresQueue({ client, prefix: 'otp' });
+    await queue.ready();
+
+    const lockCall = client.queries.find((q) => q.queryText.includes('pg_advisory_lock'));
+    const unlockCall = client.queries.find((q) => q.queryText.includes('pg_advisory_unlock'));
+
+    expect(lockCall).toBeDefined();
+    expect(lockCall.queryText).toContain('pg_advisory_lock($1, $2)');
+    expect(lockCall.values[0]).toBe(0x4D61696C);
+    expect(lockCall.values[1]).toBe(expectedKeyFor('otp'));
+
+    expect(unlockCall).toBeDefined();
+    expect(unlockCall.queryText).toContain('pg_advisory_unlock($1, $2)');
+    expect(unlockCall.values).toEqual([0x4D61696C, expectedKeyFor('otp')]);
+  });
+
+  it('distinct prefixes hash to distinct advisory-lock keys', async () => {
+    const a = createPostgresClient();
+    const b = createPostgresClient();
+    const qa = new PostgresQueue({ client: a, prefix: 'otp' });
+    const qb = new PostgresQueue({ client: b, prefix: 'marketing' });
+    await Promise.all([qa.ready(), qb.ready()]);
+
+    const keyA = a.queries.find((q) => q.queryText.includes('pg_advisory_lock')).values[1];
+    const keyB = b.queries.find((q) => q.queryText.includes('pg_advisory_lock')).values[1];
+    expect(keyA).not.toBe(keyB);
   });
 });
