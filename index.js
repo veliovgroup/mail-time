@@ -250,6 +250,7 @@ class MailTime {
     this.concurrency = (typeof opts.concurrency === 'number' && opts.concurrency > 0 && Number.isFinite(opts.concurrency)) ? Math.floor(opts.concurrency) : 1;
     this.sendingTimeout = (typeof opts.sendingTimeout === 'number' && opts.sendingTimeout > 0) ? opts.sendingTimeout : 300000;
     this.__isDestroyed = false;
+    this.__isPaused = false;
     this.__readyPromise = null;
     this.__schedulerTimer = null;
     this.__inFlight = new Set();
@@ -434,6 +435,7 @@ class MailTime {
     }
 
     this.__isDestroyed = true;
+    this.__isPaused = false;
     if (this.scheduler && typeof this.scheduler.destroy === 'function') {
       this.scheduler.destroy();
     }
@@ -455,6 +457,52 @@ class MailTime {
     if (this.__pool) {
       await this.__pool.drain();
     }
+  }
+
+  /**
+   * @memberOf MailTime
+   * @name pause
+   * @description Pause this server instance from competing for the queue-drain lease. In-flight SMTP sends finish; peer server instances keep draining. Reversible (unlike `destroy()`). No-op on `client` instances or after `destroy()`. To stop scanning *and* wait for in-flight sends: `mailTime.pause(); await mailTime.drain();`.
+   * @returns {boolean} `true` if newly paused; `false` if already paused, a client instance, or destroyed
+   */
+  pause() {
+    this.__debug('[pause]');
+    if (this.__isDestroyed || !this.scheduler) {
+      return false;
+    }
+    const paused = this.scheduler.pause();
+    if (paused) {
+      this.__isPaused = true;
+    }
+    return paused;
+  }
+
+  /**
+   * @memberOf MailTime
+   * @name resume
+   * @description Resume competing for the queue-drain lease after `pause()`; triggers an immediate scan. No-op on `client` instances, after `destroy()`, or when not paused.
+   * @returns {boolean} `true` if newly resumed; `false` if not paused, a client instance, or destroyed
+   */
+  resume() {
+    this.__debug('[resume]');
+    if (this.__isDestroyed || !this.scheduler) {
+      return false;
+    }
+    const resumed = this.scheduler.resume();
+    if (resumed) {
+      this.__isPaused = false;
+    }
+    return resumed;
+  }
+
+  /**
+   * @memberOf MailTime
+   * @name isPaused
+   * @description Whether this instance is currently paused from draining the queue. Always `false` on `client` instances.
+   * @returns {boolean}
+   */
+  get isPaused() {
+    return this.__isPaused;
   }
 
   /**
@@ -1064,7 +1112,7 @@ class MailTime {
    */
   async ___iterate() {
     this.__debug('[private iterate]');
-    if (this.__isDestroyed) {
+    if (this.__isDestroyed || this.__isPaused) {
       return;
     }
     const limit = this.mode === 'one' ? 1 : Infinity;

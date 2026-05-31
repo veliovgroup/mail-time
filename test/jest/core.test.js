@@ -1687,3 +1687,68 @@ describe('MailTime transport verification on ready()', () => {
     await expect(mailTime.ready()).resolves.toBe(mailTime);
   });
 });
+
+describe('MailTime pause/resume', () => {
+  it('pause() delegates to the scheduler, sets isPaused; resume() clears it', () => {
+    const mailTime = createMailTime();
+    const pauseSpy = jest.spyOn(mailTime.scheduler, 'pause');
+    const resumeSpy = jest.spyOn(mailTime.scheduler, 'resume');
+
+    expect(mailTime.isPaused).toBe(false);
+
+    expect(mailTime.pause()).toBe(true);
+    expect(pauseSpy).toHaveBeenCalledTimes(1);
+    expect(mailTime.isPaused).toBe(true);
+
+    // idempotent: a second pause is a no-op (JoSk returns false when already paused)
+    expect(mailTime.pause()).toBe(false);
+    expect(mailTime.isPaused).toBe(true);
+
+    expect(mailTime.resume()).toBe(true);
+    expect(resumeSpy).toHaveBeenCalledTimes(1);
+    expect(mailTime.isPaused).toBe(false);
+
+    // idempotent: resume when not paused is a no-op
+    expect(mailTime.resume()).toBe(false);
+    expect(mailTime.isPaused).toBe(false);
+  });
+
+  it('___iterate does not drain while paused, and resumes draining after resume()', async () => {
+    const mailTime = createMailTime({ mode: 'batch' });
+    const dispatches = [];
+    mailTime.___dispatch = jest.fn(async (task) => dispatches.push(task.uuid));
+    mailTime.queue.records.set('p1', {
+      uuid: 'p1', tries: 0, isSent: false, isFailed: false, isCancelled: false,
+      isSending: false, sendingAt: 0, sendAt: Date.now() - 1, template: false,
+      transport: 0, concatSubject: false, mailOptions: [{ to: 'user@example.com', text: 'hi' }]
+    });
+
+    mailTime.pause();
+    await mailTime.___iterate();
+    expect(dispatches).toHaveLength(0);
+
+    mailTime.resume();
+    await mailTime.___iterate();
+    expect(dispatches).toEqual(['p1']);
+  });
+
+  it('pause()/resume() are no-ops on client instances (no scheduler)', () => {
+    const queue = createQueue();
+    const mailTime = new MailTime({ type: 'client', queue });
+    instances.push(mailTime);
+
+    expect(mailTime.scheduler).toBeUndefined();
+    expect(mailTime.pause()).toBe(false);
+    expect(mailTime.resume()).toBe(false);
+    expect(mailTime.isPaused).toBe(false);
+  });
+
+  it('pause()/resume() are no-ops after destroy()', () => {
+    const mailTime = createMailTime();
+    mailTime.destroy();
+
+    expect(mailTime.pause()).toBe(false);
+    expect(mailTime.resume()).toBe(false);
+    expect(mailTime.isPaused).toBe(false);
+  });
+});
