@@ -13,8 +13,8 @@ Package.onUse((api) => {
 
   api.versionsFrom(['2.14', '3.2']);
   api.use([
-    'ecmascript@0.14.0 || 0.16.0',
-    'mongo@1.10.0 || 1.16.0 || 2.0.4',
+    'ecmascript',
+    'mongo',
     'zodern:types@1.0.13',
   ], 'server');
   api.mainModule('index.js', 'server');
@@ -28,8 +28,8 @@ Package.onTest((api) => {
   });
 
   api.use([
-    'ecmascript@0.14.0 || 0.16.0',
-    'mongo@1.10.0 || 1.16.0 || 2.0.4',
+    'ecmascript',
+    'mongo',
     'meteortesting:mocha@1.2.0 || 2.1.0 || 3.2.0',
   ], 'server');
   api.addFiles('test/meteor.js', 'server');
