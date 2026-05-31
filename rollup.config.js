@@ -7,5 +7,5 @@ export default {
       constBindings: true,
     },
   },
-  external: ['josk', 'node:crypto'],
+  external: ['josk', 'crypto'],
 };
