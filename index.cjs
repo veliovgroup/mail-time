@@ -1,7 +1,7 @@
 'use strict';
 
 const josk = require('josk');
-const node_crypto = require('node:crypto');
+const crypto = require('crypto');
 
 const hasOwn = Object.prototype.hasOwnProperty;
 
@@ -1197,7 +1197,21 @@ class RedisQueue {
  */
 
 const DEFAULT_PREFIX = 'default';
-const setupLockId = 93824519;
+
+// Two-key advisory lock, mirroring josk's PostgresAdapter: a stable MailTime namespace
+// plus a per-prefix hash. `pg_advisory_lock(int4, int4)` lives in its own keyspace, isolated
+// from single-int callers in the same database; distinct prefixes get distinct lock IDs, so
+// co-tenant MailTime queues no longer serialize each other's schema setup.
+const ADVISORY_LOCK_NAMESPACE = 0x4D61696C; // 'Mail' in ASCII as int32
+
+/**
+ * @internal
+ * @param {string} prefix
+ * @returns {number} signed int32 hash of the prefix string
+ */
+const advisoryLockKeyFor = (prefix) => {
+  return crypto.createHash('sha256').update(prefix).digest().readInt32BE(0);
+};
 
 const fieldMap = {
   to: 'to_address',
@@ -1300,7 +1314,8 @@ class PostgresQueue {
 
   /** @internal */
   async __setup() {
-    await this.client.query('SELECT pg_advisory_lock($1)', [setupLockId]);
+    const advisoryLockKey = advisoryLockKeyFor(this.prefix);
+    await this.client.query('SELECT pg_advisory_lock($1, $2)', [ADVISORY_LOCK_NAMESPACE, advisoryLockKey]);
 
     try {
       await this.client.query(`CREATE TABLE IF NOT EXISTS mail_time_queue (
@@ -1331,7 +1346,7 @@ class PostgresQueue {
       await this.client.query(`CREATE INDEX IF NOT EXISTS idx_mail_time_queue_pending_to
         ON mail_time_queue (prefix, to_address, is_sent, is_failed, is_cancelled, send_at)`);
     } finally {
-      await this.client.query('SELECT pg_advisory_unlock($1)', [setupLockId]);
+      await this.client.query('SELECT pg_advisory_unlock($1, $2)', [ADVISORY_LOCK_NAMESPACE, advisoryLockKey]);
     }
   }
 
@@ -2010,7 +2025,7 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
  */
 
 /**
- * @typedef {{ status: string, code: number, statusCode: number, error?: unknown }} MailTimePingResult
+ * @typedef {{ status: string, code: number, statusCode: number, paused?: boolean, error?: unknown }} MailTimePingResult
  */
 
 /**
@@ -2121,6 +2136,7 @@ class MailTime {
     this.concurrency = (typeof opts.concurrency === 'number' && opts.concurrency > 0 && Number.isFinite(opts.concurrency)) ? Math.floor(opts.concurrency) : 1;
     this.sendingTimeout = (typeof opts.sendingTimeout === 'number' && opts.sendingTimeout > 0) ? opts.sendingTimeout : 300000;
     this.__isDestroyed = false;
+    this.__isPaused = false;
     this.__readyPromise = null;
     this.__schedulerTimer = null;
     this.__inFlight = new Set();
@@ -2273,10 +2289,11 @@ class MailTime {
     if (this.scheduler) {
       const schedulerPing = await this.scheduler.ping();
       if (schedulerPing.status !== 'OK') {
-        return schedulerPing;
+        return { ...schedulerPing, paused: this.__isPaused };
       }
     }
-    return await this.queue.ping();
+    const queuePing = await this.queue.ping();
+    return { ...queuePing, paused: this.__isPaused };
   }
 
   /**
@@ -2305,6 +2322,7 @@ class MailTime {
     }
 
     this.__isDestroyed = true;
+    this.__isPaused = false;
     if (this.scheduler && typeof this.scheduler.destroy === 'function') {
       this.scheduler.destroy();
     }
@@ -2326,6 +2344,52 @@ class MailTime {
     if (this.__pool) {
       await this.__pool.drain();
     }
+  }
+
+  /**
+   * @memberOf MailTime
+   * @name pause
+   * @description Pause this server instance from competing for the queue-drain lease. In-flight SMTP sends finish; peer server instances keep draining. Reversible (unlike `destroy()`). No-op on `client` instances or after `destroy()`. To stop scanning *and* wait for in-flight sends: `mailTime.pause(); await mailTime.drain();`.
+   * @returns {boolean} `true` if newly paused; `false` if already paused, a client instance, or destroyed
+   */
+  pause() {
+    this.__debug('[pause]');
+    if (this.__isDestroyed || !this.scheduler) {
+      return false;
+    }
+    const paused = this.scheduler.pause();
+    if (paused) {
+      this.__isPaused = true;
+    }
+    return paused;
+  }
+
+  /**
+   * @memberOf MailTime
+   * @name resume
+   * @description Resume competing for the queue-drain lease after `pause()`; triggers an immediate scan. No-op on `client` instances, after `destroy()`, or when not paused.
+   * @returns {boolean} `true` if newly resumed; `false` if not paused, a client instance, or destroyed
+   */
+  resume() {
+    this.__debug('[resume]');
+    if (this.__isDestroyed || !this.scheduler) {
+      return false;
+    }
+    const resumed = this.scheduler.resume();
+    if (resumed) {
+      this.__isPaused = false;
+    }
+    return resumed;
+  }
+
+  /**
+   * @memberOf MailTime
+   * @name isPaused
+   * @description Whether this instance is currently paused from draining the queue. Always `false` on `client` instances.
+   * @returns {boolean}
+   */
+  get isPaused() {
+    return this.__isPaused;
   }
 
   /**
@@ -2521,7 +2585,7 @@ class MailTime {
       this.transport = transportIndex;
     }
     const task = {
-      uuid: node_crypto.randomUUID(),
+      uuid: crypto.randomUUID(),
       tries: 0,
       isSent: false,
       sendAt: opts.sendAt,
@@ -2935,7 +2999,7 @@ class MailTime {
    */
   async ___iterate() {
     this.__debug('[private iterate]');
-    if (this.__isDestroyed) {
+    if (this.__isDestroyed || this.__isPaused) {
       return;
     }
     const limit = this.mode === 'one' ? 1 : Infinity;

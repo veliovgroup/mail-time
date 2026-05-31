@@ -4,6 +4,7 @@ export type MailTimePingResult = {
     status: string;
     code: number;
     statusCode: number;
+    paused?: boolean;
     error?: unknown;
 };
 export type MailTimeStorageClient = {
@@ -130,7 +131,7 @@ export type MailTimeOptions = {
  * @typedef {import('./presets.js').MailTimePresetConfig} MailTimePresetConfig
  */
 /**
- * @typedef {{ status: string, code: number, statusCode: number, error?: unknown }} MailTimePingResult
+ * @typedef {{ status: string, code: number, statusCode: number, paused?: boolean, error?: unknown }} MailTimePingResult
  */
 /**
  * @typedef {{ [key: string]: any, query?: (queryText: string, values?: unknown[]) => Promise<{ rows?: unknown[], rowCount?: number | null }> }} MailTimeStorageClient
@@ -253,6 +254,27 @@ export class MailTime {
      * @returns {Promise<void>}
      */
     drain(): Promise<void>;
+    /**
+     * @memberOf MailTime
+     * @name pause
+     * @description Pause this server instance from competing for the queue-drain lease. In-flight SMTP sends finish; peer server instances keep draining. Reversible (unlike `destroy()`). No-op on `client` instances or after `destroy()`. To stop scanning *and* wait for in-flight sends: `mailTime.pause(); await mailTime.drain();`.
+     * @returns {boolean} `true` if newly paused; `false` if already paused, a client instance, or destroyed
+     */
+    pause(): boolean;
+    /**
+     * @memberOf MailTime
+     * @name resume
+     * @description Resume competing for the queue-drain lease after `pause()`; triggers an immediate scan. No-op on `client` instances, after `destroy()`, or when not paused.
+     * @returns {boolean} `true` if newly resumed; `false` if not paused, a client instance, or destroyed
+     */
+    resume(): boolean;
+    /**
+     * @memberOf MailTime
+     * @name isPaused
+     * @description Whether this instance is currently paused from draining the queue. Always `false` on `client` instances.
+     * @returns {boolean}
+     */
+    get isPaused(): boolean;
     /**
      * @memberOf MailTime
      * @name send
