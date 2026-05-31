@@ -88,9 +88,16 @@ describe('mailTimePreset', () => {
       cfg.onError.call({ prefix: 'receipts' }, new Error('boom'), { id: 'task-1' }, { meta: true });
       cfg.onError.call({}, new Error('boom'), { id: 'task-2' });
 
-      expect(errSpy).toHaveBeenCalledTimes(2);
-      expect(errSpy.mock.calls[0].some((arg) => typeof arg === 'string' && arg.includes('[receipts] [onError]'))).toBe(true);
-      expect(errSpy.mock.calls[1].some((arg) => typeof arg === 'string' && arg.includes('[default] [onError]'))).toBe(true);
+      // Assert on this test's own tagged lines, not the global console.error
+      // call count: under `bun test` all jest-shape files share one process
+      // and one global console, so a stray async log from another test (e.g.
+      // a pending retry firing the default onError) can land on this spy and
+      // break an exact-count assertion.
+      const taggedLines = (tag) => errSpy.mock.calls.filter(
+        (call) => call.some((arg) => typeof arg === 'string' && arg.includes(tag))
+      );
+      expect(taggedLines('[receipts] [onError]')).toHaveLength(1);
+      expect(taggedLines('[default] [onError]')).toHaveLength(1);
     } finally {
       errSpy.mockRestore();
     }
@@ -122,8 +129,12 @@ describe('mailTimePreset', () => {
       const detached = mailTime.onError;
       detached(new Error('boom'), { id: 'task-x' }, { meta: true });
 
-      expect(errSpy).toHaveBeenCalledTimes(1);
-      expect(errSpy.mock.calls[0].some((arg) => typeof arg === 'string' && arg.includes('[ops-alerts] [onError]'))).toBe(true);
+      // Count only this test's own tagged line — see note above on the shared
+      // global console under `bun test`.
+      const taggedLines = errSpy.mock.calls.filter(
+        (call) => call.some((arg) => typeof arg === 'string' && arg.includes('[ops-alerts] [onError]'))
+      );
+      expect(taggedLines).toHaveLength(1);
     } finally {
       errSpy.mockRestore();
     }
