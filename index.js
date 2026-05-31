@@ -1,5 +1,5 @@
 import { JoSk, RedisAdapter, MongoAdapter, PostgresAdapter } from 'josk';
-import { randomUUID } from 'node:crypto';
+import { randomUUID } from 'crypto';
 
 import { MongoQueue } from './adapters/mongo.js';
 import { RedisQueue } from './adapters/redis.js';
