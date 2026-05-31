@@ -116,7 +116,7 @@
     "node": ">=20.9.0"
   },
   "dependencies": {
-    "josk": "^6.1.0"
+    "josk": "^6.2.0"
   },
   "devDependencies": {
     "@jest/globals": "^30.4.1",

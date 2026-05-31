@@ -8,10 +8,10 @@ Package.describe({
 
 Package.onUse((api) => {
   Npm.depends({
-    josk: '6.0.0',
+    josk: '6.2.0',
   });
 
-  api.versionsFrom(['1.12', '2.16', '3.0', '3.4']);
+  api.versionsFrom(['2.14', '3.2']);
   api.use([
     'ecmascript@0.14.0 || 0.16.0',
     'mongo@1.10.0 || 1.16.0 || 2.0.4',
