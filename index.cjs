@@ -2136,6 +2136,7 @@ class MailTime {
     this.concurrency = (typeof opts.concurrency === 'number' && opts.concurrency > 0 && Number.isFinite(opts.concurrency)) ? Math.floor(opts.concurrency) : 1;
     this.sendingTimeout = (typeof opts.sendingTimeout === 'number' && opts.sendingTimeout > 0) ? opts.sendingTimeout : 300000;
     this.__isDestroyed = false;
+    this.__abortInFlight = false;
     this.__isPaused = false;
     this.__readyPromise = null;
     this.__schedulerTimer = null;
@@ -2311,7 +2312,7 @@ class MailTime {
   /**
    * @memberOf MailTime
    * @name destroy
-   * @description Stop the scheduler and block future dispatches. Pass `{ drain: true }` to also wait for in-flight SMTP attempts (returns a Promise).
+   * @description Stop the scheduler and block future dispatches. Without `{ drain: true }`, any in-flight SMTP attempts are neutralized on completion — they perform no storage writes, no `onSent`/`onError` callbacks, and no logging once `destroy()` returns; their claimed rows are recovered by stale-lock timeout (`sendingTimeout`). Pass `{ drain: true }` to instead let in-flight attempts run to completion (returns a Promise that resolves once they settle).
    * @param {{ drain?: boolean }} [opts]
    * @returns {boolean | Promise<boolean>}
    */
@@ -2329,6 +2330,14 @@ class MailTime {
     if (opts && opts.drain === true && this.__pool) {
       return this.__pool.drain().then(() => true);
     }
+    // No graceful drain requested: neutralize in-flight SMTP completions so a
+    // destroyed instance performs no storage writes, no `onSent`/`onError`
+    // callbacks, and no logging after teardown. Each claimed row keeps its
+    // `isSending` lock, which a peer or a future instance recovers once
+    // `sendingTimeout` elapses — identical to a crash mid-send. Use
+    // `destroy({ drain: true })` (or `await drain()` before `destroy()`) when
+    // in-flight sends must run to completion.
+    this.__abortInFlight = true;
     return true;
   }
 
@@ -2509,6 +2518,10 @@ class MailTime {
    */
   async ___handleError(task, error, info) {
     this.__debug('[private handleError]', { task, error, info });
+    if (this.__abortInFlight) {
+      this.__debug('[private handleError] instance destroyed; skipping onError', task?.uuid);
+      return;
+    }
     if (!task) {
       return;
     }
@@ -2867,6 +2880,11 @@ class MailTime {
 
       await new Promise((resolve) => {
         transport.sendMail(compiledOpts, async (error, info) => {
+          if (this.__abortInFlight) {
+            this.__debug('[private send] instance destroyed mid-send; leaving claim for stale-lock recovery', task.uuid);
+            resolve();
+            return;
+          }
           this.__debug('[private send] [sending]', { error, info });
           try {
             if (error) {
@@ -2985,6 +3003,10 @@ class MailTime {
         });
       });
     } catch (e) {
+      if (this.__abortInFlight) {
+        this.__debug('[private send] instance destroyed mid-send; suppressing runtime exception', e);
+        return;
+      }
       logError('Exception during runtime:', e);
       await this.___handleError(task, e, {});
     }

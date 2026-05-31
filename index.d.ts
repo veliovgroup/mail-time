@@ -239,7 +239,7 @@ export class MailTime {
     /**
      * @memberOf MailTime
      * @name destroy
-     * @description Stop the scheduler and block future dispatches. Pass `{ drain: true }` to also wait for in-flight SMTP attempts (returns a Promise).
+     * @description Stop the scheduler and block future dispatches. Without `{ drain: true }`, any in-flight SMTP attempts are neutralized on completion — they perform no storage writes, no `onSent`/`onError` callbacks, and no logging once `destroy()` returns; their claimed rows are recovered by stale-lock timeout (`sendingTimeout`). Pass `{ drain: true }` to instead let in-flight attempts run to completion (returns a Promise that resolves once they settle).
      * @param {{ drain?: boolean }} [opts]
      * @returns {boolean | Promise<boolean>}
      */

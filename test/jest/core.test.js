@@ -1489,6 +1489,88 @@ describe('MailTime mode, concurrency, and isSending lifecycle', () => {
     await expect(mailTime.destroy({ drain: true })).resolves.toBe(true);
     expect(released).toBe(true);
   });
+
+  // A transport that parks the SMTP callback so the roundtrip can be resolved
+  // *after* destroy() — the exact window where a post-teardown completion used
+  // to leak onSent/onError/console output.
+  const deferredTransport = () => {
+    let resolveStarted;
+    const started = new Promise((resolve) => { resolveStarted = resolve; });
+    const ref = { done: null, started };
+    const transport = createTransport((_mail, done) => {
+      ref.done = done;
+      resolveStarted();
+    });
+    return { transport, ref };
+  };
+
+  const inFlightTask = (uuid) => ({
+    uuid,
+    tries: 0,
+    isSent: false,
+    isFailed: false,
+    isCancelled: false,
+    isSending: false,
+    sendingAt: 0,
+    sendAt: Date.now() - 1,
+    template: false,
+    transport: 0,
+    concatSubject: false,
+    mailOptions: [{ to: 'user@example.com', text: 'hi' }],
+  });
+
+  it('destroy() (no drain) neutralizes an in-flight send that completes after teardown', async () => {
+    const { transport, ref } = deferredTransport();
+    // onSent/onError are per-instance spies — the exact user-facing callbacks
+    // that used to fire after teardown. (We assert on these, not on the global
+    // console: under `bun test` console is shared across files and unrelated
+    // logs would make a console assertion flaky.)
+    const onSent = jest.fn();
+    const onError = jest.fn();
+    const mailTime = createMailTime({ transports: [transport], keepHistory: true, onSent, onError });
+
+    const task = inFlightTask('inflight-no-drain');
+    mailTime.queue.records.set(task.uuid, { ...task });
+
+    await mailTime.___dispatch(task);
+    await ref.started; // SMTP claim taken, lock held, awaiting the parked callback
+    expect(typeof ref.done).toBe('function');
+    expect(mailTime.queue.records.get(task.uuid).isSending).toBe(true);
+
+    expect(mailTime.destroy()).toBe(true);
+
+    // SMTP reports success only now — after destroy(). The completion must be inert.
+    ref.done(null, { accepted: ['user@example.com'], response: 'OK' });
+    await mailTime.drain();
+
+    expect(onSent).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    // Claim left intact (isSending) so stale-lock recovery can re-send elsewhere.
+    const row = mailTime.queue.records.get(task.uuid);
+    expect(row.isSent).toBe(false);
+    expect(row.isSending).toBe(true);
+  });
+
+  it('destroy({ drain: true }) lets an in-flight send finish and fire onSent', async () => {
+    const { transport, ref } = deferredTransport();
+    const onSent = jest.fn();
+    const onError = jest.fn();
+    const mailTime = createMailTime({ transports: [transport], keepHistory: true, onSent, onError });
+
+    const task = inFlightTask('inflight-drain');
+    mailTime.queue.records.set(task.uuid, { ...task });
+
+    await mailTime.___dispatch(task);
+    await ref.started;
+
+    const destroyed = mailTime.destroy({ drain: true }); // Promise: resolves once in-flight settles
+    ref.done(null, { accepted: ['user@example.com'], response: 'OK' });
+    await expect(destroyed).resolves.toBe(true);
+
+    expect(onSent).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+    expect(mailTime.queue.records.get(task.uuid).isSent).toBe(true);
+  });
 });
 
 describe('MailTime transport verification on ready()', () => {
