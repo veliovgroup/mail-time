@@ -92,6 +92,20 @@ class BlankQueue {
   }
 
   /**
+   * @async
+   * @memberOf BlankQueue
+   * @name ready
+   * @description optional hook; called by MailTime during initialization if present. Implement any async index/schema setup here and await it.
+   * @returns {Promise<void 0>}
+   */
+  async ready() {
+    // Optional. Implement if your storage needs async setup (e.g. ensure table/index).
+    // MailTime does: if (typeof queue.ready === 'function') await queue.ready();
+    this.__ensurePrefix?.();
+    return void 0;
+  }
+
+  /**
    * @memberOf BlankQueue
    * @name iterate
    * @description iterate over queued emails passing each to `mailTimeInstance.___dispatch` (the bounded send pool); `___dispatch` returns once a pool slot is acquired so the scan can release the JoSk lease while the SMTP roundtrip continues in the background
