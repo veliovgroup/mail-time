@@ -139,7 +139,7 @@ bun add mail-time nodemailer
 > `nodemailer` and adapter drivers are peers (not bundled) so you can pin your own versions.
 
 > [!IMPORTANT]
-> Upgrading from v3? See [Migration from 3.x](#migration-from-3x) and the full [v4.0.0 release notes](https://github.com/veliovgroup/mail-time/blob/master/docs/migration-v3-v4.md).
+> Upgrading? See the [Migrations](#migrations) table below for links to the detailed guides.
 
 For Meteor.js usage see [docs/meteor.md](https://github.com/veliovgroup/mail-time/blob/master/docs/meteor.md).
 
@@ -495,18 +495,16 @@ For custom adapters see [docs/queue-api.md](https://github.com/veliovgroup/mail-
 
 - `MailTime.Template` — get/set the default HTML envelope template.
 
-## Migration from 3.x
+## Migrations
 
-Full v4 highlights, adapter changes, and type exports live in [docs/migration-v3-v4.md](https://github.com/veliovgroup/mail-time/blob/master/docs/migration-v3-v4.md). Quick checklist:
+Upgrade checklists, adapter contract changes, and rollout notes live in the docs (no duplication here):
 
-1. **Node ≥ 20.9.0**, Bun ≥ 1.1.0. Bump your runtime first.
-2. **Swap adapter imports** to the new `MongoQueue` / `RedisQueue` / `PostgresQueue` constructors.
-3. **Pass `josk`** — it's now required for `type: 'server'`.
-4. **`josk.zombieTime` default raised to `60000` ms** (was `32786`). Set it explicitly if you relied on the old value.
-5. **Custom queue adapters** — `update`'s claim guard now triggers on `{ isSending: true, sendingAt, tries }` (was `{ isSent: true, tries }`) and must include the stale-lock-recovery clause `(isSending === false OR sendingAt <= now - sendingTimeout)`. The iterate path must call `await mailTimeInstance.___dispatch(row)` instead of `___send` and honor `opts.limit` / `opts.sendingTimeout`. See [docs/queue-api.md](https://github.com/veliovgroup/mail-time/blob/master/docs/queue-api.md) and [`adapters/blank-example.js`](https://github.com/veliovgroup/mail-time/blob/master/adapters/blank-example.js).
-6. **Default behavior unchanged** — `concurrency: 1` keeps the post-upgrade send rate identical to v3. Opt into parallel sends by raising `concurrency`.
+| From | To  | Full guide |
+|------|-----|------------|
+| 3.x  | 4.1 | [v3 → v4](https://github.com/veliovgroup/mail-time/blob/master/docs/migration-v3-v4.md) |
+| 4.0  | 4.1 | [v4.0 → v4.1](https://github.com/veliovgroup/mail-time/blob/master/docs/migration-v4-v4.1.md) |
 
-New v4 surface to opt into: [`mailTimePreset`](#settings-presets), `concurrency`, `mode`, `sendingTimeout`, `drain()`, per-recipient retries, and the [AI agent skills](#ai-agent-skills) bundle.
+New in v4 (opt-in): `mailTimePreset`, `concurrency`/`mode`, `sendingTimeout`, `drain()`/`pause()`/`resume()`, per-recipient handling, AI skills bundle.
 
 ## Testing
 
