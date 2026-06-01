@@ -7,6 +7,12 @@ Package.describe({
 });
 
 /**
+ * Single source of truth for the `josk` runtime dependency version.
+ * Declared in both `onUse` and `onTest`
+ */
+const JOSK_VERSION = '6.2.0';
+
+/**
  * Meteor test-packages runs package.js under each release's bundled Node.
  * @returns {{ npm: Record<string, string>, mocha: string }}
  */
@@ -51,7 +57,7 @@ const meteorTestProfile = () => {
 
 Package.onUse((api) => {
   Npm.depends({
-    josk: '6.2.0',
+    josk: JOSK_VERSION,
   });
 
   api.versionsFrom(['2.14', '3.2']);
@@ -65,7 +71,7 @@ Package.onUse((api) => {
 
 Package.onTest((api) => {
   const profile = meteorTestProfile();
-  Npm.depends(profile.npm);
+  Npm.depends({ josk: JOSK_VERSION, ...profile.npm });
 
   api.use([
     'ecmascript',
