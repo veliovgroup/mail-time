@@ -8,7 +8,7 @@ export type MailTimePresetConfig = {
     sendingTimeout?: number | undefined;
     mode?: "one" | "batch" | undefined;
     concurrency?: number | undefined;
-    onError?: ((error: unknown, email: object, details?: object) => void) | undefined;
+    onError?: ((error: unknown, email: any, details?: object) => void) | undefined;
     josk?: object | undefined;
 };
 export type MailTimePresetName = keyof typeof PRESETS;
@@ -31,11 +31,11 @@ export type MailTimePresetName = keyof typeof PRESETS;
  *
  * @param {MailTimePresetName} name - one of `presetNames`
  * @param {object} [overrides] - additional MailTime constructor options
- * @returns {object} fresh, mutable MailTime constructor options
+ * @returns {MailTimePresetConfig} fresh, mutable MailTime constructor options (preset deep-cloned + overrides merged)
  * @throws {Error} when `name` is unknown
  * @throws {TypeError} when `overrides` is provided but not a plain object
  */
-export function mailTimePreset(name: MailTimePresetName, overrides?: object): object;
+export function mailTimePreset(name: MailTimePresetName, overrides?: object): MailTimePresetConfig;
 /**
  * Read-only map of preset name → partial MailTime config. Use
  * `mailTimePreset(name, overrides)` to materialize a merged copy; use
@@ -62,7 +62,7 @@ export const presetNames: ReadonlyArray<MailTimePresetName>;
  * @property {number} [sendingTimeout]
  * @property {'one' | 'batch'} [mode]
  * @property {number} [concurrency]
- * @property {(error: unknown, email: object, details?: object) => void} [onError]
+ * @property {(error: unknown, email: any, details?: object) => void} [onError]
  * @property {object} [josk]
  */
 /**
