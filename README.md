@@ -1,19 +1,19 @@
 
 # MailTime
 
-[![npm version](https://img.shields.io/npm/v/mail-time.svg)](https://www.npmjs.com/package/mail-time)
-[![npm downloads](https://img.shields.io/npm/dm/mail-time.svg)](https://www.npmjs.com/package/mail-time)
-[![CI](https://github.com/veliovgroup/mail-time/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/veliovgroup/mail-time/actions/workflows/ci.yml)
-[![Coverage](https://img.shields.io/badge/coverage-~93%25-brightgreen)](#testing)
-[![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](LICENSE)
-[![Node.js](https://img.shields.io/node/v/mail-time)](https://nodejs.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-ready-blue)](#quick-start)
-[![Bun](https://img.shields.io/badge/Bun-%3E%3D1.1.0-black?logo=bun)](#bun)
-[![dependencies](https://img.shields.io/badge/dependencies-1-brightgreen)](https://www.npmjs.com/package/mail-time?activeTab=dependencies)
-[![bundle size](https://img.shields.io/bundlephobia/minzip/mail-time)](https://bundlephobia.com/package/mail-time)
-[![Meteor](https://img.shields.io/badge/Meteor-ostrio%3Amailer-DE4F4F)](https://packosphere.com/ostrio/mailer)
-[![GitHub Sponsors](https://img.shields.io/github/sponsors/dr-dimitru?label=Sponsor)](https://github.com/sponsors/dr-dimitru)
-[![Donate](https://img.shields.io/badge/Donate-PayPal-00457C?logo=paypal&logoColor=white)](https://paypal.me/veliovgroup)
+[![npm version][badge-npm-v]][npm-url]
+[![npm downloads][badge-npm-dm]][npm-url]
+[![CI][badge-ci]][ci-url]
+[![bundle size][badge-size]][size-url]
+[![Coverage][badge-cov]](#testing)
+[![License: BSD-3-Clause][badge-license]][license-url]
+[![Node.js][badge-node]][node-url]
+[![TypeScript][badge-ts]][ts-url]
+[![Bun][badge-bun]][bun-url]
+[![Meteor][badge-meteor]][meteor-url]
+[![dependencies][badge-deps]][deps-url]
+[![Sponsor][badge-sponsor]][sponsor-url]
+[![Donate][badge-donate]][donate-url]
 
 Bulletproof email queue for [horizontally scaled](#sending-emails-from-a-cluster) Node.js & Bun apps. Built on top of [`nodemailer`](https://github.com/nodemailer/nodemailer) and [`josk`](https://github.com/veliovgroup/josk). Single runtime dependency, ESM + CJS, full TypeScript declarations.
 
@@ -36,7 +36,7 @@ Many clients + one or more servers coexist behind the same `prefix` in the same 
 - 📦 **Bun ≥ 1.1.0 & Node ≥ 20.9.0** — same code, both runtimes.
 - 🤖 **Ships with AI agent skills** — see [AI agent skills](#ai-agent-skills) below.
 - 📐 **Hand-tuned ESM + CJS + TypeScript declarations**.
-- 🧪 **95%+ Jest coverage** (85% threshold enforced) + Mocha integration tests for every adapter.
+- 🧪 **99%+ Jest line coverage** (85% threshold enforced) + Mocha integration tests for every adapter.
 
 ## How it works
 
@@ -476,10 +476,12 @@ For deeper JoSk semantics, install the JoSk skill: **`npx skills add veliovgroup
 - `send(opts)` — alias of `sendMail`.
 - `cancelMail(uuidOrPromise)` → `Promise<boolean>`. Accepts the `uuid` or the `Promise<string>` from `sendMail`.
 - `cancel(uuid)` — alias of `cancelMail`.
-- `ping()` → `Promise<{status, code, statusCode, error?}>`. Pings scheduler then queue.
+- `ping()` → `Promise<{status, code, statusCode, paused?, error?}>`. Pings scheduler then queue; `paused` reflects `isPaused`.
 - `ready()` → `Promise<MailTime>`. Awaits all startup work; rejects with `.cause` on storage failure.
 - `destroy(opts?)` → `boolean` or `Promise<boolean>` when `{ drain: true }`. Stops scheduler. Idempotent. Use `destroy({ drain: true })` or `await drain()` after `destroy()` for graceful shutdown.
 - `drain()` → `Promise<void>`. Resolves once every in-flight SMTP attempt finishes. Useful in tests and graceful-shutdown paths.
+- `pause()` / `resume()` → `boolean`. Server-only reversible backpressure; no-ops on `client` or after `destroy()`. See [Pause / resume](#pause--resume-a-server-backpressure).
+- `isPaused` → `boolean`. Read-only; always `false` on `client`.
 
 ### Queue constructors
 
@@ -555,3 +557,28 @@ Mixed clusters (some Node, some Bun) share one schedule under the same `prefix` 
 - [PayPal](https://paypal.me/veliovgroup).
 - Try [☄️ meteor-files.com](https://meteor-files.com/?ref=github-mail-time-repo-footer).
 - Try [▲ ostr.io](https://ostr.io?ref=github-mail-time-repo-footer) for server monitoring, web analytics, web-CRON, and SEO pre-rendering.
+
+[npm-url]: https://www.npmjs.com/package/mail-time
+[badge-npm-v]: https://img.shields.io/npm/v/mail-time.svg
+[badge-npm-dm]: https://img.shields.io/npm/dm/mail-time.svg
+[badge-ci]: https://github.com/veliovgroup/mail-time/actions/workflows/ci.yml/badge.svg?branch=master
+[ci-url]: https://github.com/veliovgroup/mail-time/actions/workflows/ci.yml
+[badge-size]: https://img.shields.io/bundlephobia/minzip/mail-time
+[size-url]: https://bundlephobia.com/package/mail-time
+[badge-cov]: https://img.shields.io/badge/coverage-~99%25-brightgreen
+[badge-license]: https://img.shields.io/badge/License-BSD%203--Clause-blue.svg
+[license-url]: LICENSE
+[badge-node]: https://img.shields.io/node/v/mail-time
+[node-url]: https://nodejs.org/
+[badge-ts]: https://img.shields.io/badge/TypeScript-ready-blue
+[ts-url]: #quick-start
+[badge-bun]: https://img.shields.io/badge/Bun-%3E%3D1.1.0-black?logo=bun
+[bun-url]: #bun
+[badge-meteor]: https://img.shields.io/badge/Meteor-ostrio%3Amailer-DE4F4F
+[meteor-url]: https://packosphere.com/ostrio/mailer
+[badge-deps]: https://img.shields.io/badge/dependencies-1-brightgreen
+[deps-url]: https://www.npmjs.com/package/mail-time?activeTab=dependencies
+[badge-sponsor]: https://img.shields.io/github/sponsors/dr-dimitru?label=Sponsor
+[sponsor-url]: https://github.com/sponsors/dr-dimitru
+[badge-donate]: https://img.shields.io/badge/Donate-PayPal-00457C?logo=paypal&logoColor=white
+[donate-url]: https://paypal.me/veliovgroup

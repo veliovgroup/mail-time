@@ -12,7 +12,7 @@ Email queue + sender for horizontally scaled Node.js / Bun / Meteor. Built on [J
 **Package / API**
 - User names `mail-time`, `MailTime`, `MongoQueue`, `RedisQueue`, `PostgresQueue`, or Meteor `ostrio:mailer`
 - First integration: queue store, JoSk scheduler, nodemailer transports, `prefix`, `onSent` / `onError`
-- Presets (`mailTimePreset`), retries, `sendAt`, `concatEmails`, `concurrency`, `mode`, `drain()` / `destroy()`
+- Presets (`mailTimePreset`), retries, `sendAt`, `concatEmails`, `concurrency`, `mode`, `drain()` / `destroy()`, `pause()` / `resume()` (server backpressure)
 - Multi-SMTP: `backup` (failover) vs `balancer` (round-robin)
 - Custom queue adapter per `references/adapters.md` / `docs/queue-api.md`
 
@@ -51,7 +51,7 @@ new MailTime({
 })
 .sendMail(opts) -> uuid
 .cancelMail(uuid) -> boolean
-.ready() / .ping() / .drain() / .destroy()
+.ready() / .ping() / .drain() / .destroy() / .pause() / .resume()
 ```
 
 - Queue stores letters; JoSk lease gates `queue.iterate()` — one drainer tick per `prefix` cluster-wide.
