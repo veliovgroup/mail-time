@@ -19,7 +19,8 @@ const meteorTestProfile = () => {
         chai: '6.2.2',
         pg: '8.20.0',
         redis: '5.12.1',
-      }
+      },
+      mocha: 'meteortesting:mocha@3.3.0',
     };
   }
 
@@ -29,7 +30,8 @@ const meteorTestProfile = () => {
         chai: '5.3.3',
         redis: '4.7.1',
         pg: '8.16.3',
-      }
+      },
+      mocha: 'meteortesting:mocha@3.3.0',
     };
   }
 
@@ -39,7 +41,8 @@ const meteorTestProfile = () => {
         chai: '4.4.1',
         redis: '4.7.1',
         pg: '8.11.3',
-      }
+      },
+      mocha: 'meteortesting:mocha@2.1.0',
     };
   }
 
@@ -67,7 +70,7 @@ Package.onTest((api) => {
   api.use([
     'ecmascript',
     'mongo',
-    'meteortesting:mocha@1.2.0 || 2.1.0 || 3.3.0',
+    profile.mocha,
   ], 'server');
   api.addFiles('test/meteor.js', 'server');
 });
