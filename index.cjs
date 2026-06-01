@@ -425,10 +425,13 @@ class MongoQueue {
         cursor.limit(limit);
       }
 
-      while (await cursor.hasNext()) {
-        await this.mailTimeInstance.___dispatch(await cursor.next());
+      try {
+        while (await cursor.hasNext()) {
+          await this.mailTimeInstance.___dispatch(await cursor.next());
+        }
+      } finally {
+        await cursor.close().catch(() => {});
       }
-      await cursor.close();
     } catch (iterateError) {
       logError('[iterate] [while/await] [iterateError]', iterateError);
     }
@@ -1728,7 +1731,7 @@ function defaultPresetOnError(error, email, info) {
  * @property {number} [sendingTimeout]
  * @property {'one' | 'batch'} [mode]
  * @property {number} [concurrency]
- * @property {(error: unknown, email: object, details?: object) => void} [onError]
+ * @property {(error: unknown, email: any, details?: object) => void} [onError]
  * @property {object} [josk]
  */
 
@@ -1878,7 +1881,7 @@ const presetNames = Object.freeze(/** @type {MailTimePresetName[]} */ (Object.ke
  *
  * @param {MailTimePresetName} name - one of `presetNames`
  * @param {object} [overrides] - additional MailTime constructor options
- * @returns {object} fresh, mutable MailTime constructor options
+ * @returns {MailTimePresetConfig} fresh, mutable MailTime constructor options (preset deep-cloned + overrides merged)
  * @throws {Error} when `name` is unknown
  * @throws {TypeError} when `overrides` is provided but not a plain object
  */
