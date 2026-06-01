@@ -1,4 +1,4 @@
-import { deepMerge, isPlainObject, logError } from './helpers.js';
+import { deepMerge, hasOwnProp, isPlainObject, logError } from './helpers.js';
 
 /**
  * Default `onError` hook used by every built-in preset. Logs via the
@@ -180,7 +180,7 @@ const presetNames = Object.freeze(/** @type {MailTimePresetName[]} */ (Object.ke
  * @throws {TypeError} when `overrides` is provided but not a plain object
  */
 const mailTimePreset = (name, overrides) => {
-  if (typeof name !== 'string' || !Object.hasOwn(PRESETS, name)) {
+  if (typeof name !== 'string' || !hasOwnProp(PRESETS, name)) {
     throw new Error(`[mail-time] [mailTimePreset] unknown preset "${name}". Available: ${presetNames.join(', ')}`);
   }
   if (overrides !== void 0 && !isPlainObject(overrides)) {

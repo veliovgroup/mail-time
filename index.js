@@ -5,7 +5,7 @@ import { MongoQueue } from './adapters/mongo.js';
 import { RedisQueue } from './adapters/redis.js';
 import { PostgresQueue } from './adapters/postgres.js';
 import { mailTimePreset, presets, presetNames } from './presets.js';
-import { debug, logError, deepMerge, equals, isPlainObject, extractEmail, toAddressList, filterAddressField } from './helpers.js';
+import { debug, logError, hasOwnProp, deepMerge, equals, isPlainObject, extractEmail, toAddressList, filterAddressField } from './helpers.js';
 
 const noop = () => {};
 const queueMethods = ['ping', 'iterate', 'getPendingTo', 'push', 'remove', 'update', 'cancel'];
@@ -749,7 +749,7 @@ class MailTime {
     if (matchHTML) {
       for (let i = 0; i < matchHTML.length; i++) {
         const key = matchHTML[i].slice(3, -3).trim();
-        if (Object.hasOwn(replacements, key) && replacements[key] !== null && replacements[key] !== void 0) {
+        if (hasOwnProp(replacements, key) && replacements[key] !== null && replacements[key] !== void 0) {
           string = string.replace(matchHTML[i], `${replacements[key]}`);
         }
       }
@@ -759,7 +759,7 @@ class MailTime {
     if (matchStr) {
       for (let i = 0; i < matchStr.length; i++) {
         const key = matchStr[i].slice(2, -2).trim();
-        if (Object.hasOwn(replacements, key) && replacements[key] !== null && replacements[key] !== void 0) {
+        if (hasOwnProp(replacements, key) && replacements[key] !== null && replacements[key] !== void 0) {
           string = string.replace(matchStr[i], `${replacements[key]}`.replace(/<(?:.|\n)*?>/gm, ''));
         }
       }
