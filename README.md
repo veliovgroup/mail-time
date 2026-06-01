@@ -148,15 +148,21 @@ For Meteor.js usage see [docs/meteor.md](https://github.com/veliovgroup/mail-tim
 MailTime ships a Claude / Copilot / Cursor / Codex / Gemini-ready skill bundle. Install it once in your project (or globally) and your AI agent will reach for the right preset, adapter, and pitfall list without you having to paste docs into the chat.
 
 ```sh
-# Install the MailTime skill into the current project:
+# Install the MailTime skill globally:
+npx skills add veliovgroup/mail-time -g
+
+# Or install the MailTime skill into the current project:
 npx skills add veliovgroup/mail-time
 
 # Recommended: also install the JoSk skill — MailTime is built on JoSk,
 # and deep scheduler questions resolve through JoSk's contract.
-npx skills add veliovgroup/josk
+npx skills add veliovgroup/josk -g
 ```
 
 The `npx skills` CLI ([vercel-labs/skills](https://github.com/vercel-labs/skills)) supports 50+ AI coding agents. Pass `-g` to install user-wide, or `-a claude-code` to target a specific agent. The bundled MailTime skill covers the public API, every queue adapter, the preset table, tuning levers, and common pitfalls — it's the same material as the README and `docs/`, structured for an LLM.
+
+> [!NOTE]
+> The skill source is **not** shipped in the npm tarball — it's distributed via GitHub and consumed only by AI tooling.
 
 ## Quick start
 
