@@ -113,7 +113,16 @@
   "author": "dr.dimitru (https://veliovgroup.com)",
   "license": "BSD-3-Clause",
   "engines": {
-    "node": ">=20.9.0"
+    "node": ">=20.9.0",
+    "bun": ">=1.1.0"
+  },
+  "meteor": {
+    "packageName": "ostrio:mailer",
+    "versionsFrom": ["2.14", "3.2"],
+    "node": {
+      "2.14": ">=14",
+      "3.2": ">=18"
+    }
   },
   "dependencies": {
     "josk": "^6.2.0"
