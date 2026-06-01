@@ -228,10 +228,13 @@ class MongoQueue {
         cursor.limit(limit);
       }
 
-      while (await cursor.hasNext()) {
-        await this.mailTimeInstance.___dispatch(await cursor.next());
+      try {
+        while (await cursor.hasNext()) {
+          await this.mailTimeInstance.___dispatch(await cursor.next());
+        }
+      } finally {
+        await cursor.close().catch(() => {});
       }
-      await cursor.close();
     } catch (iterateError) {
       logError('[iterate] [while/await] [iterateError]', iterateError);
     }
