@@ -102,6 +102,21 @@ const opts: MailTimeOptions = {
 const mailTime = new MailTime(opts);
 
 await mailTime.ready();
+
+const newlyPaused: boolean = mailTime.pause();
+const alreadyPaused: boolean = mailTime.pause();
+void newlyPaused;
+void alreadyPaused;
+
+const pingWhilePaused: MailTimePingResult = await mailTime.ping();
+const pausedFlag: boolean | undefined = pingWhilePaused.paused;
+void pausedFlag;
+
+const newlyResumed: boolean = mailTime.resume();
+const isPausedAfterResume: boolean = mailTime.isPaused;
+void newlyResumed;
+void isPausedAfterResume;
+
 mailTime.destroy();
 
 const message: MailTimeMailOptions = {

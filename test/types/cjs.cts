@@ -18,6 +18,15 @@ const client = new mailTime.MailTime({
 });
 
 client.ping();
+void client.pause();
+void client.resume();
+void client.isPaused;
+
+client.ping().then((result) => {
+  const paused: boolean | undefined = result.paused;
+  void paused;
+});
+
 void mailTime.MongoQueue;
 void mailTime.RedisQueue;
 
