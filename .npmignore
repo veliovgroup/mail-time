@@ -19,6 +19,8 @@ cover.png
 coverage
 docs/
 docs/*
+docs/superpowers/
+docs/superpowers/**
 jest.config.mjs
 local-testing.md
 local-testing.mjs

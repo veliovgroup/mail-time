@@ -19,6 +19,8 @@ CONTRIBUTING.md
 cover.jpg
 cover.png
 docs
+docs/superpowers
+docs/superpowers/
 HISTORY.md
 index.cjs
 index.d.cts
