@@ -85,6 +85,7 @@ const joskOpts: MailTimeJoSkOptions = {
   },
   execute: 'one',
   concurrency: 4,
+  lockLeaseTime: 60_000,
   lockOwnerId: 'owner-1'
 };
 

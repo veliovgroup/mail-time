@@ -46,6 +46,7 @@ One JoSk `setInterval` per `prefix` (`mailTimeQueue<prefix>` → `queue.iterate(
 | `revolvingInterval` | 1536 | Latency vs I/O |
 | `josk.min/maxRevolvingDelay` | 512 / 2048 | Overrides JoSk 128/768 |
 | `josk.zombieTime` | 60000 | **≥60s**. `___iterate` releases the lease right after the scan, so only a stalled storage scan can blow this. |
+| `josk.lockLeaseTime` | 30000 | JoSk 6.3 scheduler lease TTL; floored at `2 * maxRevolvingDelay + 1000`. Raise for slow storage claim batches; separate from `zombieTime`. |
 | `josk.execute` | `'batch'` | Usually omit; one JoSk uid per instance |
 | `josk.concurrency` | `Infinity` | `1` if scheduler ticks overlap |
 | `josk.lockOwnerId` | random | **Prod:** `hostname-pid` or pod name |

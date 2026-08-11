@@ -510,6 +510,7 @@ await mailQueue.sendMail({
 | `minRevolvingDelay`       | `512`             | Lower bound of poll window.                                                                                    |
 | `maxRevolvingDelay`       | `2048`            | Upper bound.                                                                                                   |
 | `zombieTime`              | `60000`           | Re-claim if `queue.iterate()` runs longer than this. **Do not drop below 60s.**                                |
+| `lockLeaseTime`           | `30000`           | JoSk scheduler lease TTL. JoSk floors it at `2 * maxRevolvingDelay + 1000`; increase for slow storage claim batches. Separate from `zombieTime`, which controls task recovery. |
 | `execute`                 | `'batch'`         | JoSk scheduler batching; low impact for MailTime (one interval task per instance).                             |
 | `concurrency`             | `Infinity`        | Cap overlapping JoSk handler runs on **this** process (`1` if ticks pile up).                                  |
 | `autoClear`               | `false`           | Remove orphan tasks from storage.                                                                              |

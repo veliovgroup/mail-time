@@ -888,6 +888,7 @@ describe('MailTime send and render behavior', () => {
         execute: 'one',
         concurrency: 8,
         zombieTime: 120000,
+        lockLeaseTime: 180000,
         lockOwnerId: 'override-id',
         autoClear: true
       }
@@ -895,6 +896,7 @@ describe('MailTime send and render behavior', () => {
     expect(mailTime.scheduler.execute).toBe('one');
     expect(mailTime.scheduler.concurrency).toBe(8);
     expect(mailTime.scheduler.zombieTime).toBe(120000);
+    expect(mailTime.scheduler.lockLeaseTime).toBe(180000);
     expect(mailTime.scheduler.lockOwnerId).toBe('override-id');
     expect(mailTime.scheduler.autoClear).toBe(true);
   });
