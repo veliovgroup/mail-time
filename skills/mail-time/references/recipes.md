@@ -30,7 +30,7 @@ const mailQueue = new MailTime({
   },
   transports,
   template: MailTime.Template,
-  from: (transport) => `"Acme" <${transport.options.from}>`,
+  from: (transport, details) => `"Acme" <${details.from}>`,
   onSent(email, info) {
     logger.info('mail.sent', { uuid: email.uuid, to: email.mailOptions[0].to, info });
   },
@@ -203,7 +203,10 @@ const transports = [
   nodemailer.createTransport({ host: 'smtp.sparkpostmail.com', /* ... */ }),
   nodemailer.createTransport({ host: 'smtp.example.com', /* ... */ }),
 ];
-// EVERY transport must expose .options.from for MailTime's `from(transport)` callback to work.
+// Plain-object transports expose `.options`, so setting a per-transport sender here works.
+// For a class-instance transporter it would not: nodemailer's internal `Mail.options` is
+// `{}` for anything with its own `.send()`. Read `details.from` in the callback below —
+// MailTime resolves it (`MailTime.transportFrom`) across every place it can live.
 for (const t of transports) {
   t.options.from = t.options.from || 'no-reply@example.com';
 }
@@ -256,8 +259,8 @@ await mailQueue.sendMail({
 ```
 
 Two placeholder forms:
-- `{{key}}` — string interpolation, **strips HTML** from the value (safe for `text`).
-- `{{{key}}}` — raw HTML interpolation (use for `{{{html}}}` in the envelope).
+- `{{key}}` — string interpolation. **HTML-escaped** in HTML contexts (`html`, `template`, `concatDelimiter`); verbatim in `text` bodies and subject headers.
+- `{{{key}}}` — raw interpolation, never escaped (use for `{{{html}}}` in the envelope, and only for values you produced).
 
 ## Scheduled / delayed emails
 

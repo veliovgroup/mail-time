@@ -112,7 +112,10 @@ Full code: `references/recipes.md`.
 - `concatEmails: true` on OTP / password-reset — separate instance
 - CosmosDB / DocumentDB / Mongoose Mongo client — unverified; prefer Postgres or Redis
 - Active-active Redis — duplicate claims; single primary or Postgres
-- `sendingTimeout` < worst SMTP roundtrip — duplicate send risk
+- `sendingTimeout` < worst SMTP roundtrip — duplicate send risk (v5 renews the claim mid-send, but `sendingTimeout` still sets crash-recovery latency; below `120000` MailTime warns)
+- `{{key}}` used as a raw-HTML slot — it is HTML-escaped in HTML contexts since v5; use `{{{key}}}` for markup you produced
+- reading `transport.options.from` in a `from()` callback — always `undefined` for class-instance transports; read the `details.from` second argument
+- `raw` in a queued letter — refused since v5 (bypasses composition and nodemailer's file/URL guards)
 - Custom `iterate` → `___send` not `___dispatch`; custom `update` without `tries === task.tries` CAS
 - Tests: missing `destroy()` / `drain()` after iterate — hung process
 

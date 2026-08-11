@@ -28,7 +28,7 @@ const mailQueue = new MailTime({
     lockOwnerId: 'mail-service-1',
   },
   transports: [/* ... */],
-  from: (transport) => `"App" <${transport.options.from}>`,
+  from: (transport, details) => `"App" <${details.from}>`,
 });
 await mailQueue.ready();
 ```

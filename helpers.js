@@ -220,6 +220,24 @@ const filterAddressField = (field, acceptedSet) => {
   return field;
 };
 
+const HTML_ESCAPES = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+};
+
+/**
+ * @name escapeHtml - Escape the five HTML-significant characters.
+ * @function
+ * @param {string} value
+ * @returns {string} `value` safe to interpolate into HTML text or an attribute value.
+ */
+const escapeHtml = (value) => {
+  return `${value}`.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char]);
+};
+
 /**
  * @name isSendClaimUpdate - Detect an atomic send-claim update (`{ isSending: true, tries: N }`).
  * @function
@@ -278,6 +296,7 @@ const isSendLeaseRemove = (opts) => {
 
 export {
   debug,
+  escapeHtml,
   logError,
   hasOwnProp,
   isPlainObject,

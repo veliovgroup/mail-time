@@ -225,6 +225,24 @@ const filterAddressField = (field, acceptedSet) => {
   return field;
 };
 
+const HTML_ESCAPES = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+};
+
+/**
+ * @name escapeHtml - Escape the five HTML-significant characters.
+ * @function
+ * @param {string} value
+ * @returns {string} `value` safe to interpolate into HTML text or an attribute value.
+ */
+const escapeHtml = (value) => {
+  return `${value}`.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char]);
+};
+
 /**
  * @name isSendClaimUpdate - Detect an atomic send-claim update (`{ isSending: true, tries: N }`).
  * @function
@@ -1855,7 +1873,7 @@ const PRESETS = Object.freeze({
     retries: 5,
     retryDelay: 2000,
     revolvingInterval: 1024,
-    sendingTimeout: 60_000,
+    sendingTimeout: 120_000,
     mode: 'batch',
     concurrency: 4,
     onError: defaultPresetOnError,
@@ -1908,7 +1926,7 @@ const PRESETS = Object.freeze({
     retries: 20,
     retryDelay: 5000,
     revolvingInterval: 1024,
-    sendingTimeout: 60_000,
+    sendingTimeout: 120_000,
     mode: 'batch',
     concurrency: 2,
     onError: defaultPresetOnError,
@@ -1974,6 +1992,38 @@ const mailTimePreset = (name, overrides) => {
 
 const noop = () => {};
 const queueMethods = ['ping', 'iterate', 'getPendingTo', 'push', 'remove', 'update', 'cancel'];
+
+/**
+ * Floor below which `sendingTimeout` is likely shorter than a real SMTP roundtrip
+ * (connect + greeting + STARTTLS + envelope + DATA, times MX rollover). A claim that
+ * expires mid-send is re-claimed by a peer, which delivers the same letter twice.
+ */
+const MIN_SAFE_SENDING_TIMEOUT = 120000;
+const DEFAULT_MAX_RENEWALS = 10;
+
+/**
+ * Fields a queued task may set under `{strictPayload: true}`. Everything else —
+ * `attachments`, `envelope`, `dkim`, `raw`, `icalEvent`, … — is dropped, because a
+ * process with queue-write access would otherwise inherit nodemailer's whole
+ * capability surface (local file read, URL fetch, sender/DKIM override).
+ */
+const STRICT_MAIL_FIELDS = [
+  'to',
+  'cc',
+  'bcc',
+  'replyTo',
+  'subject',
+  'text',
+  'html',
+  'headers',
+  'list',
+  'priority',
+  'encoding',
+  'textEncoding',
+  'inReplyTo',
+  'references',
+  'date',
+];
 
 const __withLease = (task, updateObj) => {
   if (task?.isSending === true && typeof task.tries === 'number' && typeof task.sendingAt === 'number') {
@@ -2093,7 +2143,7 @@ const buildRejectionErrorMap = (info) => {
   return map;
 };
 
-let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml><meta content="text/html; charset=utf-8"http-equiv=Content-Type><meta content="width=device-width,initial-scale=1"name=viewport><title>{{subject}}</title><style>body{-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:none;font-family:Tiempos,Georgia,Times,serif;font-weight:400;width:100%;height:100%;background:#fff;font-size:15px;color:#000;line-height:1.5}a{text-decoration:underline;border:0;color:#000;outline:0;color:inherit}a:hover{text-decoration:none}a[href^=sms],a[href^=tel]{text-decoration:none;color:#000;cursor:default}a img{border:none;text-decoration:none}td{font-family:Tiempos,Georgia,Times,serif;font-weight:400}hr{height:1px;border:none;width:100%;margin:0;margin-top:25px;margin-bottom:25px;background-color:#ECECEC}h1,h2,h3,h4,h5,h6{font-family:HelveticaNeue,"Helvetica Neue",Helvetica,Arial,sans-serif;font-weight:300;line-height:normal;margin-top:35px;margin-bottom:4px;margin-left:0;margin-right:0}h1{margin:23px 15px;font-size:25px}h2{margin-top:15px;font-size:21px}h3{font-weight:400;font-size:19px;border-bottom:1px solid #ECECEC}h4{font-weight:400;font-size:18px}h5{font-weight:400;font-size:17px}h6{font-weight:600;font-size:16px}h1 a,h2 a,h3 a,h4 a,h5 a,h6 a{text-decoration:none}pre{font-family:Consolas,Menlo,Monaco,Lucida Console,Liberation Mono,DejaVu Sans Mono,Bitstream Vera Sans Mono,Courier New,monospace,sans-serif;display:block;font-size:13px;padding:9.5px;margin:0 0 10px;line-height:1.42;color:#333;word-break:break-all;word-wrap:break-word;background-color:#f5f5f5;border:1px solid #ccc;border-radius:4px;text-align:left!important;max-width:100%;white-space:pre-wrap;width:auto;overflow:auto}code{font-size:13px;font-family:font-family: Consolas,Menlo,Monaco,Lucida Console,Liberation Mono,DejaVu Sans Mono,Bitstream Vera Sans Mono,Courier New,monospace,sans-serif;border:1px solid rgba(0,0,0,.223);border-radius:2px;padding:1px 2px;word-break:break-all;word-wrap:break-word}pre code{padding:0;font-size:inherit;color:inherit;white-space:pre-wrap;background-color:transparent;border:none;border-radius:0;word-break:break-all;word-wrap:break-word}td{text-align:center}table{border-collapse:collapse!important}.force-full-width{width:100%!important}</style><style media=screen>@media screen{h1,h2,h3,h4,h5,h6{font-family:\'Helvetica Neue\',Arial,sans-serif!important}td{font-family:Tiempos,Georgia,Times,serif!important}code,pre{font-family:Consolas,Menlo,Monaco,\'Lucida Console\',\'Liberation Mono\',\'DejaVu Sans Mono\',\'Bitstream Vera Sans Mono\',\'Courier New\',monospace,sans-serif!important}}</style><style media="only screen and (max-width:480px)">@media only screen and (max-width:480px){table[class=w320]{width:100%!important}}</style><body bgcolor=#FFFFFF class=body style=padding:0;margin:0;display:block;background:#fff;-webkit-text-size-adjust:none><table cellpadding=0 cellspacing=0 width=100% align=center><tr><td align=center valign=top bgcolor=#FFFFFF width=100%><center><table cellpadding=0 cellspacing=0 width=600 style="margin:0 auto"class=w320><tr><td align=center valign=top><table cellpadding=0 cellspacing=0 width=100% style="margin:0 auto;border-bottom:1px solid #ddd"bgcolor=#ECECEC><tr><td><h1>{{{subject}}}</h1></table><table cellpadding=0 cellspacing=0 width=100% style="margin:0 auto"bgcolor=#F2F2F2><tr><td><center><table cellpadding=0 cellspacing=0 width=100% style="margin:0 auto"><tr><td align=left style="text-align:left;padding:30px 25px">{{{html}}}</table></center></table></table></center></table>';
+let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml><meta content="text/html; charset=utf-8"http-equiv=Content-Type><meta content="width=device-width,initial-scale=1"name=viewport><title>{{subject}}</title><style>body{-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:none;font-family:Tiempos,Georgia,Times,serif;font-weight:400;width:100%;height:100%;background:#fff;font-size:15px;color:#000;line-height:1.5}a{text-decoration:underline;border:0;color:#000;outline:0;color:inherit}a:hover{text-decoration:none}a[href^=sms],a[href^=tel]{text-decoration:none;color:#000;cursor:default}a img{border:none;text-decoration:none}td{font-family:Tiempos,Georgia,Times,serif;font-weight:400}hr{height:1px;border:none;width:100%;margin:0;margin-top:25px;margin-bottom:25px;background-color:#ECECEC}h1,h2,h3,h4,h5,h6{font-family:HelveticaNeue,"Helvetica Neue",Helvetica,Arial,sans-serif;font-weight:300;line-height:normal;margin-top:35px;margin-bottom:4px;margin-left:0;margin-right:0}h1{margin:23px 15px;font-size:25px}h2{margin-top:15px;font-size:21px}h3{font-weight:400;font-size:19px;border-bottom:1px solid #ECECEC}h4{font-weight:400;font-size:18px}h5{font-weight:400;font-size:17px}h6{font-weight:600;font-size:16px}h1 a,h2 a,h3 a,h4 a,h5 a,h6 a{text-decoration:none}pre{font-family:Consolas,Menlo,Monaco,Lucida Console,Liberation Mono,DejaVu Sans Mono,Bitstream Vera Sans Mono,Courier New,monospace,sans-serif;display:block;font-size:13px;padding:9.5px;margin:0 0 10px;line-height:1.42;color:#333;word-break:break-all;word-wrap:break-word;background-color:#f5f5f5;border:1px solid #ccc;border-radius:4px;text-align:left!important;max-width:100%;white-space:pre-wrap;width:auto;overflow:auto}code{font-size:13px;font-family:font-family: Consolas,Menlo,Monaco,Lucida Console,Liberation Mono,DejaVu Sans Mono,Bitstream Vera Sans Mono,Courier New,monospace,sans-serif;border:1px solid rgba(0,0,0,.223);border-radius:2px;padding:1px 2px;word-break:break-all;word-wrap:break-word}pre code{padding:0;font-size:inherit;color:inherit;white-space:pre-wrap;background-color:transparent;border:none;border-radius:0;word-break:break-all;word-wrap:break-word}td{text-align:center}table{border-collapse:collapse!important}.force-full-width{width:100%!important}</style><style media=screen>@media screen{h1,h2,h3,h4,h5,h6{font-family:\'Helvetica Neue\',Arial,sans-serif!important}td{font-family:Tiempos,Georgia,Times,serif!important}code,pre{font-family:Consolas,Menlo,Monaco,\'Lucida Console\',\'Liberation Mono\',\'DejaVu Sans Mono\',\'Bitstream Vera Sans Mono\',\'Courier New\',monospace,sans-serif!important}}</style><style media="only screen and (max-width:480px)">@media only screen and (max-width:480px){table[class=w320]{width:100%!important}}</style><body bgcolor=#FFFFFF class=body style=padding:0;margin:0;display:block;background:#fff;-webkit-text-size-adjust:none><table cellpadding=0 cellspacing=0 width=100% align=center><tr><td align=center valign=top bgcolor=#FFFFFF width=100%><center><table cellpadding=0 cellspacing=0 width=600 style="margin:0 auto"class=w320><tr><td align=center valign=top><table cellpadding=0 cellspacing=0 width=100% style="margin:0 auto;border-bottom:1px solid #ddd"bgcolor=#ECECEC><tr><td><h1>{{subject}}</h1></table><table cellpadding=0 cellspacing=0 width=100% style="margin:0 auto"bgcolor=#F2F2F2><tr><td><center><table cellpadding=0 cellspacing=0 width=100% style="margin:0 auto"><tr><td align=left style="text-align:left;padding:30px 25px">{{{html}}}</table></center></table></table></center></table>';
 
 /**
  * @typedef {import('./presets.js').MailTimePresetName} MailTimePresetName
@@ -2152,7 +2202,11 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
  */
 
 /**
- * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, verifyTransports?: boolean, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask | null, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
+ * @typedef {{ index: number, from: string | undefined }} MailTimeFromDetails
+ */
+
+/**
+ * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport, details: MailTimeFromDetails) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, shouldFailOver?: (error: unknown, info: object, email: MailTimeTask) => boolean, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, renewClaim?: boolean | number, maxRenewals?: number, strictPayload?: boolean, allowedMailFields?: string[], verifyTransports?: boolean, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask | null, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
  */
 
 /** Class of MailTime */
@@ -2214,6 +2268,33 @@ class MailTime {
     this.mode = (opts.mode === 'one' || opts.mode === 'batch') ? opts.mode : 'batch';
     this.concurrency = (typeof opts.concurrency === 'number' && opts.concurrency > 0 && Number.isFinite(opts.concurrency)) ? Math.floor(opts.concurrency) : 1;
     this.sendingTimeout = (typeof opts.sendingTimeout === 'number' && opts.sendingTimeout > 0) ? opts.sendingTimeout : 300000;
+    if (this.sendingTimeout < MIN_SAFE_SENDING_TIMEOUT) {
+      logError(`{sendingTimeout: ${this.sendingTimeout}} is below the ${MIN_SAFE_SENDING_TIMEOUT}ms safe floor — a claim that expires while SMTP is still in flight is re-claimed by a peer and the letter is delivered twice. Raise {sendingTimeout} above the worst-case SMTP roundtrip.`);
+    }
+
+    // Claim renewal: MailTime has no way to know how long a transport will take, so a
+    // long-but-healthy send used to lose its lock to a "recovery" worker. While a send
+    // is in flight the claim is re-stamped every {renewClaim} ms — bounded by
+    // {maxRenewals} so a genuinely wedged send is still recovered, just later.
+    if (opts.renewClaim === false || opts.renewClaim === 0) {
+      this.renewClaim = 0;
+    } else if (typeof opts.renewClaim === 'number' && opts.renewClaim > 0) {
+      this.renewClaim = Math.floor(opts.renewClaim);
+    } else {
+      this.renewClaim = Math.max(1000, Math.floor(this.sendingTimeout / 3));
+    }
+    this.maxRenewals = (typeof opts.maxRenewals === 'number' && opts.maxRenewals >= 0) ? Math.floor(opts.maxRenewals) : DEFAULT_MAX_RENEWALS;
+
+    // Transport fail-over policy. Rotating on *any* error can resubmit a letter the
+    // MX already accepted; a transport that knows better says so.
+    this.shouldFailOver = (typeof opts.shouldFailOver === 'function') ? opts.shouldFailOver.bind(this) : null;
+
+    this.strictPayload = opts.strictPayload === true;
+    this.allowedMailFields = new Set([
+      ...STRICT_MAIL_FIELDS,
+      ...(Array.isArray(opts.allowedMailFields) ? opts.allowedMailFields.filter((field) => typeof field === 'string') : []),
+    ]);
+
     this.__isDestroyed = false;
     this.__abortInFlight = false;
     this.__isPaused = false;
@@ -2272,6 +2353,8 @@ class MailTime {
     this.__debug(`INITIALIZING [mode: ${this.mode}]`);
     this.__debug(`INITIALIZING [concurrency: ${this.concurrency}]`);
     this.__debug(`INITIALIZING [sendingTimeout: ${this.sendingTimeout}]`);
+    this.__debug(`INITIALIZING [renewClaim: ${this.renewClaim}]`);
+    this.__debug(`INITIALIZING [strictPayload: ${this.strictPayload}]`);
 
     /** SERVER-SPECIFIC CHECKS AND CONFIG */
     if (this.type === 'server') {
@@ -2507,6 +2590,10 @@ class MailTime {
       throw new Error('[mail-time] [sendMail] `html` nor `text` field is present, at least one of those fields is required');
     }
 
+    if (opts.raw !== void 0) {
+      throw new Error('[mail-time] [sendMail] `raw` is not supported: it bypasses composition, so `template`, `concatEmails`, and the `from()` callback would silently stop applying — and nodemailer historically let a message-level `raw` bypass `disableFileAccess`/`disableUrlAccess`. Pass `html` / `text` instead.');
+    }
+
     let sendAt = opts.sendAt;
     if (sendAt instanceof Date) {
       sendAt = +sendAt;
@@ -2641,7 +2728,10 @@ class MailTime {
 
     let transportIndex = task.transport;
 
-    if (this.strategy === 'backup' && this.transports.length > 1 && (task.tries % this.failsToNext) === 0) {
+    if (this.strategy === 'backup'
+      && this.transports.length > 1
+      && (task.tries % this.failsToNext) === 0
+      && this.___mayFailOver(error, info, task)) {
       transportIndex = this.___nextHealthyTransport(transportIndex);
     }
 
@@ -2703,12 +2793,18 @@ class MailTime {
    * @internal
    * @memberOf MailTime
    * @name ___render
-   * @description Render Mustache-like placeholders
+   * @description Render Mustache-like placeholders. `{{{key}}}` is always verbatim.
+   * `{{key}}` is HTML-escaped in HTML contexts (`html`, `template`, `concatDelimiter`) —
+   * that is what double-brace means everywhere else, and the previous strip-tags pass was
+   * not a safety net: it needs a closing `>`, so an unterminated `<a href="…` survived
+   * into the rendered body. Text bodies and subject headers are not HTML, so `{{key}}`
+   * substitutes verbatim there.
    * @param {string} _string - Template with Mustache-like placeholders
    * @param {Record<string, any>} replacements - Blaze/Mustache-like helpers Object
+   * @param {boolean} [isHtml=true] - `false` for text/plain bodies and header values
    * @returns {string}
    */
-  ___render(_string, replacements) {
+  ___render(_string, replacements, isHtml = true) {
     let string = _string;
     const matchHTML = string.match(/\{{3}\s?([a-zA-Z0-9\-_]+)\s?\}{3}/g);
     if (matchHTML) {
@@ -2725,7 +2821,8 @@ class MailTime {
       for (let i = 0; i < matchStr.length; i++) {
         const key = matchStr[i].slice(2, -2).trim();
         if (hasOwnProp(replacements, key) && replacements[key] !== null && replacements[key] !== void 0) {
-          string = string.replace(matchStr[i], `${replacements[key]}`.replace(/<(?:.|\n)*?>/gm, ''));
+          const value = `${replacements[key]}`;
+          string = string.replace(matchStr[i], isHtml ? escapeHtml(value) : value);
         }
       }
     }
@@ -2764,7 +2861,7 @@ class MailTime {
     const isMulti = mailOptionsList.length > 1;
 
     for (let i = 0; i < mailOptionsList.length; i++) {
-      const mailOption = { ...mailOptionsList[i] };
+      const mailOption = this.___applyPayloadPolicy({ ...mailOptionsList[i] });
 
       if (mailOption.html) {
         const rendered = this.___render(mailOption.html, mailOption);
@@ -2777,7 +2874,7 @@ class MailTime {
       }
 
       if (mailOption.text) {
-        const rendered = this.___render(mailOption.text, mailOption);
+        const rendered = this.___render(mailOption.text, mailOption, false);
         if (isMulti) {
           compiledOpts.text += '\r\n' + rendered;
         } else {
@@ -2795,11 +2892,14 @@ class MailTime {
 
     if (isMulti) {
       const rawSubject = task.concatSubject || this.concatSubject || compiledOpts.subject;
-      compiledOpts.subject = this.___render(rawSubject, { count: mailOptionsList.length });
+      compiledOpts.subject = this.___render(rawSubject, { count: mailOptionsList.length }, false);
     }
 
     if (!compiledOpts.from && this.from) {
-      compiledOpts.from = this.from(transport);
+      compiledOpts.from = this.from(transport, {
+        index: this.transports.indexOf(transport),
+        from: MailTime.transportFrom(transport),
+      });
     }
 
     const acceptedSet = collectAcceptedSet(task);
@@ -2809,7 +2909,65 @@ class MailTime {
       compiledOpts.bcc = filterAddressField(compiledOpts.bcc, acceptedSet);
     }
 
+    if (this.strictPayload) {
+      compiledOpts.disableFileAccess = true;
+      compiledOpts.disableUrlAccess = true;
+    }
+
     return compiledOpts;
+  }
+
+  /**
+   * @internal
+   * @memberOf MailTime
+   * @name ___applyPayloadPolicy
+   * @description Narrow one queued mail option to what a task is allowed to set. `raw` is
+   * always dropped: it bypasses composition (so `template`, `concatEmails` and the
+   * `from()` callback silently stop applying) and historically bypassed nodemailer's
+   * `disableFileAccess`/`disableUrlAccess` with it. Under `{strictPayload: true}` only
+   * `allowedMailFields` survive.
+   * @param {MailTimeMailOptions} mailOption - a single queued mail option object
+   * @returns {MailTimeMailOptions}
+   */
+  ___applyPayloadPolicy(mailOption) {
+    if (mailOption.raw !== void 0) {
+      delete mailOption.raw;
+      logError('[___compileMailOpts] dropped {raw} from a queued task — `raw` bypasses composition and is never sent by MailTime');
+    }
+
+    if (!this.strictPayload) {
+      return mailOption;
+    }
+
+    const allowed = {};
+    for (const key of Object.keys(mailOption)) {
+      if (this.allowedMailFields.has(key)) {
+        allowed[key] = mailOption[key];
+      } else {
+        this.__debug('[___applyPayloadPolicy] dropped non-allowlisted field', key);
+      }
+    }
+    return allowed;
+  }
+
+  /**
+   * @static
+   * @memberOf MailTime
+   * @name transportFrom
+   * @description Best-effort sender address for a transport. `nodemailer.createTransport()`
+   * only exposes `.options` for *plain-object* configs — for a class-instance transporter
+   * (anything with its own `.send()`) nodemailer's internal `Mail.options` is always `{}`,
+   * so `transport.options.from` silently reads `undefined`. This walks the places the
+   * address can actually live.
+   * @param {MailTimeTransport} transport
+   * @returns {string | undefined}
+   */
+  static transportFrom(transport) {
+    return transport?.options?.from
+      || transport?.transporter?.options?.from
+      || transport?._defaults?.from
+      || transport?._options?.from
+      || void 0;
   }
 
   /**
@@ -2874,6 +3032,103 @@ class MailTime {
       }
       mo.rejected = rejected;
     }
+  }
+
+  /**
+   * @internal
+   * @memberOf MailTime
+   * @name ___mayFailOver
+   * @description Whether this failure may be retried on the *next* transport. Rotating on
+   * any error can resubmit a letter the receiving MTA already accepted (or may have
+   * accepted — a socket that died during `DATA` is indistinguishable from one that died
+   * before it). A transport signals "do not fail over" with `error.mayFailOver = false`;
+   * the `shouldFailOver(error, info, task)` option overrides both.
+   * @param {unknown} error - error returned by the transport
+   * @param {object} info - info object returned by the transport
+   * @param {MailTimeTask} task - email's task object from Storage
+   * @returns {boolean}
+   */
+  ___mayFailOver(error, info, task) {
+    if (this.shouldFailOver) {
+      return this.shouldFailOver(error, info, task) !== false;
+    }
+    return !(error && typeof error === 'object' && error.mayFailOver === false);
+  }
+
+  /**
+   * @internal
+   * @memberOf MailTime
+   * @name ___startClaimRenewal
+   * @description Hold a claim alive while its SMTP roundtrip runs. MailTime 4.x stamped
+   * `sendingAt` once at claim time, so any send slower than `sendingTimeout` lost its lock
+   * to a "recovery" worker and the letter went out twice. The renewal is a lease-guarded
+   * update — it succeeds only while *this* worker still owns the row — and is bounded by
+   * `maxRenewals` so a genuinely wedged send is still recovered.
+   * @param {MailTimeTask} task - claimed task, with `isSending`/`sendingAt`/`tries` set
+   * @returns {{ stop: () => void }}
+   */
+  ___startClaimRenewal(task) {
+    if (!this.renewClaim || this.type !== 'server') {
+      return { stop: noop };
+    }
+
+    let stopped = false;
+    let renewals = 0;
+    let timer = null;
+    const stop = () => {
+      if (stopped) {
+        return;
+      }
+      stopped = true;
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+
+    timer = setInterval(async () => {
+      if (stopped || this.__isDestroyed || this.__abortInFlight) {
+        stop();
+        return;
+      }
+
+      if (renewals >= this.maxRenewals) {
+        this.__debug('[private renewClaim] renewal budget exhausted; letting the claim go stale', task.uuid);
+        stop();
+        return;
+      }
+      renewals += 1;
+
+      // Strictly greater than the current stamp: storages that report "modified" only on
+      // an actual value change would otherwise read a same-millisecond renewal as a no-op.
+      const renewedAt = Math.max(Date.now(), (typeof task.sendingAt === 'number' ? task.sendingAt : 0) + 1);
+      let renewed = false;
+      try {
+        renewed = await this.queue.update(task, __withLease(task, {
+          isSending: true,
+          sendingAt: renewedAt,
+        }));
+      } catch (renewError) {
+        logError('[private renewClaim] storage error during claim renewal', renewError);
+        stop();
+        return;
+      }
+
+      if (!renewed) {
+        this.__debug('[private renewClaim] lease lost; stopping renewal', task.uuid);
+        stop();
+        return;
+      }
+
+      task.sendingAt = renewedAt;
+      this.__debug(`[private renewClaim] renewed ${renewals}/${this.maxRenewals}`, task.uuid);
+    }, this.renewClaim);
+
+    if (typeof timer.unref === 'function') {
+      timer.unref();
+    }
+
+    return { stop };
   }
 
   /**
@@ -2956,131 +3211,140 @@ class MailTime {
       const transport = this.transports[transportIndex];
 
       const compiledOpts = this.___compileMailOpts(transport, task);
+      const renewal = this.___startClaimRenewal(task);
 
-      await new Promise((resolve) => {
-        transport.sendMail(compiledOpts, async (error, info) => {
-          if (this.__abortInFlight) {
-            this.__debug('[private send] instance destroyed mid-send; leaving claim for stale-lock recovery', task.uuid);
-            resolve();
-            return;
-          }
-          this.__debug('[private send] [sending]', { error, info });
-          try {
-            if (error) {
-              await this.___handleError(task, error, info);
+      try {
+        await new Promise((resolve) => {
+          transport.sendMail(compiledOpts, async (error, info) => {
+            // The roundtrip has settled — stop extending the lease before any completion
+            // write, so the guard below sees the last `sendingAt` this worker persisted.
+            renewal.stop();
+            if (this.__abortInFlight) {
+              this.__debug('[private send] instance destroyed mid-send; leaving claim for stale-lock recovery', task.uuid);
+              resolve();
               return;
             }
-
-            const acceptedAddrs = Array.isArray(info?.accepted)
-              ? info.accepted.map(extractEmail).filter((addr) => typeof addr === 'string')
-              : [];
-
-            if (acceptedAddrs.length === 0) {
-              await this.___handleError(task, new Error('Message not accepted or Greeting never received'), info);
-              return;
-            }
-
-            this.___trackAcceptedRecipients(task, acceptedAddrs);
-
-            const allRecipients = collectAllRecipients(task);
-            const allAccepted = collectAcceptedSet(task);
-            let isFullyDelivered = true;
-            for (const addr of allRecipients) {
-              if (!allAccepted.has(addr)) {
-                isFullyDelivered = false;
-                break;
-              }
-            }
-
-            if (isFullyDelivered) {
-              this.__debug(`email successfully sent, attempts: #${task.tries}, transport #${transportIndex} to: `, compiledOpts.to);
-
-              const leaseRemove = __leaseRemoveOpts(task);
-              const leaseUpdate = __withLease(task, {
-                isSent: true,
-                isSending: false,
-                sendingAt: 0,
-                mailOptions: task.mailOptions,
-              });
-
-              let completed = false;
-              if (!this.keepHistory) {
-                completed = await this.queue.remove(task, leaseRemove);
-              } else {
-                completed = await this.queue.update(task, leaseUpdate);
-              }
-
-              if (!completed) {
-                this.__debug('[private send] lease lost before success completion, skipping onSent', task.uuid);
+            this.__debug('[private send] [sending]', { error, info });
+            try {
+              if (error) {
+                await this.___handleError(task, error, info);
                 return;
               }
 
-              // Persist first, then mirror to in-memory task — a superseded worker must not lie to onSent.
-              task.isSent = true;
-              task.isSending = false;
-              task.sendingAt = 0;
-              this.onSent(task, info);
-              return;
-            }
+              const acceptedAddrs = Array.isArray(info?.accepted)
+                ? info.accepted.map(extractEmail).filter((addr) => typeof addr === 'string')
+                : [];
 
-            if (task.tries >= this.maxTries) {
-              this.___finalizeRejected(task, info);
-
-              const leaseRemove = __leaseRemoveOpts(task);
-              const leaseUpdate = __withLease(task, {
-                isSent: false,
-                isFailed: true,
-                isSending: false,
-                sendingAt: 0,
-                mailOptions: task.mailOptions,
-              });
-
-              let finalized = false;
-              if (!this.keepHistory) {
-                finalized = await this.queue.remove(task, leaseRemove);
-              } else {
-                finalized = await this.queue.update(task, leaseUpdate);
-              }
-
-              if (!finalized) {
-                this.__debug('[private send] lease lost before partial-failure completion, skipping onError', task.uuid);
+              if (acceptedAddrs.length === 0) {
+                await this.___handleError(task, new Error('Message not accepted or Greeting never received'), info);
                 return;
               }
 
-              // Persist first, then mirror to in-memory task — a superseded worker must not lie to onError.
-              task.isSent = false;
-              task.isFailed = true;
-              task.isSending = false;
+              this.___trackAcceptedRecipients(task, acceptedAddrs);
 
-              const rejectedAddrs = [];
-              for (const mo of task.mailOptions) {
-                for (const r of (mo.rejected || [])) {
-                  rejectedAddrs.push(r.address);
+              const allRecipients = collectAllRecipients(task);
+              const allAccepted = collectAcceptedSet(task);
+              let isFullyDelivered = true;
+              for (const addr of allRecipients) {
+                if (!allAccepted.has(addr)) {
+                  isFullyDelivered = false;
+                  break;
                 }
               }
-              const partialError = new Error(`Recipients rejected after ${task.tries} attempts: ${rejectedAddrs.join(', ')}`);
-              this.__debug('[private send] Partial delivery exhausted retries; rejected: ', rejectedAddrs);
-              this.onError(partialError, task, info);
-              return;
-            }
 
-            const nextSendAt = Date.now() + this.retryDelay;
-            const released = await this.queue.update(task, __withLease(task, {
-              isSending: false,
-              sendingAt: 0,
-              sendAt: nextSendAt,
-              mailOptions: task.mailOptions,
-            }));
-            if (!released) {
-              this.__debug('[private send] lease lost before partial retry release', task.uuid);
-              return;
+              if (isFullyDelivered) {
+                this.__debug(`email successfully sent, attempts: #${task.tries}, transport #${transportIndex} to: `, compiledOpts.to);
+
+                const leaseRemove = __leaseRemoveOpts(task);
+                const leaseUpdate = __withLease(task, {
+                  isSent: true,
+                  isSending: false,
+                  sendingAt: 0,
+                  mailOptions: task.mailOptions,
+                });
+
+                let completed = false;
+                if (!this.keepHistory) {
+                  completed = await this.queue.remove(task, leaseRemove);
+                } else {
+                  completed = await this.queue.update(task, leaseUpdate);
+                }
+
+                if (!completed) {
+                  this.__debug('[private send] lease lost before success completion, skipping onSent', task.uuid);
+                  return;
+                }
+
+                // Persist first, then mirror to in-memory task — a superseded worker must not lie to onSent.
+                task.isSent = true;
+                task.isSending = false;
+                task.sendingAt = 0;
+                this.onSent(task, info);
+                return;
+              }
+
+              if (task.tries >= this.maxTries) {
+                this.___finalizeRejected(task, info);
+
+                const leaseRemove = __leaseRemoveOpts(task);
+                const leaseUpdate = __withLease(task, {
+                  isSent: false,
+                  isFailed: true,
+                  isSending: false,
+                  sendingAt: 0,
+                  mailOptions: task.mailOptions,
+                });
+
+                let finalized = false;
+                if (!this.keepHistory) {
+                  finalized = await this.queue.remove(task, leaseRemove);
+                } else {
+                  finalized = await this.queue.update(task, leaseUpdate);
+                }
+
+                if (!finalized) {
+                  this.__debug('[private send] lease lost before partial-failure completion, skipping onError', task.uuid);
+                  return;
+                }
+
+                // Persist first, then mirror to in-memory task — a superseded worker must not lie to onError.
+                task.isSent = false;
+                task.isFailed = true;
+                task.isSending = false;
+
+                const rejectedAddrs = [];
+                for (const mo of task.mailOptions) {
+                  for (const r of (mo.rejected || [])) {
+                    rejectedAddrs.push(r.address);
+                  }
+                }
+                const partialError = new Error(`Recipients rejected after ${task.tries} attempts: ${rejectedAddrs.join(', ')}`);
+                this.__debug('[private send] Partial delivery exhausted retries; rejected: ', rejectedAddrs);
+                this.onError(partialError, task, info);
+                return;
+              }
+
+              const nextSendAt = Date.now() + this.retryDelay;
+              const released = await this.queue.update(task, __withLease(task, {
+                isSending: false,
+                sendingAt: 0,
+                sendAt: nextSendAt,
+                mailOptions: task.mailOptions,
+              }));
+              if (!released) {
+                this.__debug('[private send] lease lost before partial retry release', task.uuid);
+                return;
+              }
+              this.__debug(`[private send] Partial delivery, next attempt at ${new Date(nextSendAt)}: #${task.tries}/${this.maxTries} for remaining recipients`);
+            } finally {
+              resolve();
             }
-            this.__debug(`[private send] Partial delivery, next attempt at ${new Date(nextSendAt)}: #${task.tries}/${this.maxTries} for remaining recipients`);
-          } finally {
-            resolve();
-          }
+          });
         });
-      });
+      } finally {
+        // A transport that throws synchronously never reaches the callback above.
+        renewal.stop();
+      }
     } catch (e) {
       if (this.__abortInFlight) {
         this.__debug('[private send] instance destroyed mid-send; suppressing runtime exception', e);

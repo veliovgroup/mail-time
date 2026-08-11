@@ -338,7 +338,7 @@ const mailTime = new MailTime(mailTimePreset('otp', {
 | Preset          | Shape                                                                                                                                              | Best for                                                                                |
 | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | `transactional` | `retries: 30`, `retryDelay: 10s`, `concatEmails: false`, `concurrency: 1`, `josk.zombieTime: 120s`                                                 | Receipts, password resets, account changes, welcome emails.                             |
-| `otp`           | `retries: 5`, `retryDelay: 2s`, snappy `revolvingInterval: 1024` + jitter `256/1024`, `concurrency: 4`, `sendingTimeout: 60s`                      | Sign-in codes, 2FA, verification codes — stale OTPs aren't worth resending forever.     |
+| `otp`           | `retries: 5`, `retryDelay: 2s`, snappy `revolvingInterval: 1024` + jitter `256/1024`, `concurrency: 4`, `sendingTimeout: 2min`                     | Sign-in codes, 2FA, verification codes — stale OTPs aren't worth resending forever.     |
 | `newsletter`    | `concatEmails: true` with a 5-minute fold window, `concatSubject: 'Your updates'`, `retries: 5`, `retryDelay: 60s`, `concurrency: 2`, `sendingTimeout: 10min`, `josk.zombieTime: 5min` | Scheduled digests, weekly summaries, "what's new" emails.                               |
 | `marketing`     | `retries: 10`, `retryDelay: 30s`, `concatEmails: false`, `concurrency: 5`, `josk.zombieTime: 3min`                                                 | Promotional / campaign blasts where each letter is unique.                              |
 | `notifications` | `concatEmails: true` with a 60-second fold window, `concatSubject: 'New activity'`, `retries: 8`, `retryDelay: 30s`, `concurrency: 3`, `josk.zombieTime: 3min` | App / social activity (likes, mentions, follows) where bursts collapse into one letter. |
@@ -372,7 +372,11 @@ Defaults fit moderate traffic in a single region. Reach for a [preset](#settings
 | ---------------------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `mode`                                         | `'batch'`        | `'one'` to claim a single row per tick (fairness over throughput across cluster nodes)                                             |
 | `concurrency`                                  | `1`              | Raise to send N emails in parallel per instance. Bounded by your SMTP / API rate limits. The CAS on `isSending` keeps it safe.     |
-| `sendingTimeout`                               | `300000` (5 min) | Stale-lock recovery window. Must exceed worst-case SMTP roundtrip; lower it only when you're confident sends never take that long. |
+| `sendingTimeout`                               | `300000` (5 min) | Stale-lock recovery window. Must exceed worst-case SMTP roundtrip; MailTime logs a warning below `120000`. |
+| `renewClaim`                                   | `sendingTimeout / 3` | Set `false` to go back to a single stamp at claim time. Lower it if your storage round-trip is slow relative to `sendingTimeout`. |
+| `maxRenewals`                                  | `10`             | Hard ceiling on how long one send may hold its claim (`sendingTimeout + maxRenewals × renewClaim`). Lower it to recover wedged sends sooner. |
+| `shouldFailOver`                               | —                | Set when your transport can tell "never delivered" from "may have been delivered" — see [Transport fail-over](#transport-fail-over). |
+| `strictPayload`                                | `false`          | Turn on when anything other than your own app can write to the queue storage. |
 | `revolvingInterval`                            | `1536` ms        | Lower → faster pickup; higher → less scheduler I/O                                                                                 |
 | `josk.minRevolvingDelay` / `maxRevolvingDelay` | `512` / `2048`   | Lower both → snappier polls, more storage load                                                                                     |
 | `josk.zombieTime`                              | `60000`          | **Never below 60s.** Iterate releases the JoSk lease as soon as scanning ends — only a stalled storage scan can blow this.         |
@@ -385,12 +389,72 @@ Defaults fit moderate traffic in a single region. Reach for a [preset](#settings
 
 For deeper JoSk semantics (lease lifecycle, scheduler adapters, recurring tasks), install the JoSk skill: **`npx skills add veliovgroup/josk`**.
 
+## Transport fail-over
+
+With `strategy: 'backup'` a failing transport is abandoned for the next one after `failsToNext` consecutive failures. That is the right move when the failure means *nothing was delivered* — a refused connection, a TLS handshake that never completed, a 5xx on `MAIL FROM`. It is the wrong move when the receiving MTA may already hold the message: a socket that dies during `DATA` is indistinguishable from one that dies before it, and re-sending through a second provider delivers the letter twice.
+
+MailTime cannot tell those apart — only the transport can. Two ways to say so:
+
+```js
+// 1. From the transport: tag the error.
+const error = new Error('MX went silent after DATA');
+error.mayFailOver = false;   // MailTime keeps this transport and retries here
+done(error);
+
+// 2. From the queue: decide centrally.
+new MailTime({
+  // ...
+  shouldFailOver(error, info, email) {
+    // Never cross providers once the body is on the wire.
+    return error?.code !== 'EMESSAGE' && error?.stage !== 'data';
+  },
+});
+```
+
+`shouldFailOver` is consulted only when rotation would otherwise happen, and it overrides `error.mayFailOver`. Returning `false` keeps the current transport; the retry itself still happens on the normal `retryDelay` schedule.
+
+## Queue payload trust
+
+A queued letter is a nodemailer message options object, and nodemailer's options are a *capability surface*: `attachments[].path` reads a local file, `attachments[].href` fetches a URL from inside your network, `envelope` and `dkim` decide who the message authenticates as. MailTime exists so **other processes** enqueue over shared storage — which means anything that can write to that storage inherits those capabilities.
+
+Two layers:
+
+- **Always on:** `raw` is refused at `sendMail()` and stripped from any letter that reached storage anyway. It bypasses composition (so `template`, `concatEmails` and `from()` silently stop applying), and nodemailer let a message-level `raw` bypass `disableFileAccess` / `disableUrlAccess` before 9.0.1.
+- **Opt-in — `strictPayload: true`:** every letter is narrowed to an allowlist (`to`, `cc`, `bcc`, `replyTo`, `subject`, `text`, `html`, `headers`, `list`, `priority`, `encoding`, `textEncoding`, `inReplyTo`, `references`, `date`), and `disableFileAccess` / `disableUrlAccess` are forced on. Extend it with `allowedMailFields: ['attachments']` when you genuinely need a field back.
+
+```js
+new MailTime({
+  // ...
+  strictPayload: true,
+  allowedMailFields: ['attachments'],  // opt a field back in, deliberately
+});
+```
+
+Leave `strictPayload` off only when the queue storage is reachable by your application alone.
+
+## Resolving the sender
+
+`from` may be a function. It receives the selected transport **and** a details object:
+
+```js
+new MailTime({
+  // ...
+  from: (transport, details) => `"Acme" <${details.from}>`,
+});
+```
+
+`details` is `{ index, from }` — the transport's position in `transports`, and its sender address resolved by MailTime.
+
+Read `details.from` rather than `transport.options.from`. `nodemailer.createTransport()` only populates `.options` for *plain-object* configs; for a class-instance transporter (anything with its own `.send()` — most custom and direct-MX transports) nodemailer's internal `Mail.options` is always `{}`, so `transport.options.from` silently reads `undefined` and every letter goes out under whatever your fallback is. `MailTime.transportFrom(transport)` exposes the same resolution if you need it elsewhere.
+
 ## Templates
 
 Two Mustache-like placeholder forms:
 
-- `{{key}}` — string interpolation, strips HTML from the value (safe for plain text).
-- `{{{key}}}` — raw HTML interpolation.
+- `{{key}}` — string interpolation. **HTML-escaped** in HTML contexts (`html`, `template`, `concatDelimiter`); verbatim in `text` bodies and subject headers, which are not HTML.
+- `{{{key}}}` — raw interpolation, never escaped. Only use it for values you produced yourself.
+
+> **Changed:** `{{key}}` used to strip tags rather than escape them. Stripping was never a safety net — the pass needs a closing `>`, so an unterminated `<a href="…` survived into the rendered body. It also mangled legitimate text like `x < y` or `<ops@example.com>` in plain-text parts, which now interpolate verbatim. If you relied on tag-stripping, strip before you enqueue.
 
 Every `sendMail` option is available inside `text`, `html`, and the wrapping template:
 
@@ -442,11 +506,16 @@ await mailQueue.sendMail({
 | `revolvingInterval`           | `number` (ms)                                       | `1536`                     | Queue iteration interval.                                                                                                                                                                   |
 | `mode`                        | `'one' \| 'batch'`                                  | `'batch'`                  | `'batch'` claims every due row per tick; `'one'` claims a single row per tick.                                                                                                              |
 | `concurrency`                 | `number`                                            | `1`                        | Parallel SMTPs per instance. The CAS on `isSending` prevents duplicate delivery.                                                                                                            |
-| `sendingTimeout`              | `number` (ms)                                       | `300000`                   | Window after which a stuck `isSending=true` row becomes eligible again. Must exceed worst-case SMTP roundtrip.                                                                              |
+| `sendingTimeout`              | `number` (ms)                                       | `300000`                   | Window after which a stuck `isSending=true` row becomes eligible again. Must exceed worst-case SMTP roundtrip; values below `120000` log a warning.                                          |
+| `renewClaim`                  | `boolean \| number` (ms)                            | `sendingTimeout / 3`       | Re-stamp `sendingAt` on the claimed row while its SMTP roundtrip runs, so a slow-but-healthy send never loses its lock to a recovery worker. `false` restores the v4 single-stamp behaviour. |
+| `maxRenewals`                 | `number`                                            | `10`                       | Renewal budget per send. Once spent, the claim is allowed to go stale so a genuinely wedged send is still recovered — worst case `sendingTimeout + maxRenewals × renewClaim`.                |
+| `shouldFailOver`              | `(error, info, email) => boolean`                   | —                          | Veto rotating to the next transport for this failure. Default: rotate unless the error carries `mayFailOver === false`. See [Transport fail-over](#transport-fail-over).                     |
+| `strictPayload`               | `boolean`                                           | `false`                    | Narrow every queued letter to `allowedMailFields` and force nodemailer's `disableFileAccess` / `disableUrlAccess`. See [Queue payload trust](#queue-payload-trust).                          |
+| `allowedMailFields`           | `string[]`                                          | —                          | Extra field names permitted under `strictPayload` (added to the built-in allowlist).                                                                                                        |
 | `verifyTransports`            | `boolean`                                           | `true`                     | Probe each transport via `transport.verify()` once at `ready()`. Failing transports are marked unusable, surfaced through `onError(error, null, { transportIndex, phase: 'verify' })`, and skipped during rotation/fallback. Throws from `ready()` if **every** transport fails. Transports without a `verify()` method are treated as healthy. |
 | `template`                    | `string`                                            | `'{{{html}}}'`             | Default envelope.                                                                                                                                                                           |
 | `prefix`                      | `string`                                            | `''`                       | Queue namespace. **Same** on every `client` and `server` for one logical queue; **different** per email class. Inherited by the queue adapter; JoSk scheduler uses `mailTimeQueue<prefix>`. |
-| `from`                        | `string \| (transport) => string`                   | —                          | Strongly recommended for spam-passing `From:` formatting.                                                                                                                                   |
+| `from`                        | `string \| (transport, details) => string`          | —                          | Strongly recommended for spam-passing `From:` formatting. `details` is `{ index, from }` — see [Resolving the sender](#resolving-the-sender).                                                |
 | `debug`                       | `boolean`                                           | `false`                    | Verbose logs.                                                                                                                                                                               |
 | `onSent(email, info)`         | `function`                                          | —                          | Called once the task is fully delivered. `email.mailOptions[i].accepted` lists every address that got through (across all attempts).                                                        |
 | `onError(error, email, info)` | `function`                                          | —                          | Called once the retry budget is exhausted with at least one un-accepted recipient. `email.mailOptions[i].rejected` lists each un-delivered address with its last error. Also fires once per transport that fails `verify()` at startup with `email === null` and `info = { transportIndex, phase: 'verify' }`. |
@@ -511,6 +580,7 @@ Upgrade checklists, adapter contract changes, and rollout notes live in the docs
 |------|-----|------------|
 | 3.x  | 4.1 | [v3 → v4](https://github.com/veliovgroup/mail-time/blob/master/docs/migration-v3-v4.md) |
 | 4.0  | 4.1 | [v4.0 → v4.1](https://github.com/veliovgroup/mail-time/blob/master/docs/migration-v4-v4.1.md) |
+| 4.1  | 5.0 | [v4.1 → v5](https://github.com/veliovgroup/mail-time/blob/master/docs/migration-v4.1-v5.md) |
 
 New in v4 (opt-in): `mailTimePreset`, `concurrency`/`mode`, `sendingTimeout`, `drain()`/`pause()`/`resume()`, per-recipient handling, AI skills bundle.
 

@@ -38,7 +38,11 @@ One JoSk `setInterval` per `prefix` (`mailTimeQueue<prefix>` → `queue.iterate(
 |---|---|---|
 | `mode` | `'batch'` | `'one'` claims a single row per tick (fairness). |
 | `concurrency` | `1` | Parallel SMTPs per instance. Increase for throughput; cap by SMTP rate limits. |
-| `sendingTimeout` | 300000 (5 min) | Window before a stuck `isSending=true` row becomes recoverable. Must exceed worst-case SMTP. |
+| `sendingTimeout` | 300000 (5 min) | Window before a stuck `isSending=true` row becomes recoverable. Must exceed worst-case SMTP; warns below 120000. |
+| `renewClaim` | `sendingTimeout / 3` | Re-stamps `sendingAt` while the send is in flight so a slow-but-healthy send keeps its lock. `false` = v4 behaviour. |
+| `maxRenewals` | 10 | Renewal budget; caps how long a wedged send holds its row (`sendingTimeout + maxRenewals × renewClaim`). |
+| `shouldFailOver` | — | Veto transport rotation for a failure that may already have been delivered. |
+| `strictPayload` | false | Allowlist queued fields + force `disableFileAccess`/`disableUrlAccess`. |
 | `revolvingInterval` | 1536 | Latency vs I/O |
 | `josk.min/maxRevolvingDelay` | 512 / 2048 | Overrides JoSk 128/768 |
 | `josk.zombieTime` | 60000 | **≥60s**. `___iterate` releases the lease right after the scan, so only a stalled storage scan can blow this. |
@@ -91,7 +95,7 @@ Non-preset cases:
 
 - Many `server` pods, one `prefix` for throughput and concurrency.
 - `zombieTime` < worst-case storage scan time.
-- `sendingTimeout` < worst-case SMTP roundtrip — a live still-sending worker can lose its lock to a recovery worker, causing duplicate delivery.
+- `sendingTimeout` < worst-case SMTP roundtrip — a live still-sending worker can lose its lock to a recovery worker, causing duplicate delivery. v5's `renewClaim` covers the healthy-but-slow case; it does not excuse a `sendingTimeout` shorter than your storage round-trip.
 - `resetOnInit` / `autoClear` in prod without intent.
 - Replica reads for queue or scheduler.
 - `concatEmails: true` on OTP / password reset.

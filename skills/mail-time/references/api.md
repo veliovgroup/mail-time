@@ -84,7 +84,12 @@ Constructor. The scheduler starts immediately when `opts.type === 'server'`.
 | `revolvingInterval` | `number` (ms) | `1536` | JoSk task interval that drives queue iteration. |
 | `mode` | `'one' \| 'batch'` | `'batch'` | `'batch'`: drain every due-and-unclaimed row per tick. `'one'`: claim a single row per tick (fairness across cluster nodes). Mirrors JoSk's `execute`. |
 | `concurrency` | `number` | `1` | Parallel SMTPs per instance, gated by an internal worker pool. The CAS on `isSending` prevents duplicate delivery even when concurrency > 1. |
-| `sendingTimeout` | `number` (ms) | `300000` | How long an `isSending=true` row remains locked before it becomes eligible for recovery. Must exceed the worst-case SMTP roundtrip; lower only when sends are guaranteed to finish faster. |
+| `sendingTimeout` | `number` (ms) | `300000` | How long an `isSending=true` row remains locked before it becomes eligible for recovery. Must exceed the worst-case SMTP roundtrip; values below `120000` log a warning. |
+| `renewClaim` | `boolean \| number` (ms) | `sendingTimeout / 3` | Re-stamp `sendingAt` on the claimed row while its SMTP roundtrip runs, via a lease-guarded update that succeeds only while this worker still owns the row. `false` restores v4's single stamp. |
+| `maxRenewals` | `number` | `10` | Renewal budget per send; once spent the claim is allowed to go stale so a wedged send is still recovered. |
+| `shouldFailOver` | `(error, info, email) => boolean` | — | Veto rotating to the next transport for this failure. Consulted only when rotation would otherwise happen. Default: rotate unless `error.mayFailOver === false`. |
+| `strictPayload` | `boolean` | `false` | Narrow every queued letter to `allowedMailFields` and force `disableFileAccess` / `disableUrlAccess`. |
+| `allowedMailFields` | `string[]` | — | Extra field names permitted under `strictPayload`. |
 | `verifyTransports` | `boolean` | `true` | Probe each transport via `transport.verify()` once at `ready()`. Failing transports are marked unusable (skipped during rotation/fallback) and surfaced through `onError(err, null, { transportIndex, phase: 'verify' })`. `ready()` rejects if every transport fails. Transports without a `verify()` method are treated as healthy. Set to `false` to disable. |
 | `template` | `string` | `'{{{html}}}'` | Mustache-like default template wrapping every letter. |
 | `debug` | `boolean` | `false` | Verbose logs. |
@@ -259,8 +264,8 @@ MailTime.Template = '<html><body>{{{html}}}</body></html>';
 
 Templates are Mustache-like with two placeholder forms:
 
-- `{{key}}` — string interpolation, **strips any HTML tags from the value**.
-- `{{{key}}}` — raw HTML interpolation, no stripping.
+- `{{key}}` — string interpolation, **HTML-escaped** in HTML contexts (`html`, `template`, `concatDelimiter`) and verbatim in `text` bodies / subject headers. Before v5 it stripped tags, which was not a safety net (the pass needs a closing `>`).
+- `{{{key}}}` — raw interpolation, never escaped.
 
 Available keys: every property on the passed `opts` (including custom keys like `userName`, `code`, `baseUrl`) plus the standard `subject`, `text`, `html`, `to`. The `template` placeholder applies *after* `text` and `html` are rendered individually, so:
 

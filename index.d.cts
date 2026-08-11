@@ -95,13 +95,18 @@ export type MailTimeMailOptions = {
 export type MailTimeConcatEmailsOptions = {
     subject?: string;
 };
+export type MailTimeFromDetails = {
+    index: number;
+    from: string | undefined;
+};
 export type MailTimeOptions = {
     queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue;
     type?: "server" | "client";
-    from?: string | ((transport: MailTimeTransport) => string);
+    from?: string | ((transport: MailTimeTransport, details: MailTimeFromDetails) => string);
     transports?: MailTimeTransport[];
     strategy?: "backup" | "balancer";
     failsToNext?: number;
+    shouldFailOver?: (error: unknown, info: object, email: MailTimeTask) => boolean;
     retries?: number;
     maxTries?: number;
     retryDelay?: number;
@@ -116,6 +121,10 @@ export type MailTimeOptions = {
     mode?: "one" | "batch";
     concurrency?: number;
     sendingTimeout?: number;
+    renewClaim?: boolean | number;
+    maxRenewals?: number;
+    strictPayload?: boolean;
+    allowedMailFields?: string[];
     verifyTransports?: boolean;
     template?: string;
     prefix?: string;
@@ -167,12 +176,28 @@ export type MailTimeOptions = {
  * @typedef {{ subject?: string }} MailTimeConcatEmailsOptions
  */
 /**
- * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, verifyTransports?: boolean, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask | null, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
+ * @typedef {{ index: number, from: string | undefined }} MailTimeFromDetails
+ */
+/**
+ * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport, details: MailTimeFromDetails) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, shouldFailOver?: (error: unknown, info: object, email: MailTimeTask) => boolean, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, renewClaim?: boolean | number, maxRenewals?: number, strictPayload?: boolean, allowedMailFields?: string[], verifyTransports?: boolean, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask | null, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
  */
 /** Class of MailTime */
 export class MailTime {
     static set Template(newVal: string);
     static get Template(): string;
+    /**
+     * @static
+     * @memberOf MailTime
+     * @name transportFrom
+     * @description Best-effort sender address for a transport. `nodemailer.createTransport()`
+     * only exposes `.options` for *plain-object* configs — for a class-instance transporter
+     * (anything with its own `.send()`) nodemailer's internal `Mail.options` is always `{}`,
+     * so `transport.options.from` silently reads `undefined`. This walks the places the
+     * address can actually live.
+     * @param {MailTimeTransport} transport
+     * @returns {string | undefined}
+     */
+    static transportFrom(transport: MailTimeTransport): string | undefined;
     /**
      * Create a MailTime instance
      * @param {MailTimeOptions} opts - configuration object
@@ -192,12 +217,17 @@ export class MailTime {
     mode: "one" | "batch";
     concurrency: number;
     sendingTimeout: number;
+    renewClaim: number;
+    maxRenewals: number;
+    shouldFailOver: ((error: unknown, info: object, email: MailTimeTask) => boolean) | null;
+    strictPayload: boolean;
+    allowedMailFields: Set<string>;
     failsToNext: number;
     strategy: "backup" | "balancer";
     transports: MailTimeTransport[];
     transport: number;
     verifyTransports: boolean;
-    from: boolean | ((transport: MailTimeTransport) => string);
+    from: boolean | ((transport: MailTimeTransport, details: MailTimeFromDetails) => string);
     /** @type {string} */
     concatSubject: string;
     concatEmails: boolean;

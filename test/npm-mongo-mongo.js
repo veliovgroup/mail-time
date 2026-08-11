@@ -311,8 +311,8 @@ describe('Mongo - Mongo', function () {
           });
           assert.isObject(task, 'task is Object');
           const rendered = mailTimes[type].___compileMailOpts(transports[0], task);
-          assert.equal(rendered.html, '<p>Hi John, <b>http://example.com</b></p> http://example.com', 'HTML template is properly rendered');
-          assert.equal(rendered.text, 'John, http://example.com', 'Text template is properly rendered');
+          assert.equal(rendered.html, '<p>Hi John, <b>http://example.com</b></p> &lt;b&gt;http://example.com&lt;/b&gt;', 'HTML template renders {{{triple}}} verbatim and escapes {{double}}');
+          assert.equal(rendered.text, 'John, <b>http://example.com</b>', 'Text body substitutes verbatim — text/plain has no markup to escape');
 
           const isCancelled = await mailTimes[type].cancelMail(uuid);
           assert.isTrue(isCancelled, 'isCancelled true from cancelMail');
