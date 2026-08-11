@@ -44,6 +44,14 @@ export type MailTimeJoSkOptions = {
     onError?: (title: string, details: object) => void;
     onExecuted?: (uid: string, details: object) => void;
 };
+export type MailTimeScheduler = {
+    [key: string]: any;
+    ping: () => Promise<MailTimePingResult>;
+    setInterval: (func: (...args: any[]) => unknown, delay: number, uid: string) => Promise<string>;
+    destroy: () => boolean;
+    pause: (timerId?: string) => boolean;
+    resume: (timerId?: string) => boolean;
+};
 export type MailTimeTask = {
     uuid: string;
     to?: string | string[];
@@ -106,7 +114,7 @@ export type MailTimeOptions = {
     transports?: MailTimeTransport[];
     strategy?: "backup" | "balancer";
     failsToNext?: number;
-    shouldFailOver?: (error: unknown, info: object, email: MailTimeTask) => boolean;
+    shouldFailOver?: (error: unknown, info: object | undefined, email: MailTimeTask) => boolean;
     retries?: number;
     maxTries?: number;
     retryDelay?: number;
@@ -158,6 +166,9 @@ export type MailTimeOptions = {
  * @typedef {{ [key: string]: any, adapter: MailTimeJoSkAdapterOptions | object, debug?: boolean, autoClear?: boolean, zombieTime?: number, minRevolvingDelay?: number, maxRevolvingDelay?: number, execute?: 'batch' | 'one', concurrency?: number, lockOwnerId?: string, resetOnInit?: boolean, onError?: (title: string, details: object) => void, onExecuted?: (uid: string, details: object) => void }} MailTimeJoSkOptions
  */
 /**
+ * @typedef {{ [key: string]: any, ping: () => Promise<MailTimePingResult>, setInterval: (func: (...args: any[]) => unknown, delay: number, uid: string) => Promise<string>, destroy: () => boolean, pause: (timerId?: string) => boolean, resume: (timerId?: string) => boolean }} MailTimeScheduler
+ */
+/**
  * @typedef {{ uuid: string, to?: string | string[], tries: number, sendAt: number, isSent: boolean, isCancelled: boolean, isFailed: boolean, isSending?: boolean, sendingAt?: number, template?: string | false, transport: number, concatSubject?: string | false, mailOptions: MailTimeMailOptions[] }} MailTimeTask
  */
 /**
@@ -179,7 +190,7 @@ export type MailTimeOptions = {
  * @typedef {{ index: number, from: string | undefined }} MailTimeFromDetails
  */
 /**
- * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport, details: MailTimeFromDetails) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, shouldFailOver?: (error: unknown, info: object, email: MailTimeTask) => boolean, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, renewClaim?: boolean | number, maxRenewals?: number, strictPayload?: boolean, allowedMailFields?: string[], verifyTransports?: boolean, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask | null, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
+ * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport, details: MailTimeFromDetails) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, shouldFailOver?: (error: unknown, info: object | undefined, email: MailTimeTask) => boolean, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, renewClaim?: boolean | number, maxRenewals?: number, strictPayload?: boolean, allowedMailFields?: string[], verifyTransports?: boolean, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask | null, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
  */
 /** Class of MailTime */
 export class MailTime {
@@ -219,7 +230,7 @@ export class MailTime {
     sendingTimeout: number;
     renewClaim: number;
     maxRenewals: number;
-    shouldFailOver: ((error: unknown, info: object, email: MailTimeTask) => boolean) | null;
+    shouldFailOver: ((error: unknown, info: object | undefined, email: MailTimeTask) => boolean) | null;
     strictPayload: boolean;
     allowedMailFields: Set<string>;
     failsToNext: number;
@@ -248,7 +259,8 @@ export class MailTime {
         onError?: (title: string, details: object) => void;
         onExecuted?: (uid: string, details: object) => void;
     } | undefined;
-    scheduler: JoSk | undefined;
+    /** @type {MailTimeScheduler | undefined} */
+    scheduler: MailTimeScheduler | undefined;
     /**
      * @async
      * @memberOf MailTime
@@ -322,7 +334,7 @@ export class MailTime {
      * @returns {Promise<string>} uuid of the email
      * @throws {Error}
      */
-    sendMail(opts?: MailTimeMailOptions): Promise<string>;
+    sendMail(opts: MailTimeMailOptions): Promise<string>;
     /**
      * @async
      * @memberOf MailTime
@@ -348,5 +360,4 @@ import { PostgresQueue } from './adapters/postgres.js';
 import { mailTimePreset } from './presets.js';
 import { presets } from './presets.js';
 import { presetNames } from './presets.js';
-import { JoSk } from 'josk';
 export { MongoQueue, RedisQueue, PostgresQueue, mailTimePreset, presets, presetNames };

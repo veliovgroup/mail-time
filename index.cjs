@@ -1993,6 +1993,19 @@ const mailTimePreset = (name, overrides) => {
 const noop = () => {};
 const queueMethods = ['ping', 'iterate', 'getPendingTo', 'push', 'remove', 'update', 'cancel'];
 
+const callHook = (name, callback, ...args) => {
+  try {
+    const result = callback(...args);
+    if (result && typeof result.then === 'function') {
+      Promise.resolve(result).catch((hookError) => {
+        logError(`[${name}] callback failed`, hookError);
+      });
+    }
+  } catch (hookError) {
+    logError(`[${name}] callback failed`, hookError);
+  }
+};
+
 /**
  * Floor below which `sendingTimeout` is likely shorter than a real SMTP roundtrip
  * (connect + greeting + STARTTLS + envelope + DATA, times MX rollover). A claim that
@@ -2178,6 +2191,10 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
  */
 
 /**
+ * @typedef {{ [key: string]: any, ping: () => Promise<MailTimePingResult>, setInterval: (func: (...args: any[]) => unknown, delay: number, uid: string) => Promise<string>, destroy: () => boolean, pause: (timerId?: string) => boolean, resume: (timerId?: string) => boolean }} MailTimeScheduler
+ */
+
+/**
  * @typedef {{ uuid: string, to?: string | string[], tries: number, sendAt: number, isSent: boolean, isCancelled: boolean, isFailed: boolean, isSending?: boolean, sendingAt?: number, template?: string | false, transport: number, concatSubject?: string | false, mailOptions: MailTimeMailOptions[] }} MailTimeTask
  */
 
@@ -2206,7 +2223,7 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
  */
 
 /**
- * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport, details: MailTimeFromDetails) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, shouldFailOver?: (error: unknown, info: object, email: MailTimeTask) => boolean, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, renewClaim?: boolean | number, maxRenewals?: number, strictPayload?: boolean, allowedMailFields?: string[], verifyTransports?: boolean, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask | null, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
+ * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport, details: MailTimeFromDetails) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, shouldFailOver?: (error: unknown, info: object | undefined, email: MailTimeTask) => boolean, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, renewClaim?: boolean | number, maxRenewals?: number, strictPayload?: boolean, allowedMailFields?: string[], verifyTransports?: boolean, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask | null, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
  */
 
 /** Class of MailTime */
@@ -2267,7 +2284,7 @@ class MailTime {
     this.revolvingInterval = (typeof opts.revolvingInterval === 'number' && opts.revolvingInterval > 0) ? opts.revolvingInterval : 1536;
     this.mode = (opts.mode === 'one' || opts.mode === 'batch') ? opts.mode : 'batch';
     this.concurrency = (typeof opts.concurrency === 'number' && opts.concurrency > 0 && Number.isFinite(opts.concurrency)) ? Math.floor(opts.concurrency) : 1;
-    this.sendingTimeout = (typeof opts.sendingTimeout === 'number' && opts.sendingTimeout > 0) ? opts.sendingTimeout : 300000;
+    this.sendingTimeout = (typeof opts.sendingTimeout === 'number' && Number.isFinite(opts.sendingTimeout) && opts.sendingTimeout > 0) ? opts.sendingTimeout : 300000;
     if (this.sendingTimeout < MIN_SAFE_SENDING_TIMEOUT) {
       logError(`{sendingTimeout: ${this.sendingTimeout}} is below the ${MIN_SAFE_SENDING_TIMEOUT}ms safe floor — a claim that expires while SMTP is still in flight is re-claimed by a peer and the letter is delivered twice. Raise {sendingTimeout} above the worst-case SMTP roundtrip.`);
     }
@@ -2278,12 +2295,12 @@ class MailTime {
     // {maxRenewals} so a genuinely wedged send is still recovered, just later.
     if (opts.renewClaim === false || opts.renewClaim === 0) {
       this.renewClaim = 0;
-    } else if (typeof opts.renewClaim === 'number' && opts.renewClaim > 0) {
+    } else if (typeof opts.renewClaim === 'number' && Number.isFinite(opts.renewClaim) && opts.renewClaim > 0) {
       this.renewClaim = Math.floor(opts.renewClaim);
     } else {
       this.renewClaim = Math.max(1000, Math.floor(this.sendingTimeout / 3));
     }
-    this.maxRenewals = (typeof opts.maxRenewals === 'number' && opts.maxRenewals >= 0) ? Math.floor(opts.maxRenewals) : DEFAULT_MAX_RENEWALS;
+    this.maxRenewals = (typeof opts.maxRenewals === 'number' && Number.isFinite(opts.maxRenewals) && opts.maxRenewals >= 0) ? Math.floor(opts.maxRenewals) : DEFAULT_MAX_RENEWALS;
 
     // Transport fail-over policy. Rotating on *any* error can resubmit a letter the
     // MX already accepted; a transport that knows better says so.
@@ -2419,6 +2436,7 @@ class MailTime {
         };
       }
 
+      /** @type {MailTimeScheduler | undefined} */
       this.scheduler = new josk.JoSk({
         debug: this.debug,
         ...this.josk,
@@ -2584,7 +2602,8 @@ class MailTime {
    * @returns {Promise<string>} uuid of the email
    * @throws {Error}
    */
-  async sendMail(opts = {}) {
+  async sendMail(opts) {
+    opts = (opts && typeof opts === 'object') ? opts : {};
     this.__debug('[sendMail]', opts);
     if (!opts.html && !opts.text) {
       throw new Error('[mail-time] [sendMail] `html` nor `text` field is present, at least one of those fields is required');
@@ -2722,7 +2741,7 @@ class MailTime {
       task.isSending = false;
 
       this.__debug(`[private handleError] Giving up trying send email after ${task.tries} attempts to: `, task.mailOptions[0].to, error);
-      this.onError(error, task, info);
+      callHook('onError', this.onError, error, task, info);
       return;
     }
 
@@ -2963,11 +2982,18 @@ class MailTime {
    * @returns {string | undefined}
    */
   static transportFrom(transport) {
-    return transport?.options?.from
+    const from = transport?.options?.from
       || transport?.transporter?.options?.from
       || transport?._defaults?.from
       || transport?._options?.from
       || void 0;
+    if (typeof from === 'string') {
+      return from;
+    }
+    if (from && typeof from === 'object' && typeof from.address === 'string') {
+      return from.address;
+    }
+    return void 0;
   }
 
   /**
@@ -3044,13 +3070,18 @@ class MailTime {
    * before it). A transport signals "do not fail over" with `error.mayFailOver = false`;
    * the `shouldFailOver(error, info, task)` option overrides both.
    * @param {unknown} error - error returned by the transport
-   * @param {object} info - info object returned by the transport
+   * @param {object|undefined} info - info object returned by the transport
    * @param {MailTimeTask} task - email's task object from Storage
    * @returns {boolean}
    */
   ___mayFailOver(error, info, task) {
     if (this.shouldFailOver) {
-      return this.shouldFailOver(error, info, task) !== false;
+      try {
+        return this.shouldFailOver(error, info, task) !== false;
+      } catch (policyError) {
+        logError('[shouldFailOver] callback failed; keeping the current transport', policyError);
+        return false;
+      }
     }
     return !(error && typeof error === 'object' && error.mayFailOver === false);
   }
@@ -3065,17 +3096,18 @@ class MailTime {
    * update — it succeeds only while *this* worker still owns the row — and is bounded by
    * `maxRenewals` so a genuinely wedged send is still recovered.
    * @param {MailTimeTask} task - claimed task, with `isSending`/`sendingAt`/`tries` set
-   * @returns {{ stop: () => void }}
+   * @returns {{ stop: () => Promise<void> }}
    */
   ___startClaimRenewal(task) {
-    if (!this.renewClaim || this.type !== 'server') {
-      return { stop: noop };
+    if (!this.renewClaim || !this.maxRenewals || this.type !== 'server') {
+      return { stop: async () => {} };
     }
 
     let stopped = false;
     let renewals = 0;
     let timer = null;
-    const stop = () => {
+    let activeRenewal = null;
+    const halt = () => {
       if (stopped) {
         return;
       }
@@ -3085,16 +3117,22 @@ class MailTime {
         timer = null;
       }
     };
+    const stop = async () => {
+      halt();
+      if (activeRenewal) {
+        await activeRenewal;
+      }
+    };
 
-    timer = setInterval(async () => {
+    const renew = async () => {
       if (stopped || this.__isDestroyed || this.__abortInFlight) {
-        stop();
+        halt();
         return;
       }
 
       if (renewals >= this.maxRenewals) {
         this.__debug('[private renewClaim] renewal budget exhausted; letting the claim go stale', task.uuid);
-        stop();
+        halt();
         return;
       }
       renewals += 1;
@@ -3110,18 +3148,27 @@ class MailTime {
         }));
       } catch (renewError) {
         logError('[private renewClaim] storage error during claim renewal', renewError);
-        stop();
+        halt();
         return;
       }
 
       if (!renewed) {
         this.__debug('[private renewClaim] lease lost; stopping renewal', task.uuid);
-        stop();
+        halt();
         return;
       }
 
       task.sendingAt = renewedAt;
       this.__debug(`[private renewClaim] renewed ${renewals}/${this.maxRenewals}`, task.uuid);
+    };
+
+    timer = setInterval(() => {
+      if (activeRenewal) {
+        return;
+      }
+      activeRenewal = renew().finally(() => {
+        activeRenewal = null;
+      });
     }, this.renewClaim);
 
     if (typeof timer.unref === 'function') {
@@ -3218,7 +3265,7 @@ class MailTime {
           transport.sendMail(compiledOpts, async (error, info) => {
             // The roundtrip has settled — stop extending the lease before any completion
             // write, so the guard below sees the last `sendingAt` this worker persisted.
-            renewal.stop();
+            await renewal.stop();
             if (this.__abortInFlight) {
               this.__debug('[private send] instance destroyed mid-send; leaving claim for stale-lock recovery', task.uuid);
               resolve();
@@ -3279,7 +3326,7 @@ class MailTime {
                 task.isSent = true;
                 task.isSending = false;
                 task.sendingAt = 0;
-                this.onSent(task, info);
+                callHook('onSent', this.onSent, task, info);
                 return;
               }
 
@@ -3320,7 +3367,7 @@ class MailTime {
                 }
                 const partialError = new Error(`Recipients rejected after ${task.tries} attempts: ${rejectedAddrs.join(', ')}`);
                 this.__debug('[private send] Partial delivery exhausted retries; rejected: ', rejectedAddrs);
-                this.onError(partialError, task, info);
+                callHook('onError', this.onError, partialError, task, info);
                 return;
               }
 
@@ -3336,6 +3383,8 @@ class MailTime {
                 return;
               }
               this.__debug(`[private send] Partial delivery, next attempt at ${new Date(nextSendAt)}: #${task.tries}/${this.maxTries} for remaining recipients`);
+            } catch (completionError) {
+              logError('[private send] completion error after transport callback', completionError);
             } finally {
               resolve();
             }
@@ -3343,7 +3392,7 @@ class MailTime {
         });
       } finally {
         // A transport that throws synchronously never reaches the callback above.
-        renewal.stop();
+        await renewal.stop();
       }
     } catch (e) {
       if (this.__abortInFlight) {
@@ -3431,7 +3480,7 @@ class MailTime {
       }
       this.__unhealthyTransports.add(r.index);
       logError(`[mail-time] [verifyTransports] transport #${r.index} failed verification`, r.error);
-      this.onError(r.error, null, { transportIndex: r.index, phase: 'verify' });
+      callHook('onError', this.onError, r.error, null, { transportIndex: r.index, phase: 'verify' });
     }
 
     if (this.__unhealthyTransports.size === this.transports.length) {
