@@ -14,8 +14,17 @@ const pg = new mailTime.PostgresQueue({
 
 const client = new mailTime.MailTime({
   type: 'client',
-  queue: pg
+  queue: pg,
+  renewClaim: false,
+  maxRenewals: 0,
+  strictPayload: true,
+  allowedMailFields: ['attachments']
 });
+
+const resolvedFrom: string | undefined = mailTime.MailTime.transportFrom({
+  options: { from: 'noreply@example.com' }
+});
+void resolvedFrom;
 
 client.ping();
 void client.pause();

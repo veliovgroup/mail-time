@@ -93,6 +93,58 @@ describe('claim renewal', () => {
     expect(mailTime.queue.records.has(uuid)).toBe(false);
   });
 
+  it('waits for an in-flight renewal before completing the send', async () => {
+    const { transport, started, finish } = createHeldTransport();
+    const onSent = jest.fn();
+    const mailTime = createMailTime({
+      transports: [transport],
+      sendingTimeout: 200,
+      renewClaim: 20,
+      onSent
+    });
+
+    const uuid = await mailTime.sendMail({ to: 'a@example.com', text: 'hi' });
+    const realUpdate = mailTime.queue.update;
+    const realRemove = mailTime.queue.remove;
+    let releaseRenewal;
+    let releaseCompletion;
+    let completionHasStarted = false;
+    const renewalStarted = new Promise((resolve) => {
+      mailTime.queue.update = async (task, updateObj) => {
+        if (updateObj.isSending === true && updateObj.tries === void 0) {
+          resolve();
+          await new Promise((release) => {
+            releaseRenewal = release;
+          });
+        }
+        return realUpdate(task, updateObj);
+      };
+    });
+    const completionStarted = new Promise((resolve) => {
+      mailTime.queue.remove = async (...args) => {
+        completionHasStarted = true;
+        resolve();
+        await new Promise((release) => {
+          releaseCompletion = release;
+        });
+        return realRemove(...args);
+      };
+    });
+
+    const send = mailTime.___send({ ...mailTime.queue.records.get(uuid) });
+    await started;
+    await renewalStarted;
+    finish(null);
+    expect(completionHasStarted).toBe(false);
+    releaseRenewal();
+    await completionStarted;
+    releaseCompletion();
+    await send;
+
+    expect(onSent).toHaveBeenCalledTimes(1);
+    expect(mailTime.queue.records.has(uuid)).toBe(false);
+  });
+
   it('stops renewing after maxRenewals so a wedged send is still recoverable', async () => {
     const { transport, started, finish } = createHeldTransport();
     const mailTime = createMailTime({
@@ -222,6 +274,18 @@ describe('claim renewal', () => {
     expect(mailTime.renewClaim).toBe(100000);
     expect(mailTime.maxRenewals).toBeGreaterThan(0);
   });
+
+  it('rejects non-finite lease timing values', () => {
+    const mailTime = createMailTime({
+      sendingTimeout: Infinity,
+      renewClaim: Infinity,
+      maxRenewals: Infinity
+    });
+
+    expect(mailTime.sendingTimeout).toBe(300000);
+    expect(mailTime.renewClaim).toBe(100000);
+    expect(mailTime.maxRenewals).toBe(10);
+  });
 });
 
 describe('transport fail-over policy', () => {
@@ -292,6 +356,28 @@ describe('transport fail-over policy', () => {
 
     expect(mailTime.queue.records.get(uuid).transport).toBe(1);
   });
+
+  it('keeps the current transport when shouldFailOver throws', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const mailTime = createMailTime({
+      transports: twoTransports(),
+      failsToNext: 1,
+      retryDelay: 0,
+      shouldFailOver() {
+        throw new Error('policy unavailable');
+      }
+    });
+
+    const uuid = await mailTime.sendMail({ to: 'a@example.com', text: 'hi' });
+    await mailTime.___send({ ...mailTime.queue.records.get(uuid) });
+
+    expect(mailTime.queue.records.get(uuid)).toMatchObject({
+      isSending: false,
+      transport: 0
+    });
+    expect(errorSpy.mock.calls.flat().join(' ')).toMatch(/shouldFailOver/);
+    errorSpy.mockRestore();
+  });
 });
 
 describe('from() resolution for class-instance transports', () => {
@@ -330,6 +416,47 @@ describe('from() resolution for class-instance transports', () => {
     const compiled = mailTime.___compileMailOpts(mailTime.transports[0], mailTime.queue.records.get(uuid));
 
     expect(compiled.from).toBe('"App" <no-reply@example.com>');
+  });
+
+  it('normalizes an address object to its sender address', () => {
+    expect(MailTime.transportFrom({
+      options: {
+        from: { name: 'App', address: 'no-reply@example.com' }
+      }
+    })).toBe('no-reply@example.com');
+  });
+});
+
+describe('lifecycle callback isolation', () => {
+  it('does not turn a delivered message into an unhandled rejection when onSent throws', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const mailTime = createMailTime({
+      onSent() {
+        throw new Error('observer unavailable');
+      }
+    });
+
+    const uuid = await mailTime.sendMail({ to: 'a@example.com', text: 'hi' });
+    await mailTime.___send({ ...mailTime.queue.records.get(uuid) });
+
+    expect(mailTime.queue.records.has(uuid)).toBe(false);
+    expect(errorSpy.mock.calls.flat().join(' ')).toMatch(/onSent/);
+    errorSpy.mockRestore();
+  });
+
+  it('contains a storage error raised after SMTP accepts the message', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const mailTime = createMailTime();
+    const uuid = await mailTime.sendMail({ to: 'a@example.com', text: 'hi' });
+    mailTime.queue.remove = async () => {
+      throw new Error('storage unavailable');
+    };
+
+    await mailTime.___send({ ...mailTime.queue.records.get(uuid) });
+
+    expect(mailTime.queue.records.get(uuid).isSending).toBe(true);
+    expect(errorSpy.mock.calls.flat().join(' ')).toMatch(/completion/);
+    errorSpy.mockRestore();
   });
 });
 

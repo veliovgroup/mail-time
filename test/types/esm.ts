@@ -3,13 +3,18 @@ import type {
   CustomQueue,
   MailTimeJoSkOptions,
   MailTimeMailOptions,
+  MailTimeFromDetails,
   MailTimeOptions,
   MailTimePingResult,
+  MailTimeScheduler,
   MailTimePresetConfig,
   MailTimePresetName,
   MailTimeTask,
   MailTimeTransport
 } from 'mail-time';
+
+declare const scheduler: MailTimeScheduler;
+void scheduler.pause();
 
 // Subpath exports — must resolve and re-expose the same constructors / function.
 import { MongoQueue as MongoQueueSub } from 'mail-time/adapters/mongo';
@@ -88,6 +93,18 @@ const opts: MailTimeOptions = {
   queue,
   transports: [transport],
   josk: joskOpts,
+  renewClaim: false,
+  maxRenewals: 0,
+  strictPayload: true,
+  allowedMailFields: ['attachments'],
+  from(_transport: MailTimeTransport, details: MailTimeFromDetails) {
+    return details.from ?? 'noreply@example.com';
+  },
+  shouldFailOver(_error: unknown, info: object | undefined, email: MailTimeTask) {
+    void info;
+    void email;
+    return false;
+  },
   onError(error: unknown, email: MailTimeTask | null, details?: object) {
     error;
     email;
@@ -100,6 +117,8 @@ const opts: MailTimeOptions = {
 };
 
 const mailTime = new MailTime(opts);
+const resolvedFrom: string | undefined = MailTime.transportFrom(transport);
+void resolvedFrom;
 
 await mailTime.ready();
 
@@ -126,6 +145,8 @@ const message: MailTimeMailOptions = {
 };
 await mailTime.sendMail(message);
 await mailTime.cancelMail(Promise.resolve('uuid'));
+// @ts-expect-error mail options required
+mailTime.sendMail();
 
 void MongoQueue;
 void RedisQueue;
