@@ -1,5 +1,11 @@
 .claude
 .cursor
+.codex
+.env
+.env.*
+.idea
+.npmrc
+.vscode
 .DS_Store
 .eslintcache
 .eslintrc
@@ -30,6 +36,10 @@ LICENSE
 local-testing.md
 local-testing.mjs
 node_modules
+*.log
+*.tgz
+bun.lock
+bun.lockb
 package.json
 package-lock.json
 README.md

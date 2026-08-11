@@ -1,8 +1,17 @@
 .npm
+.env
+.env.*
+.idea
+.vscode
 .DS_Store
 .eslintcache
 node_modules
 npm-debug.log*
+*.log
+*.tgz
+*.tsbuildinfo
+bun.lock
+bun.lockb
 coverage
 .types-tmp
 local-testing.md

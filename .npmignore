@@ -1,6 +1,13 @@
 *.md
+.agents
 .cursorignore
+.codex
+.env
+.env.*
 .gitignore
+.idea
+.npmrc
+.vscode
 .DS_Store
 .claude
 .cursor
@@ -17,6 +24,10 @@ ascii
 cover.jpg
 cover.png
 coverage
+*.log
+*.tgz
+bun.lock
+bun.lockb
 docs/
 docs/*
 docs/superpowers/

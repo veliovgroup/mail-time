@@ -1,4 +1,7 @@
 .npm
+.env
+.env.*
+.npmrc
 node_modules
 .DS_Store
 .eslintcache
