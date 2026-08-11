@@ -1,10 +1,25 @@
 {
   "name": "mail-time",
-  "version": "4.1.0",
+  "version": "5.0.0",
   "description": "📮 Email queue extending nodemailer with multi-SMTP transports and horizontally scaled apps support",
   "main": "index.js",
   "types": "./index.d.ts",
   "type": "module",
+  "files": [
+    "adapters/mongo.d.ts",
+    "adapters/mongo.js",
+    "adapters/postgres.d.ts",
+    "adapters/postgres.js",
+    "adapters/redis.d.ts",
+    "adapters/redis.js",
+    "helpers.js",
+    "index.cjs",
+    "index.d.cts",
+    "index.d.ts",
+    "index.js",
+    "presets.d.ts",
+    "presets.js"
+  ],
   "exports": {
     ".": {
       "import": {
@@ -132,7 +147,7 @@
     "@types/node": "^25.9.0",
     "chai": "^6.2.2",
     "jest": "^30.4.2",
-    "mocha": "^11.7.5",
+    "mocha": "^11.8.0",
     "mongodb": "^7.2.0",
     "nodemailer": "^9.0.5",
     "pg": "^8.21.0",
