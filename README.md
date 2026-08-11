@@ -394,7 +394,7 @@ For deeper JoSk semantics (lease lifecycle, scheduler adapters, recurring tasks)
 ```js
 new MailTime({
   // ...
-  shouldFailOver: (error) => error?.stage !== 'data',
+  shouldFailOver: (error) => error?.code !== 'EMESSAGE', // nodemailer: rejected after DATA
 });
 ```
 
@@ -551,6 +551,7 @@ For custom adapters see [docs/queue-api.md](https://github.com/veliovgroup/mail-
 ### Static
 
 - `MailTime.Template` — get/set the default HTML envelope template.
+- `MailTime.transportFrom(transport)` → `string | undefined`. Resolves a transport's sender address across `options.from`, `transporter.options.from`, `_defaults.from`, and `_options.from`, accepting both `'a@b.c'` and `{ name, address }`. Returns the first *usable* address; `undefined` when none resolves. Same value the `from(transport, details)` callback receives as `details.from`.
 
 ## Migrations
 

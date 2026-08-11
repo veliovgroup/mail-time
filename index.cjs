@@ -2982,17 +2982,27 @@ class MailTime {
    * @returns {string | undefined}
    */
   static transportFrom(transport) {
-    const from = transport?.options?.from
-      || transport?.transporter?.options?.from
-      || transport?._defaults?.from
-      || transport?._options?.from
-      || void 0;
-    if (typeof from === 'string') {
-      return from;
+    const candidates = [
+      transport?.options?.from,
+      transport?.transporter?.options?.from,
+      transport?._defaults?.from,
+      transport?._options?.from,
+    ];
+
+    for (const candidate of candidates) {
+      // nodemailer accepts `from` as a string or as `{ name, address }`. Resolve the
+      // first candidate that yields a usable address — not the first truthy slot, so a
+      // malformed `{ name }` object cannot mask a real address further down the chain.
+      const address = (typeof candidate === 'string')
+        ? candidate
+        : (candidate && typeof candidate === 'object' && typeof candidate.address === 'string')
+          ? candidate.address
+          : '';
+      if (address.trim()) {
+        return address;
+      }
     }
-    if (from && typeof from === 'object' && typeof from.address === 'string') {
-      return from.address;
-    }
+
     return void 0;
   }
 

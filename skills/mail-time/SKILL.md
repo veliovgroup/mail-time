@@ -42,7 +42,8 @@ Core rules:
 - Active-active Redis, replica reads, reused prefix with different policies.
 - `concatEmails` on OTP/password reset.
 - `sendingTimeout` below storage/SMTP conditions; v5 warns below 120s and renews active claims.
-- `{{key}}` for trusted HTML. Use `{{{key}}}` only for produced markup.
+- Expecting `{{key}}` to emit markup: it HTML-escapes in HTML contexts. `{{{key}}}` is the raw form — server-produced values only.
+- `raw` in a queued letter: refused since v5.
 - `transport.options.from` in callback. Use `details.from`.
 - Custom adapter skipping lease guards or calling `___send` instead of `___dispatch`.
 - Missing `onSent`/`onError`, `ready()`, or shutdown.

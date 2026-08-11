@@ -269,6 +269,45 @@ describe('claim renewal', () => {
     errorSpy.mockRestore();
   });
 
+  it('never overlaps renewals when a storage write outlives the interval', async () => {
+    const { transport, started, finish } = createHeldTransport();
+    const mailTime = createMailTime({
+      transports: [transport],
+      sendingTimeout: 200_000,
+      renewClaim: 20
+    });
+
+    const realUpdate = mailTime.queue.update;
+    let inFlight = 0;
+    let peak = 0;
+    mailTime.queue.update = async (task, updateObj) => {
+      const isRenewal = updateObj.isSending === true && updateObj.tries === void 0;
+      if (!isRenewal) {
+        return realUpdate(task, updateObj);
+      }
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 90));
+      try {
+        return await realUpdate(task, updateObj);
+      } finally {
+        inFlight -= 1;
+      }
+    };
+
+    const uuid = await mailTime.sendMail({ to: 'a@example.com', text: 'hi' });
+    const send = mailTime.___send({ ...mailTime.queue.records.get(uuid) });
+
+    await started;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    finish(null);
+    await send;
+
+    expect(peak).toBe(1);
+    // `stop()` awaited the in-flight renewal, so the completion lease still matched.
+    expect(mailTime.queue.records.has(uuid)).toBe(false);
+  }, 10_000);
+
   it('is enabled by default at a fraction of sendingTimeout', () => {
     const mailTime = createMailTime({ sendingTimeout: 300000 });
     expect(mailTime.renewClaim).toBe(100000);
@@ -418,6 +457,23 @@ describe('from() resolution for class-instance transports', () => {
     expect(compiled.from).toBe('"App" <no-reply@example.com>');
   });
 
+  it('falls through a malformed slot to the next resolvable one', () => {
+    expect(MailTime.transportFrom({
+      options: { from: { name: 'no address here' } },
+      transporter: { options: { from: 'real@example.com' } }
+    })).toBe('real@example.com');
+  });
+
+  it('treats an empty address as unresolved rather than an empty sender', () => {
+    expect(MailTime.transportFrom({ options: { from: { address: '' } } })).toBeUndefined();
+    expect(MailTime.transportFrom({ options: { from: '   ' } })).toBeUndefined();
+  });
+
+  it('returns undefined when no slot carries an address', () => {
+    expect(MailTime.transportFrom({})).toBeUndefined();
+    expect(MailTime.transportFrom(undefined)).toBeUndefined();
+  });
+
   it('normalizes an address object to its sender address', () => {
     expect(MailTime.transportFrom({
       options: {
@@ -428,6 +484,29 @@ describe('from() resolution for class-instance transports', () => {
 });
 
 describe('lifecycle callback isolation', () => {
+  it('contains a rejected async onSent instead of an unhandled rejection', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const rejections = [];
+    const onUnhandled = (reason) => rejections.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+
+    const mailTime = createMailTime({
+      onSent: async () => {
+        throw new Error('async onSent boom');
+      }
+    });
+
+    const uuid = await mailTime.sendMail({ to: 'a@example.com', text: 'hi' });
+    await mailTime.___send({ ...mailTime.queue.records.get(uuid) });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    process.off('unhandledRejection', onUnhandled);
+    expect(rejections).toEqual([]);
+    expect(errorSpy.mock.calls.flat().join(' ')).toMatch(/\[onSent\] callback failed/);
+    expect(mailTime.queue.records.has(uuid)).toBe(false);
+    errorSpy.mockRestore();
+  });
+
   it('does not turn a delivered message into an unhandled rejection when onSent throws', async () => {
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     const mailTime = createMailTime({

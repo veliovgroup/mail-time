@@ -87,8 +87,8 @@ Constructor. The scheduler starts immediately when `opts.type === 'server'`.
 | `sendingTimeout` | `number` (ms) | `300000` | How long an `isSending=true` row remains locked before it becomes eligible for recovery. Must exceed the worst-case SMTP roundtrip; values below `120000` log a warning. |
 | `renewClaim` | `boolean \| number` (ms) | `sendingTimeout / 3` | Re-stamp `sendingAt` on the claimed row while its SMTP roundtrip runs, via a lease-guarded update that succeeds only while this worker still owns the row. `false` restores v4's single stamp. |
 | `maxRenewals` | `number` | `10` | Renewal-attempt budget; recovery begins `sendingTimeout` after last successful stamp. Slow storage can extend elapsed time. |
-| `shouldFailOver` | `(error, info?, email) => boolean` | — | Veto rotating to next transport. `info` may be absent on errors. Default: rotate unless `error.mayFailOver === false`. |
-| `strictPayload` | `boolean` | `false` | Narrow every queued letter to `allowedMailFields` and force `disableFileAccess` / `disableUrlAccess`. |
+| `shouldFailOver` | `(error, info, email) => boolean` | — | Veto rotating to next transport. `info` is `object \| undefined`. Default: rotate unless `error.mayFailOver === false`. A throwing hook keeps the current transport. |
+| `strictPayload` | `boolean` | `false` | Narrow every queued letter to `allowedMailFields` and force `disableFileAccess` / `disableUrlAccess`. `raw` is refused regardless of this option. |
 | `allowedMailFields` | `string[]` | — | Extra field names permitted under `strictPayload`. |
 | `verifyTransports` | `boolean` | `true` | Probe each transport via `transport.verify()` once at `ready()`. Failing transports are marked unusable (skipped during rotation/fallback) and surfaced through `onError(err, null, { transportIndex, phase: 'verify' })`. `ready()` rejects if every transport fails. Transports without a `verify()` method are treated as healthy. Set to `false` to disable. |
 | `template` | `string` | `'{{{html}}}'` | Mustache-like default template wrapping every letter. |
@@ -142,7 +142,7 @@ Pass-through to the underlying `JoSk` constructor. The most useful keys:
 
 Enqueue a letter.
 
-`opts.to` is required (string or non-empty array). At least one of `opts.text` / `opts.html` must be present. All nodemailer fields pass through unchanged (`subject`, `attachments`, `headers`, `cc`, `bcc`, etc.). MailTime-specific options:
+`opts.to` is required (string or non-empty array). At least one of `opts.text` / `opts.html` must be present. Nodemailer fields pass through (`subject`, `attachments`, `headers`, `cc`, `bcc`, …) with two exceptions: `raw` throws (it bypasses composition and nodemailer's file/URL guards), and under `strictPayload` only `allowedMailFields` survive. MailTime-specific options:
 
 | Field | Type | Notes |
 |---|---|---|
