@@ -10,7 +10,7 @@ Package.describe({
  * Single source of truth for the `josk` runtime dependency version.
  * Declared in both `onUse` and `onTest`
  */
-const JOSK_VERSION = '6.2.0';
+const JOSK_VERSION = '6.3.0';
 
 /**
  * Meteor test-packages runs package.js under each release's bundled Node.
