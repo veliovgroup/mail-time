@@ -19,7 +19,7 @@ Bulletproof email queue for [horizontally scaled](#sending-emails-from-a-cluster
 
 `MailTime` runs in one of two modes:
 
-- **`server`** — drains the queue and sends emails via SMTP. The cluster-aware lease guarantees exactly one server sends each email even when many are running.
+- **`server`** — drains the queue and sends emails via SMTP. Per-row leases let one worker claim each attempt even when many are running.
 - **`client`** — only enqueues emails. Use for app servers in a "dedicated mail micro-service" topology.
 
 Many clients + one or more servers coexist behind the same `prefix` in the same store.
@@ -29,7 +29,7 @@ Many clients + one or more servers coexist behind the same `prefix` in the same 
 - 🏢 **Horizontally scaled** — synchronize one queue across N processes/hosts/DCs.
 - 🔁 **Multi-SMTP rotation** — `backup` (failover) and `balancer` (round-robin) strategies.
 - 💪 **Built-in retries** — storage-backed retry with per-letter transport pinning.
-- 🎯 **Per-recipient retries** — when a multi-`to` send is partially rejected, only the un-accepted addresses are retried; delivered ones never see a duplicate.
+- 🎯 **Per-recipient retries** — when a multi-`to` send is partially rejected, later attempts exclude accepted addresses.
 - 📮 **Email concatenation** — fold same-`to` emails arriving inside a window into one letter.
 - 🎛️ **One-line setup** — built-in [presets](#settings-presets) for `transactional`, `otp`, `newsletter`, `marketing`, `notifications`, `alerts`.
 - 🛢️ **Three first-party storages** — MongoDB, Redis, PostgreSQL. Plus a [custom-adapter contract](https://github.com/veliovgroup/mail-time/blob/master/docs/queue-api.md).
@@ -84,7 +84,7 @@ MailTime keeps every letter in the queue until SMTP confirms delivery.
 
 ### Sending emails from a cluster
 
-Most apps schedule recurring emails (daily digest, weekly summary). On a single server this is trivial. In a cluster, every node would otherwise send the same email N times. MailTime's lease prevents the duplicate sends.
+Most apps schedule recurring emails (daily digest, weekly summary). On a single server this is trivial. In a cluster, every node would otherwise send the same email N times. MailTime's lease prevents concurrent duplicate claims. SMTP acceptance and queue completion cannot be one atomic transaction: a worker crash between them can still cause a later retry. See [reliability boundary](https://github.com/veliovgroup/mail-time/blob/master/docs/tuning.md#reliability-boundary).
 
 ```ascii
 |===================THE=CLUSTER===================| |=QUEUE=|
@@ -271,9 +271,7 @@ process.on('SIGTERM', async () => {
 });
 ```
 
-Or explicitly: `mailQueue.destroy(); await mailQueue.drain();`
-
-`destroy()` is idempotent and stops the scheduler. Always call it from tests; pair with `drain()` when iterate-driven sends ran.
+`destroy()` without `{ drain: true }` stops immediately: in-flight completions make no storage writes and their claims recover after `sendingTimeout`. Use it for forced teardown, not graceful shutdown.
 
 #### Pause / resume a server (backpressure)
 
@@ -300,7 +298,7 @@ Queue storage and scheduler storage can be the same store or different ones. Use
 
 | Queue    | Scheduler (`josk`) | Best for                                     |
 | -------- | ------------------ | -------------------------------------------- |
-| Postgres | Postgres           | Multi-DC, mixed clocks, strict exactly-once. |
+| Postgres | Postgres           | Multi-DC, mixed clocks, strongest consistency. |
 | Redis    | Redis              | High-throughput single-region.               |
 | Mongo    | Mongo              | Apps already on Mongo (especially Meteor).   |
 | Mongo    | Redis              | Durable letter storage + sub-second polling. |
@@ -342,7 +340,7 @@ const mailTime = new MailTime(mailTimePreset('otp', {
 | `newsletter`    | `concatEmails: true` with a 5-minute fold window, `concatSubject: 'Your updates'`, `retries: 5`, `retryDelay: 60s`, `concurrency: 2`, `sendingTimeout: 10min`, `josk.zombieTime: 5min` | Scheduled digests, weekly summaries, "what's new" emails.                               |
 | `marketing`     | `retries: 10`, `retryDelay: 30s`, `concatEmails: false`, `concurrency: 5`, `josk.zombieTime: 3min`                                                 | Promotional / campaign blasts where each letter is unique.                              |
 | `notifications` | `concatEmails: true` with a 60-second fold window, `concatSubject: 'New activity'`, `retries: 8`, `retryDelay: 30s`, `concurrency: 3`, `josk.zombieTime: 3min` | App / social activity (likes, mentions, follows) where bursts collapse into one letter. |
-| `alerts`        | `retries: 20`, `retryDelay: 5s`, snappy `revolvingInterval: 1024` + jitter `256/1024`, `concurrency: 2`, `sendingTimeout: 60s`                     | Ops / admin alerts: monitoring, error reports, escalations.                             |
+| `alerts`        | `retries: 20`, `retryDelay: 5s`, snappy `revolvingInterval: 1024` + jitter `256/1024`, `concurrency: 2`, `sendingTimeout: 2min`                     | Ops / admin alerts: monitoring, error reports, escalations.                             |
 
 Presets are equally useful on `type: 'client'` instances — keys that don't apply to the client role are simply ignored.
 
@@ -371,10 +369,10 @@ Defaults fit moderate traffic in a single region. Reach for a [preset](#settings
 | Option                                         | Default          | Change when                                                                                                                        |
 | ---------------------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `mode`                                         | `'batch'`        | `'one'` to claim a single row per tick (fairness over throughput across cluster nodes)                                             |
-| `concurrency`                                  | `1`              | Raise to send N emails in parallel per instance. Bounded by your SMTP / API rate limits. The CAS on `isSending` keeps it safe.     |
+| `concurrency`                                  | `1`              | Raise to send N emails in parallel per instance. CAS blocks concurrent claims; SMTP rate limits still apply.                     |
 | `sendingTimeout`                               | `300000` (5 min) | Stale-lock recovery window. Must exceed worst-case SMTP roundtrip; MailTime logs a warning below `120000`. |
 | `renewClaim`                                   | `sendingTimeout / 3` | Set `false` to go back to a single stamp at claim time. Lower it if your storage round-trip is slow relative to `sendingTimeout`. |
-| `maxRenewals`                                  | `10`             | Hard ceiling on how long one send may hold its claim (`sendingTimeout + maxRenewals × renewClaim`). Lower it to recover wedged sends sooner. |
+| `maxRenewals`                                  | `10`             | Renewal-attempt ceiling. Recovery begins `sendingTimeout` after last successful stamp; with responsive storage this is roughly `sendingTimeout + maxRenewals × renewClaim`. |
 | `shouldFailOver`                               | —                | Set when your transport can tell "never delivered" from "may have been delivered" — see [Transport fail-over](#transport-fail-over). |
 | `strictPayload`                                | `false`          | Turn on when anything other than your own app can write to the queue storage. |
 | `revolvingInterval`                            | `1536` ms        | Lower → faster pickup; higher → less scheduler I/O                                                                                 |
@@ -391,50 +389,34 @@ For deeper JoSk semantics (lease lifecycle, scheduler adapters, recurring tasks)
 
 ## Transport fail-over
 
-With `strategy: 'backup'` a failing transport is abandoned for the next one after `failsToNext` consecutive failures. That is the right move when the failure means *nothing was delivered* — a refused connection, a TLS handshake that never completed, a 5xx on `MAIL FROM`. It is the wrong move when the receiving MTA may already hold the message: a socket that dies during `DATA` is indistinguishable from one that dies before it, and re-sending through a second provider delivers the letter twice.
-
-MailTime cannot tell those apart — only the transport can. Two ways to say so:
+`backup` rotates after `failsToNext` failures. Veto rotation when an MTA may already hold the message:
 
 ```js
-// 1. From the transport: tag the error.
-const error = new Error('MX went silent after DATA');
-error.mayFailOver = false;   // MailTime keeps this transport and retries here
-done(error);
-
-// 2. From the queue: decide centrally.
 new MailTime({
   // ...
-  shouldFailOver(error, info, email) {
-    // Never cross providers once the body is on the wire.
-    return error?.code !== 'EMESSAGE' && error?.stage !== 'data';
-  },
+  shouldFailOver: (error) => error?.stage !== 'data',
 });
 ```
 
-`shouldFailOver` is consulted only when rotation would otherwise happen, and it overrides `error.mayFailOver`. Returning `false` keeps the current transport; the retry itself still happens on the normal `retryDelay` schedule.
+Transports may also set `error.mayFailOver = false`. Retry timing stays unchanged. Edge cases: [v4.1 → v5 migration guide](https://github.com/veliovgroup/mail-time/blob/master/docs/migration-v4.1-v5.md#shouldfailovererror-info-email).
 
 ## Queue payload trust
 
-A queued letter is a nodemailer message options object, and nodemailer's options are a *capability surface*: `attachments[].path` reads a local file, `attachments[].href` fetches a URL from inside your network, `envelope` and `dkim` decide who the message authenticates as. MailTime exists so **other processes** enqueue over shared storage — which means anything that can write to that storage inherits those capabilities.
-
-Two layers:
-
-- **Always on:** `raw` is refused at `sendMail()` and stripped from any letter that reached storage anyway. It bypasses composition (so `template`, `concatEmails` and `from()` silently stop applying), and nodemailer let a message-level `raw` bypass `disableFileAccess` / `disableUrlAccess` before 9.0.1.
-- **Opt-in — `strictPayload: true`:** every letter is narrowed to an allowlist (`to`, `cc`, `bcc`, `replyTo`, `subject`, `text`, `html`, `headers`, `list`, `priority`, `encoding`, `textEncoding`, `inReplyTo`, `references`, `date`), and `disableFileAccess` / `disableUrlAccess` are forced on. Extend it with `allowedMailFields: ['attachments']` when you genuinely need a field back.
+`raw` is always refused. Use `strictPayload` when queue writers should not control attachments, URLs, envelope, DKIM, or other nodemailer capabilities:
 
 ```js
 new MailTime({
   // ...
   strictPayload: true,
-  allowedMailFields: ['attachments'],  // opt a field back in, deliberately
+  allowedMailFields: ['attachments'], // optional allowlist extension
 });
 ```
 
-Leave `strictPayload` off only when the queue storage is reachable by your application alone.
+`strictPayload` also forces `disableFileAccess` and `disableUrlAccess`. Threat model and built-in allowlist: [v4.1 → v5 migration guide](https://github.com/veliovgroup/mail-time/blob/master/docs/migration-v4.1-v5.md#strictpayload--allowedmailfields).
 
 ## Resolving the sender
 
-`from` may be a function. It receives the selected transport **and** a details object:
+`from` receives selected transport plus `{ index, from }`:
 
 ```js
 new MailTime({
@@ -443,9 +425,7 @@ new MailTime({
 });
 ```
 
-`details` is `{ index, from }` — the transport's position in `transports`, and its sender address resolved by MailTime.
-
-Read `details.from` rather than `transport.options.from`. `nodemailer.createTransport()` only populates `.options` for *plain-object* configs; for a class-instance transporter (anything with its own `.send()` — most custom and direct-MX transports) nodemailer's internal `Mail.options` is always `{}`, so `transport.options.from` silently reads `undefined` and every letter goes out under whatever your fallback is. `MailTime.transportFrom(transport)` exposes the same resolution if you need it elsewhere.
+Use `details.from`, not `transport.options.from`, for class-instance transports. `MailTime.transportFrom(transport)` exposes same resolution. Details: [v4.1 → v5 migration guide](https://github.com/veliovgroup/mail-time/blob/master/docs/migration-v4.1-v5.md#fromtransport-details-and-mailtimetransportfrom).
 
 ## Templates
 
@@ -454,7 +434,7 @@ Two Mustache-like placeholder forms:
 - `{{key}}` — string interpolation. **HTML-escaped** in HTML contexts (`html`, `template`, `concatDelimiter`); verbatim in `text` bodies and subject headers, which are not HTML.
 - `{{{key}}}` — raw interpolation, never escaped. Only use it for values you produced yourself.
 
-> **Changed:** `{{key}}` used to strip tags rather than escape them. Stripping was never a safety net — the pass needs a closing `>`, so an unterminated `<a href="…` survived into the rendered body. It also mangled legitimate text like `x < y` or `<ops@example.com>` in plain-text parts, which now interpolate verbatim. If you relied on tag-stripping, strip before you enqueue.
+Migration behavior: [v4.1 → v5 template escaping](https://github.com/veliovgroup/mail-time/blob/master/docs/migration-v4.1-v5.md#2-key-escapes-html-instead-of-stripping-tags).
 
 Every `sendMail` option is available inside `text`, `html`, and the wrapping template:
 
@@ -505,10 +485,10 @@ await mailQueue.sendMail({
 | `concatDelay`                 | `number` (ms)                                       | `60000`                    | Fold window.                                                                                                                                                                                |
 | `revolvingInterval`           | `number` (ms)                                       | `1536`                     | Queue iteration interval.                                                                                                                                                                   |
 | `mode`                        | `'one' \| 'batch'`                                  | `'batch'`                  | `'batch'` claims every due row per tick; `'one'` claims a single row per tick.                                                                                                              |
-| `concurrency`                 | `number`                                            | `1`                        | Parallel SMTPs per instance. The CAS on `isSending` prevents duplicate delivery.                                                                                                            |
+| `concurrency`                 | `number`                                            | `1`                        | Parallel SMTPs per instance. CAS blocks concurrent claims for one row.                                                                                                                      |
 | `sendingTimeout`              | `number` (ms)                                       | `300000`                   | Window after which a stuck `isSending=true` row becomes eligible again. Must exceed worst-case SMTP roundtrip; values below `120000` log a warning.                                          |
 | `renewClaim`                  | `boolean \| number` (ms)                            | `sendingTimeout / 3`       | Re-stamp `sendingAt` on the claimed row while its SMTP roundtrip runs, so a slow-but-healthy send never loses its lock to a recovery worker. `false` restores the v4 single-stamp behaviour. |
-| `maxRenewals`                 | `number`                                            | `10`                       | Renewal budget per send. Once spent, the claim is allowed to go stale so a genuinely wedged send is still recovered — worst case `sendingTimeout + maxRenewals × renewClaim`.                |
+| `maxRenewals`                 | `number`                                            | `10`                       | Renewal-attempt budget per send. Recovery begins `sendingTimeout` after last successful stamp; slow renewal writes can extend elapsed time beyond the nominal interval calculation.          |
 | `shouldFailOver`              | `(error, info, email) => boolean`                   | —                          | Veto rotating to the next transport for this failure. Default: rotate unless the error carries `mayFailOver === false`. See [Transport fail-over](#transport-fail-over).                     |
 | `strictPayload`               | `boolean`                                           | `false`                    | Narrow every queued letter to `allowedMailFields` and force nodemailer's `disableFileAccess` / `disableUrlAccess`. See [Queue payload trust](#queue-payload-trust).                          |
 | `allowedMailFields`           | `string[]`                                          | —                          | Extra field names permitted under `strictPayload` (added to the built-in allowlist).                                                                                                        |
@@ -547,7 +527,7 @@ For deeper JoSk semantics, install the JoSk skill: **`npx skills add veliovgroup
 - `cancel(uuid)` — alias of `cancelMail`.
 - `ping()` → `Promise<{status, code, statusCode, paused?, error?}>`. Pings scheduler then queue; `paused` reflects `isPaused`.
 - `ready()` → `Promise<MailTime>`. Awaits all startup work; rejects with `.cause` on storage failure.
-- `destroy(opts?)` → `boolean` or `Promise<boolean>` when `{ drain: true }`. Stops scheduler. Idempotent. Use `destroy({ drain: true })` or `await drain()` after `destroy()` for graceful shutdown.
+- `destroy(opts?)` → `boolean` or `Promise<boolean>` when `{ drain: true }`. Stops scheduler. Idempotent. Use `await destroy({ drain: true })` for graceful shutdown; plain `destroy()` aborts completion writes.
 - `drain()` → `Promise<void>`. Resolves once every in-flight SMTP attempt finishes. Useful in tests and graceful-shutdown paths.
 - `pause()` / `resume()` → `boolean`. Server-only reversible backpressure; no-ops on `client` or after `destroy()`. See [Pause / resume](#pause--resume-a-server-backpressure).
 - `isPaused` → `boolean`. Read-only; always `false` on `client`.

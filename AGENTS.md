@@ -40,7 +40,7 @@ Send and queue emails in horizontally scaled Node.js and Bun.js. Bulletproof. Hi
 | `josk.execute` | `'batch'` | Usually leave; one JoSk uid per instance |
 | `josk.concurrency` | `Infinity` | `1` if ticks overlap |
 | `josk.lockOwnerId` | random | **Set prod** (`hostname-pid`, pod name) |
-| `retries` / `retryDelay` | `60` / `60s` (or `maxTries` 60 if unset) | Per class; OTP short, marketing long |
+| `retries` / `retryDelay` | `59` / `60s` (`maxTries` defaults to 60) | Per class; OTP short, marketing long |
 | `concatEmails` / `concatDelay` | false / 60s | Marketing on; OTP off |
 
 ### Per-row lifecycle (`isSending` lock)
