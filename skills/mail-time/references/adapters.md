@@ -6,7 +6,7 @@ Three built-in queue adapters plus the contract for writing custom ones. Pick by
 
 | Adapter | Best for | Prerequisite NPM | Server requirement | Atomic claim |
 |---|---|---|---|---|
-| `PostgresQueue` | Multi-DC, mixed clocks, strict exactly-once. | `pg` | `postgres ≥ 12` | `UPDATE … WHERE tries = $task.tries` (predicate guard) |
+| `PostgresQueue` | Multi-DC, mixed clocks, strongest consistency. | `pg` | `postgres ≥ 12` | `UPDATE … WHERE tries = $task.tries` (predicate guard) |
 | `RedisQueue` | High-throughput single-region, sub-second polling. | `redis@^4 \|\| ^5` | `redis-server ≥ 5.0.0` | `WATCH` + `MULTI` |
 | `MongoQueue` | Apps already running Mongo (especially Meteor.js). | `mongodb` (official) | `mongod ≥ 4.0.0` | `updateOne` with predicate guard |
 
@@ -199,7 +199,10 @@ interface CustomQueue {
   getPendingTo(to: string, sendAt: number): Promise<MailTimeTask | object | null>;
   push(email: MailTimeTask): Promise<void> | void;
   cancel(uuid: string): Promise<boolean>;
-  remove(email: MailTimeTask | object): Promise<boolean>;
+  remove(email: MailTimeTask | object, opts?: {
+    leaseTries: number;
+    leaseSendingAt: number;
+  }): Promise<boolean>;
   update(email: MailTimeTask | object, updateObj: object): Promise<boolean>;
   ready?(): Promise<void>;            // optional init barrier
   mailTimeInstance?: MailTime;        // set automatically when MailTime constructs
@@ -222,6 +225,7 @@ Start from `adapters/blank-example.js` in the source tree — it is the canonica
   - stored `tries === task.tries` (the caller's snapshot — **not** `tries < maxTries`. The snapshot match is the compare-and-set: two workers each loaded the row at `tries=N`, but only one can write `tries=N+1` back. Using `<` lets both succeed and you double-send.)
   - stored `isSending === false` **OR** stored `sendingAt <= updateObj.sendingAt - sendingTimeout` (stale-lock recovery)
   Return `false` whenever the predicate fails, so parallel workers (in this process or another node) drop the row and JoSk picks something else up next tick. Return `true` only when the storage layer atomically flipped `isSending` to `true`.
+- **Lease-guard every renewal and completion.** When `updateObj` contains `leaseTries` and `leaseSendingAt`, update only while stored `tries`, `sendingAt`, and `isSending` still match and row is not cancelled/failed. Strip guard fields before persist. Apply same predicate to `remove(email, opts)`. Return `false` on mismatch so late callbacks cannot complete another worker's row.
 - **`iterate(opts)` calls `await mailTimeInstance.___dispatch(task)`** — *not* `___send` — for every row matching: `isSent === false && isFailed === false && isCancelled === false && sendAt <= Date.now() && tries < maxTries && (isSending === false || sendingAt <= Date.now() - opts.sendingTimeout)`. `___dispatch` acquires a slot from MailTime's bounded send pool (the `concurrency` option) and starts the full send lifecycle detached. Stop the scan after `opts.limit` dispatches when `opts.limit` is set (MailTime sends `1` when configured with `mode: 'one'`).
 - **Persist `isSending` and `sendingAt`** alongside the other fields in `push`. New rows start with `isSending: false, sendingAt: 0`.
 - **Honor `mailTimeInstance.keepHistory`** in `cancel`. When `false`, delete the row; when `true`, mark `isCancelled: true`.
@@ -237,7 +241,7 @@ See `references/api.md` § Task object shape. The minimum fields used by the sen
 1. `iterate(opts)` opens a cursor / scan / SQL select for due rows that match the iterate predicate above.
 2. For each row, call `await this.mailTimeInstance.___dispatch(task)`. The `await` waits only for the send pool to acquire a slot — not for the SMTP roundtrip. Once the slot is acquired, MailTime starts the send in the background and `___dispatch` resolves, letting your scan move to the next due row.
 3. The send lifecycle (`___send`, internal) calls `this.update(task, { isSending: true, sendingAt: now, tries: N })` first — the atomic claim. If `update` returns `false`, another worker won the race and the lifecycle bails out cleanly.
-4. The lifecycle invokes the SMTP transport. On success, it calls `this.remove(task)` when `keepHistory: false`, or `this.update(task, { isSent: true, isSending: false, sendingAt: 0, mailOptions: … })` when `keepHistory: true`. Will-retry releases the lock via `this.update(task, { isSending: false, sendingAt: 0, sendAt: nextSendAt, … })`. Final failure mirrors the success branch with `isFailed: true`.
+4. While SMTP runs, v5 may renew `sendingAt` through a lease-guarded update. Completion, retry release, and final failure also carry `leaseTries` + `leaseSendingAt`; `remove` receives the same guard in `opts`. Honor these guards atomically and never persist them.
 5. When a worker dies between step 3 and the release, the row stays `isSending: true` until `sendingAt + sendingTimeout` is in the past. The next iterate cycle then re-includes it in the eligibility predicate, and a recovery worker can re-claim it.
 
 The atomic per-row claim is what prevents two workers — same instance or different cluster nodes — from sending the same email. A global queue-level lock is **not** enough, and MailTime's own pool relies on this same CAS to safely run `concurrency > 1`.

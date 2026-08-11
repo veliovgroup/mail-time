@@ -71,10 +71,10 @@ Constructor. The scheduler starts immediately when `opts.type === 'server'`.
 |---|---|---|---|
 | `type` | `'server' \| 'client'` | `'server'` | `client` only enqueues; `server` enqueues and sends. |
 | `prefix` | `string` | `''` | Isolates this instance's storage from siblings in the same store. |
-| `from` | `string \| (transport) => string` | — | Strongly recommended for spam-passing `From:` formatting. Function form receives the chosen transport so you can build `"App" <user@transport-domain>`. |
+| `from` | `string \| (transport, details) => string` | — | Strongly recommended. `details` is `{ index, from }`; use `details.from` with class-instance transports. |
 | `strategy` | `'backup' \| 'balancer'` | `'backup'` | Multi-SMTP rotation policy. See SKILL.md. |
 | `failsToNext` | `number` | `4` | (`backup` only) failures-in-a-row before rotating transport. |
-| `retries` | `number` | `60` | Re-send attempts on failure. The first attempt counts; `retries: 0` ⇒ one attempt total. |
+| `retries` | `number` | `59` | Re-send attempts after first failure. `retries: 0` means one total attempt; default is 60 total. |
 | `retryDelay` | `number` (ms) | `60000` | Wait between re-send attempts. |
 | `keepHistory` | `boolean` | `false` | When `true`, sent / failed / cancelled rows stay in storage instead of being deleted. |
 | `concatEmails` | `boolean \| { subject?: string }` | `false` | Fold multiple emails to the same `to` into one. Pass `{ subject: 'X' }` to set the folded-letter subject inline; the string supports the `{{count}}` placeholder (rendered to the number of folded letters) and overrides `concatSubject`. |
@@ -83,11 +83,11 @@ Constructor. The scheduler starts immediately when `opts.type === 'server'`.
 | `concatDelay` | `number` (ms) | `60000` | How long the fold window is open from each new email. |
 | `revolvingInterval` | `number` (ms) | `1536` | JoSk task interval that drives queue iteration. |
 | `mode` | `'one' \| 'batch'` | `'batch'` | `'batch'`: drain every due-and-unclaimed row per tick. `'one'`: claim a single row per tick (fairness across cluster nodes). Mirrors JoSk's `execute`. |
-| `concurrency` | `number` | `1` | Parallel SMTPs per instance, gated by an internal worker pool. The CAS on `isSending` prevents duplicate delivery even when concurrency > 1. |
+| `concurrency` | `number` | `1` | Parallel SMTPs per instance. The per-row CAS blocks concurrent claims when concurrency > 1. |
 | `sendingTimeout` | `number` (ms) | `300000` | How long an `isSending=true` row remains locked before it becomes eligible for recovery. Must exceed the worst-case SMTP roundtrip; values below `120000` log a warning. |
 | `renewClaim` | `boolean \| number` (ms) | `sendingTimeout / 3` | Re-stamp `sendingAt` on the claimed row while its SMTP roundtrip runs, via a lease-guarded update that succeeds only while this worker still owns the row. `false` restores v4's single stamp. |
-| `maxRenewals` | `number` | `10` | Renewal budget per send; once spent the claim is allowed to go stale so a wedged send is still recovered. |
-| `shouldFailOver` | `(error, info, email) => boolean` | — | Veto rotating to the next transport for this failure. Consulted only when rotation would otherwise happen. Default: rotate unless `error.mayFailOver === false`. |
+| `maxRenewals` | `number` | `10` | Renewal-attempt budget; recovery begins `sendingTimeout` after last successful stamp. Slow storage can extend elapsed time. |
+| `shouldFailOver` | `(error, info?, email) => boolean` | — | Veto rotating to next transport. `info` may be absent on errors. Default: rotate unless `error.mayFailOver === false`. |
 | `strictPayload` | `boolean` | `false` | Narrow every queued letter to `allowedMailFields` and force `disableFileAccess` / `disableUrlAccess`. |
 | `allowedMailFields` | `string[]` | — | Extra field names permitted under `strictPayload`. |
 | `verifyTransports` | `boolean` | `true` | Probe each transport via `transport.verify()` once at `ready()`. Failing transports are marked unusable (skipped during rotation/fallback) and surfaced through `onError(err, null, { transportIndex, phase: 'verify' })`. `ready()` rejects if every transport fails. Transports without a `verify()` method are treated as healthy. Set to `false` to disable. |
@@ -212,7 +212,7 @@ Stops the scheduler timer and blocks future dispatches. Returns `true` on the fi
 
 Resolves once every in-flight SMTP send started by the internal pool has settled. The pool is bounded by `concurrency`. Use cases:
 
-- **Graceful shutdown.** `await mailTime.destroy({ drain: true })` or `mailTime.destroy(); await mailTime.drain();`
+- **Graceful shutdown.** `await mailTime.destroy({ drain: true })`. Plain `destroy()` aborts completion writes and leaves claims for stale recovery.
 - **Tests that drive iterate.** Calling `await mailTime.___iterate()` or `await mailTime.queue.iterate()` only awaits the scan + claim phase. SMTP work happens in the pool; `await mailTime.drain()` waits for it.
 
 Tests that call `mailTime.___send(task)` directly do **not** need `drain()` — that method runs the full lifecycle synchronously.

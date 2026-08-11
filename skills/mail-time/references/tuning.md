@@ -26,7 +26,7 @@ One JoSk `setInterval` per `prefix` (`mailTimeQueue<prefix>` → `queue.iterate(
 | Lever | Effect |
 |---|---|
 | More `prefix`es / instances | More parallel drain loops |
-| `concurrency: N` (MailTime) | N parallel SMTPs per instance. Safe — CAS on `isSending` blocks dupes. |
+| `concurrency: N` (MailTime) | N parallel SMTPs per instance. CAS blocks concurrent claims. |
 | `mode: 'one'` (MailTime) | One claim per tick. Fairer cluster-wide; lower per-tick throughput. |
 | `revolvingInterval` ↓, `josk.min/maxRevolvingDelay` ↓ | Faster pickup, more storage I/O |
 | Dedicated mail workers | SMTP isolated from app |
@@ -40,7 +40,7 @@ One JoSk `setInterval` per `prefix` (`mailTimeQueue<prefix>` → `queue.iterate(
 | `concurrency` | `1` | Parallel SMTPs per instance. Increase for throughput; cap by SMTP rate limits. |
 | `sendingTimeout` | 300000 (5 min) | Window before a stuck `isSending=true` row becomes recoverable. Must exceed worst-case SMTP; warns below 120000. |
 | `renewClaim` | `sendingTimeout / 3` | Re-stamps `sendingAt` while the send is in flight so a slow-but-healthy send keeps its lock. `false` = v4 behaviour. |
-| `maxRenewals` | 10 | Renewal budget; caps how long a wedged send holds its row (`sendingTimeout + maxRenewals × renewClaim`). |
+| `maxRenewals` | 10 | Renewal-attempt budget; recovery begins `sendingTimeout` after last successful stamp. Slow renewal writes can extend elapsed time. |
 | `shouldFailOver` | — | Veto transport rotation for a failure that may already have been delivered. |
 | `strictPayload` | false | Allowlist queued fields + force `disableFileAccess`/`disableUrlAccess`. |
 | `revolvingInterval` | 1536 | Latency vs I/O |
@@ -49,7 +49,7 @@ One JoSk `setInterval` per `prefix` (`mailTimeQueue<prefix>` → `queue.iterate(
 | `josk.execute` | `'batch'` | Usually omit; one JoSk uid per instance |
 | `josk.concurrency` | `Infinity` | `1` if scheduler ticks overlap |
 | `josk.lockOwnerId` | random | **Prod:** `hostname-pid` or pod name |
-| `retries` / `retryDelay` | 60 / 60s | Per class |
+| `retries` / `retryDelay` | 59 / 60s | 60 total attempts by default; tune per class. |
 | `concatEmails` | `false` | `true` marketing only |
 
 ## Per-row lifecycle (`isSending` lock)
@@ -64,7 +64,7 @@ One JoSk `setInterval` per `prefix` (`mailTimeQueue<prefix>` → `queue.iterate(
    - **Final failure** → `isFailed=true, isSending=false, sendingAt=0` (or row removed).
 6. If a worker dies between (3) and (5), the row stays `isSending=true` until `sendingAt+sendingTimeout` is in the past, then becomes eligible again on the next iterate.
 
-The atomic CAS on `isSending` is the single mechanism that prevents duplicate delivery — both across the cluster and across `concurrency > 1` inside one instance.
+The atomic CAS on `isSending` prevents concurrent claims across cluster workers and `concurrency > 1`. SMTP acceptance followed by a lost completion write remains an unavoidable at-least-once edge.
 
 ## Presets
 

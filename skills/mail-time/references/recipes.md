@@ -42,8 +42,7 @@ const mailQueue = new MailTime({
 await mailQueue.ready();
 
 process.on('SIGTERM', async () => {
-  mailQueue.destroy();        // stop new scheduler ticks
-  await mailQueue.drain();    // let any in-flight SMTP roundtrips settle
+  await mailQueue.destroy({ drain: true });
   // close the underlying storage client(s) here
 });
 
@@ -326,7 +325,6 @@ await mailQueue.cancelMail(pending);
 const shutdown = async () => {
   // Stop scheduler and wait for in-flight SMTP sends in one call:
   await mailQueue.destroy({ drain: true });
-  // Or: mailQueue.destroy(); await mailQueue.drain();
   await redisClient?.quit?.();
   await pgPool?.end?.();
   await mongoClient?.close?.();
@@ -338,7 +336,7 @@ process.on('SIGTERM', shutdown);
 process.on('SIGHUP', shutdown);
 ```
 
-In tests, **always** call `destroy()` (and `drain()` when the test exercised the iterate path) and close the underlying client; otherwise the suite hangs on the open scheduler timer / connection pool.
+In tests, **always** call `destroy()`; use `await destroy({ drain: true })` when iterate started work. Then close the underlying client, or the suite can hang on scheduler timers/connections.
 
 ## Scaling sends inside a single instance
 
