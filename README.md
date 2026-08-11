@@ -529,7 +529,7 @@ For deeper JoSk semantics, install the JoSk skill: **`npx skills add veliovgroup
 - `ready()` → `Promise<MailTime>`. Awaits all startup work; rejects with `.cause` on storage failure.
 - `destroy(opts?)` → `boolean` or `Promise<boolean>` when `{ drain: true }`. Stops scheduler. Idempotent. Use `await destroy({ drain: true })` for graceful shutdown; plain `destroy()` aborts completion writes.
 - `drain()` → `Promise<void>`. Resolves once every in-flight SMTP attempt finishes. Useful in tests and graceful-shutdown paths.
-- `pause()` / `resume()` → `boolean`. Server-only reversible backpressure; no-ops on `client` or after `destroy()`. See [Pause / resume](#pause--resume-a-server-backpressure).
+- `pause()` / `resume()` → `boolean`. Server-only reversible backpressure; no-ops on `client` or after `destroy()`. See [Shutdown](#6-shutdown).
 - `isPaused` → `boolean`. Read-only; always `false` on `client`.
 
 ### Queue constructors
