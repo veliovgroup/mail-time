@@ -1,6 +1,6 @@
 # Migration guide (v4.1 → v5.0)
 
-`v5.0.0` closes three ways one queued letter could reach a recipient twice, one way it could be sent under the wrong identity, and one way a queue writer could reach further than "send an email". Most apps upgrade with **no code change**; four defaults changed, and one of them is visible in rendered HTML.
+`v5.0.0` closes duplicate-delivery risks, a sender-identity gap, and a queue-writer capability gap. Most apps upgrade with **no code change**; four defaults changed, and one is visible in rendered HTML.
 
 Storage schema is unchanged — no migration, no adapter rewrite, rolling upgrades are safe (a v4.1 and a v5.0 instance can drain the same queue side by side).
 
@@ -10,7 +10,7 @@ Storage schema is unchanged — no migration, no adapter rewrite, rolling upgrad
 
 **Was:** `sendingAt` was stamped once, at claim time. A send slower than `sendingTimeout` lost its lock to a "recovery" worker, which then delivered the same letter again. The only lever was a `sendingTimeout` large enough for the worst case — which made genuine crash recovery equally slow.
 
-**Now:** while a send is in flight, MailTime re-stamps `sendingAt` every `renewClaim` ms (default `sendingTimeout / 3`) with a lease-guarded update that succeeds only while this worker still owns the row. Renewals are capped by `maxRenewals` (default `10`), so a genuinely wedged send is still recovered — worst case `sendingTimeout + maxRenewals × renewClaim` instead of `sendingTimeout`.
+**Now:** while a send is in flight, MailTime re-stamps `sendingAt` every `renewClaim` ms (default `sendingTimeout / 3`) with a lease-guarded update that succeeds only while this worker still owns the row. Renewal attempts are capped by `maxRenewals` (default `10`), so a genuinely wedged send still recovers `sendingTimeout` after the last successful stamp. With responsive storage, elapsed time is roughly `sendingTimeout + maxRenewals × renewClaim`; slow renewal writes can extend it.
 
 **If you relied on the old recovery latency:** `renewClaim: false` restores v4.1 exactly. Lower `maxRenewals` to tighten the ceiling without giving up renewal.
 

@@ -15,8 +15,9 @@ import { otpMail, transactionalMail, marketingMail } from './mail-instances.js';
 const workers = [otpMail, transactionalMail, marketingMail];
 await Promise.all(workers.map((m) => m.ready()));
 
-process.on('SIGTERM', () => {
-  for (const m of workers) m.destroy();
+process.on('SIGTERM', async () => {
+  await Promise.all(workers.map((m) => m.destroy({ drain: true })));
+  process.exit(0);
 });
 ```
 
@@ -56,8 +57,8 @@ if (!mailClass) {
 }
 
 const mailTime = await startMailWorker(mailClass);
-process.on('SIGTERM', () => {
-  mailTime.destroy();
+process.on('SIGTERM', async () => {
+  await mailTime.destroy({ drain: true });
   process.exit(0);
 });
 ```

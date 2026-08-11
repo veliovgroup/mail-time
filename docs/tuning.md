@@ -58,9 +58,13 @@ For deeper JoSk semantics — adapter internals, lease lifecycle, recurring task
 
 ## Pitfalls
 
+### Reliability boundary
+
+MailTime atomically claims queue rows and lease-guards every completion write, preventing concurrent workers from sending the same attempt. It cannot atomically commit queue state with a remote SMTP server. If SMTP accepts a message and the worker dies before storing completion, stale-lock recovery retries it. This is an unavoidable at-least-once edge for SMTP-backed queues; monitor stable application IDs and make message content safe for rare retries.
+
 - **Many `server` pods on the same `prefix`, expecting N× send rate** — they compete for one drain lease per tick. Use `concurrency` (in-process) and/or distinct `prefix`es (cluster-wide) instead. Duplicate-prefix `server` is still useful as **failover/HA** — a warm standby with a different `lockOwnerId` takes over the lease the next tick if the leader dies.
 - **`zombieTime` too low** with slow storage scans — another node may start an overlapping drain. The atomic CAS on `isSending` still prevents double-send, but wasted work and SMTP pressure remain.
-- **`sendingTimeout` below the worst-case SMTP roundtrip** — a healthy still-sending worker can lose its lock to a recovery worker, causing a duplicate delivery. Always keep `sendingTimeout` comfortably above the slowest legitimate roundtrip; MailTime logs a warning below `120000`. Since v5 the claim is also **renewed while the send is in flight** (`renewClaim`, default `sendingTimeout / 3`), so `sendingTimeout` no longer has to cover the worst case on its own — but it is still the floor that decides how fast a *crashed* worker's row is recovered. The renewal budget (`maxRenewals`, default `10`) caps the total: a wedged send holds its row for at most `sendingTimeout + maxRenewals × renewClaim`.
+- **`sendingTimeout` below the worst-case SMTP roundtrip** — a healthy still-sending worker can lose its lock to a recovery worker, causing a duplicate delivery. Always keep `sendingTimeout` comfortably above the slowest legitimate roundtrip; MailTime logs a warning below `120000`. Since v5 the claim is also **renewed while the send is in flight** (`renewClaim`, default `sendingTimeout / 3`), so `sendingTimeout` no longer has to cover the worst case on its own — but it is still the floor that decides how fast a *crashed* worker's row is recovered. `maxRenewals` caps renewal attempts; recovery begins `sendingTimeout` after the last successful stamp. Slow renewal writes can extend elapsed time beyond the nominal interval calculation.
 - **Replica reads** for queue or scheduler — use primary / writer endpoint only.
 - **`josk.adapter.resetOnInit: true`** in production — wipes scheduler state on every boot.
 - **`concatEmails: true` on OTP or password resets** — folds letters together. Use a separate instance (`prefix: 'otp'`) instead.
