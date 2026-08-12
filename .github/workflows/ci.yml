@@ -205,6 +205,50 @@ jobs:
         if: matrix.runtime == 'bun'
         run: bun test ./test/jest
 
+  redis-cluster:
+    name: node lts · redis Cluster · redis ^5
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      REDIS_URL: redis://127.0.0.1:6390
+      REDIS_CLUSTER_URL: redis://127.0.0.1:7000
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - run: npm ci
+
+      - name: Start standalone Redis migration source
+        run: |
+          docker run -d --name mailtime-redis-source --network host redis:7-alpine redis-server --port 6390 --appendonly no
+          until docker exec mailtime-redis-source redis-cli -p 6390 ping | grep -q PONG; do sleep 1; done
+
+      - name: Start Redis Cluster
+        run: |
+          for port in 7000 7001 7002; do
+            docker run -d --name "mailtime-redis-${port}" --network host redis:7-alpine redis-server --port "${port}" --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --cluster-announce-ip 127.0.0.1 --cluster-announce-port "${port}" --cluster-announce-bus-port "$((port + 10000))" --appendonly no
+          done
+          for port in 7000 7001 7002; do
+            until docker exec "mailtime-redis-${port}" redis-cli -p "${port}" ping | grep -q PONG; do sleep 1; done
+          done
+          for attempt in $(seq 1 15); do
+            if docker exec mailtime-redis-7000 redis-cli --cluster create 127.0.0.1:7000 127.0.0.1:7001 127.0.0.1:7002 --cluster-replicas 0 --cluster-yes; then
+              break
+            fi
+            if [ "$attempt" -eq 15 ]; then
+              exit 1
+            fi
+            sleep 2
+          done
+          until docker exec mailtime-redis-7000 redis-cli -p 7000 cluster info | grep -q 'cluster_state:ok'; do sleep 1; done
+
+      - name: Redis Cluster integration
+        run: npm run test:mocha:redis-cluster
+
   meteor-mongo:
     name: meteor ${{ matrix.meteor-release }} · mongo (built-in)
     runs-on: ubuntu-latest

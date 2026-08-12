@@ -254,6 +254,167 @@ describe('MongoQueue unit behavior', () => {
 });
 
 describe('RedisQueue unit behavior', () => {
+  it('uses opt-in hash-tagged keys for Redis Cluster clients', async () => {
+    const client = createRedisClient();
+    delete client.watch;
+    delete client.unwatch;
+    delete client.scanIterator;
+    client.eval = jest.fn(async () => null);
+    const queue = new RedisQueue({
+      client,
+      prefix: 'mail-v2:otp',
+      useHashTags: true,
+    });
+
+    expect(queue.useHashTags).toBe(true);
+    expect(queue.uniqueName).toBe('mailtime:{mail-v2:otp}');
+    expect(queue.__getKey('letter')).toBe('mailtime:{mail-v2:otp}:letters');
+    expect(queue.__getKey('schedule', 'sendat')).toBe('mailtime:{mail-v2:otp}:schedule');
+    expect(queue.__getKey('a@example.com', 'concatletter')).toBe('mailtime:{mail-v2:otp}:concatletter:a@example.com');
+    expect(() => new RedisQueue({ client, prefix: 'bad{prefix}', useHashTags: true })).toThrow(/prefix/);
+    expect(() => new RedisQueue({ client, useHashTags: 'true' })).toThrow(/useHashTags.*boolean/);
+    await expect(queue.ready()).resolves.toBeUndefined();
+  });
+
+  it('uses Lua operations instead of WATCH and SCAN in hash-tagged mode', async () => {
+    const client = createRedisClient();
+    delete client.watch;
+    delete client.unwatch;
+    delete client.multi;
+    client.eval = jest.fn(async (source) => {
+      if (source.includes('ZRANGEBYSCORE')) {
+        return '[]';
+      }
+      return 1;
+    });
+    const queue = new RedisQueue({ client, prefix: 'cluster', useHashTags: true });
+    queue.mailTimeInstance = createMailTimeHarness();
+    const task = {
+      uuid: 'tagged-task',
+      to: 'user@example.com',
+      tries: 0,
+      sendAt: Date.now() - 1,
+      isSent: false,
+      isFailed: false,
+      isCancelled: false,
+      isSending: false,
+      sendingAt: 0,
+      mailOptions: [],
+    };
+
+    await queue.push(task);
+    await queue.update(task, { isSending: true, sendingAt: Date.now(), tries: 1 });
+    await queue.iterate();
+    await queue.remove(task);
+
+    expect(client.eval).toHaveBeenCalledTimes(4);
+    expect(client.scanIterator).not.toHaveBeenCalled();
+    expect(client.watch).toBeUndefined();
+    expect(client.multi).toBeUndefined();
+  });
+
+  it('uses finite Lua limits and resolves inherited tagged prefixes before queue writes', async () => {
+    const client = createRedisClient();
+    delete client.watch;
+    delete client.unwatch;
+    delete client.multi;
+    client.eval = jest.fn(async (source) => source.includes('ZRANGEBYSCORE') ? '[]' : 1);
+    const queue = new RedisQueue({ client, useHashTags: true });
+    queue.mailTimeInstance = { ...createMailTimeHarness(), prefix: 'inherited' };
+    const task = {
+      uuid: 'inherited-task',
+      tries: 0,
+      sendAt: Date.now(),
+      isSent: false,
+      isFailed: false,
+      isCancelled: false,
+      isSending: false,
+      sendingAt: 0,
+    };
+
+    await queue.push(task);
+    await queue.iterate({ limit: Infinity });
+
+    expect(client.eval.mock.calls[0][1].keys).toEqual([
+      'mailtime:{inherited}:letters',
+      'mailtime:{inherited}:schedule',
+    ]);
+    expect(client.eval.mock.calls[1][1].arguments[3]).toBe('100');
+  });
+
+  it('resolves inherited tagged prefixes before iterate, cancel, and remove', async () => {
+    const client = createRedisClient();
+    delete client.watch;
+    delete client.unwatch;
+    delete client.multi;
+    client.hGet = jest.fn(async () => null);
+    client.eval = jest.fn(async (source) => source.includes('ZRANGEBYSCORE') ? '[]' : 0);
+    const queue = new RedisQueue({ client, useHashTags: true });
+    queue.mailTimeInstance = { ...createMailTimeHarness(), prefix: 'inherited' };
+
+    await queue.iterate();
+    await expect(queue.cancel('missing')).resolves.toBe(false);
+    await expect(queue.remove({ uuid: 'missing' })).resolves.toBe(false);
+
+    expect(client.eval.mock.calls[0][1].keys).toEqual([
+      'mailtime:{inherited}:letters',
+      'mailtime:{inherited}:schedule',
+      'mailtime:{inherited}:concatkeys',
+    ]);
+    expect(client.hGet).toHaveBeenCalledWith('mailtime:{inherited}:letters', 'missing');
+    expect(client.eval.mock.calls[1][1].keys[0]).toBe('mailtime:{inherited}:letters');
+  });
+
+  it('uses Lua lease mode for tagged claim renewals and reloads scripts after NOSCRIPT', async () => {
+    const client = createRedisClient();
+    delete client.watch;
+    delete client.unwatch;
+    delete client.multi;
+    const noScript = Object.assign(new Error('NOSCRIPT No matching script. Please use EVAL.'), { code: 'NOSCRIPT' });
+    let evalShaCalls = 0;
+    client.scriptLoad = jest.fn(async () => 'sha-loaded');
+    client.evalSha = jest.fn(async () => {
+      evalShaCalls += 1;
+      if (evalShaCalls === 2) {
+        throw noScript;
+      }
+      return 1;
+    });
+    client.eval = jest.fn(async () => 1);
+    const queue = new RedisQueue({ client, prefix: 'cluster', useHashTags: true });
+    queue.mailTimeInstance = createMailTimeHarness();
+    const task = {
+      uuid: 'tagged-lease',
+      to: 'user@example.com',
+      tries: 1,
+      sendAt: Date.now(),
+      isSent: false,
+      isFailed: false,
+      isCancelled: false,
+      isSending: true,
+      sendingAt: 1000,
+    };
+
+    await expect(queue.update(task, {
+      isSending: true,
+      sendingAt: 1001,
+      leaseTries: 1,
+      leaseSendingAt: 1000,
+    })).resolves.toBe(true);
+    expect(client.evalSha.mock.calls[0][1].arguments[2]).toBe('lease');
+    expect(client.evalSha.mock.calls[0][1].arguments[5]).toBe('1');
+    expect(client.evalSha.mock.calls[0][1].arguments[6]).toBe('1000');
+
+    await expect(queue.update(task, {
+      isSending: true,
+      sendingAt: 1002,
+      leaseTries: 1,
+      leaseSendingAt: 1000,
+    })).resolves.toBe(true);
+    expect(client.scriptLoad).toHaveBeenCalledTimes(2);
+    expect(client.eval).not.toHaveBeenCalled();
+  });
+
   it('validates constructor and reports ping states', async () => {
     expect(() => new RedisQueue()).toThrow('[mail-time] Configuration object must be passed');
     expect(() => new RedisQueue({})).toThrow('[mail-time] [RedisQueue] required {client} option is missing');

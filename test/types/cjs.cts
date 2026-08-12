@@ -1,4 +1,5 @@
 import mailTime = require('mail-time');
+import type { RedisClusterType } from 'redis';
 
 const pg = new mailTime.PostgresQueue({
   client: {
@@ -38,6 +39,8 @@ client.ping().then((result) => {
 
 void mailTime.MongoQueue;
 void mailTime.RedisQueue;
+declare const nodeRedisCluster: RedisClusterType;
+void new mailTime.RedisQueue({ client: nodeRedisCluster, useHashTags: true });
 
 const marketingPreset = mailTime.mailTimePreset('marketing');
 void marketingPreset;

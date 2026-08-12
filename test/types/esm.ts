@@ -1,4 +1,6 @@
 import { MailTime, MongoQueue, PostgresQueue, RedisQueue, mailTimePreset, presetNames, presets } from 'mail-time';
+import { RedisQueue as RedisQueueAdapter } from 'mail-time/adapters/redis';
+import type { RedisClusterType } from 'redis';
 import type {
   CustomQueue,
   MailTimeJoSkOptions,
@@ -187,6 +189,30 @@ const redisQueue = new RedisQueue({
     }
   }
 });
+const redisClusterQueue = new RedisQueue({
+  client: {
+    async exists(_key: string) {
+      return 0;
+    },
+    async get(_key: string) {
+      return null;
+    },
+    async set(_key: string, _value: string) {
+      return 'OK';
+    },
+    async del(_keys: string | string[]) {
+      return 0;
+    },
+    async ping() {
+      return 'PONG';
+    }
+  },
+  useHashTags: true,
+});
+void redisClusterQueue;
+declare const nodeRedisCluster: RedisClusterType;
+void new RedisQueue({ client: nodeRedisCluster, useHashTags: true });
+void new RedisQueueAdapter({ client: nodeRedisCluster, useHashTags: true });
 // @ts-expect-error __getKey is internal
 redisQueue.__getKey('uuid');
 
