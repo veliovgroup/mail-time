@@ -1,6 +1,6 @@
 {
   "name": "mail-time",
-  "version": "5.0.0",
+  "version": "5.1.0",
   "description": "📮 Email queue extending nodemailer with multi-SMTP transports and horizontally scaled apps support",
   "main": "index.js",
   "types": "./index.d.ts",
@@ -18,7 +18,8 @@
     "index.d.ts",
     "index.js",
     "presets.d.ts",
-    "presets.js"
+    "presets.js",
+    "scripts/migrate-redis-queue-to-cluster.mjs"
   ],
   "exports": {
     ".": {
@@ -63,6 +64,7 @@
     "test:jest": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --config jest.config.mjs",
     "test:mocha": "mocha ./test/npm.js",
     "test:mocha:redis": "mocha ./test/npm-redis-redis.js",
+    "test:mocha:redis-cluster": "mocha ./test/npm-redis-cluster.js",
     "test:mocha:mongo": "mocha ./test/npm-redis-mongo.js ./test/npm-mongo-redis.js ./test/npm-ha-mongo-redis.js",
     "test:mocha:postgres": "mocha ./test/npm-postgres.js",
     "test:types": "tsc -p ./tsconfig.types.json",
