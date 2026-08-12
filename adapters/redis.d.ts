@@ -4,7 +4,17 @@ export type RedisClient = {
     set: (key: string, value: string, options?: object) => Promise<unknown>;
     del: (key: string | string[]) => Promise<number>;
     ping: () => Promise<string>;
-    scanIterator: (options: object) => AsyncIterable<string | string[]>;
+    scanIterator?: ((options: object) => AsyncIterable<string | string[]>) | undefined;
+    hGet?: ((key: string, field: string) => Promise<string | null>) | undefined;
+    eval?: ((script: string, options: {
+        keys: string[];
+        arguments: string[];
+    }) => Promise<unknown>) | undefined;
+    evalSha?: ((sha: string, options: {
+        keys: string[];
+        arguments: string[];
+    }) => Promise<unknown>) | undefined;
+    scriptLoad?: ((script: string) => Promise<string>) | undefined;
     watch?: ((key: string) => Promise<unknown>) | undefined;
     unwatch?: (() => Promise<unknown>) | undefined;
     multi?: (() => object) | undefined;
@@ -12,6 +22,10 @@ export type RedisClient = {
 export type RedisQueueOption = {
     client: RedisClient;
     prefix?: string | undefined;
+    /**
+     * - Use Redis Cluster hash-tag keys (`mailtime:{prefix}:*`). Default keeps existing standalone keys.
+     */
+    useHashTags?: boolean | undefined;
 };
 /** Class representing Redis Queue for MailTime */
 export class RedisQueue {
@@ -22,8 +36,12 @@ export class RedisQueue {
     constructor(opts: RedisQueueOption);
     name: string;
     client: RedisClient;
+    useHashTags: boolean;
     prefix: any;
     uniqueName: string | undefined;
+    lettersKey: string | undefined;
+    scheduleKey: string | undefined;
+    concatKeysKey: string | undefined;
     /**
      * @async
      * @memberOf RedisQueue

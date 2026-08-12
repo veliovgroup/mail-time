@@ -537,11 +537,15 @@ For deeper JoSk semantics, install the JoSk skill: **`npx skills add veliovgroup
 
 | Constructor                              | Required option                                      | Optional                                                                                                     |
 | ---------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `new RedisQueue({ client, prefix? })`    | connected `redis@^4/^5` client with `watch()` + `multi()` | `prefix` — inherited from `MailTime` when omitted. Redis Cluster prefixes must map to one hash slot.        |
+| `new RedisQueue({ client, prefix?, useHashTags? })` | connected `redis@^4/^5` standalone or Cluster client | `prefix` — inherited from `MailTime` when omitted. Set `useHashTags: true` on Redis/KeyDB Cluster; set same option on JoSk Redis adapter. |
 | `new MongoQueue({ db, prefix? })`        | `db` from `MongoClient#db()`                         | `prefix` — inherited from `MailTime` when omitted. Indexes auto-created on first `ready()`.                  |
 | `new PostgresQueue({ client, prefix? })` | `pg.Pool` (recommended) or `pg.Client`               | `prefix` — inherited from `MailTime` when omitted. `mail_time_queue` table auto-migrated on first `ready()`. |
 
 For custom adapters see [docs/queue-api.md](https://github.com/veliovgroup/mail-time/blob/master/docs/queue-api.md).
+
+### Redis Cluster
+
+Set `useHashTags: true` on both `RedisQueue` and its JoSk Redis adapter. Queue state then uses `mailtime:{prefix}:letters` plus a tagged sorted-set schedule, so node-redis `createCluster()` can route every Lua operation to one slot. One prefix is one slot; shard high-volume traffic across prefixes. Tagged `iterate` returns at most 100 due rows per tick. Existing standalone keys are not read in this mode. Follow [Redis Cluster migration](https://github.com/veliovgroup/mail-time/blob/master/docs/migration-v5-v5.1.md) before cutover.
 
 ### Module functions
 
@@ -563,6 +567,7 @@ Upgrade checklists, adapter contract changes, and rollout notes live in the docs
 | 3.x  | 4.1 | [v3 → v4](https://github.com/veliovgroup/mail-time/blob/master/docs/migration-v3-v4.md) |
 | 4.0  | 4.1 | [v4.0 → v4.1](https://github.com/veliovgroup/mail-time/blob/master/docs/migration-v4-v4.1.md) |
 | 4.1  | 5.0 | [v4.1 → v5](https://github.com/veliovgroup/mail-time/blob/master/docs/migration-v4.1-v5.md) |
+| 5.0  | 5.1 | [v5 → v5.1 Redis Cluster](https://github.com/veliovgroup/mail-time/blob/master/docs/migration-v5-v5.1.md) |
 
 New in v4 (opt-in): `mailTimePreset`, `concurrency`/`mode`, `sendingTimeout`, `drain()`/`pause()`/`resume()`, per-recipient handling, AI skills bundle.
 
