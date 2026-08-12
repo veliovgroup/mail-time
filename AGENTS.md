@@ -192,6 +192,7 @@ Update this AGENTS.md on major refactors.
 - `.npmignore` should exclude `.cursorignore` so editor-only config is not published in the npm tarball.
 - `package.js` (Atmosphere) version and `Npm.depends.josk` must match npm `package.json` before Meteor publish — drift ships wrong release to Atmosphere consumers.
 - CI Node matrix: `matrix.mocha-suite` runs `test:mocha:redis|mongo|postgres` only; Jest + `test:types` on canonical row; Meteor subsets via `METEOR_TEST_SUITE` in `test/meteor.js` (`mongo` | `redis` | `postgres`).
-- `RedisQueue` send claims require Redis client `watch()` and `multi()`; without them claims fail closed (no non-atomic fallback).
+- Standalone `RedisQueue` send claims require Redis client `watch()` and `multi()`; without them claims fail closed (no non-atomic fallback).
+- Redis Cluster / KeyDB Cluster: `RedisQueue({ useHashTags: true })` uses tagged hash + sorted-set keys and Lua CAS; set `josk.adapter.useHashTags: true` too. Tagged `iterate` returns at most 100 due rows per tick. Standalone Redis keeps `WATCH` + `MULTI` keys and behavior.
 - Meteor: ship `package-types.json` (keep out of `.meteorignore`) so `zodern:types` can read `typesEntry`.
 - Dedicated mail host: systemd `mailtime@<class>` — one `server` process per email class; second unit on same `prefix` is hot-standby only, not throughput.
