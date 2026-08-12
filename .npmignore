@@ -43,6 +43,7 @@ package-types.json
 rollup.config.js
 scripts/
 scripts/*
+!scripts/migrate-redis-queue-to-cluster.mjs
 skills/
 skills/*
 template.html
