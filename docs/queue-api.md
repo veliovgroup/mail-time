@@ -45,6 +45,8 @@ List of required methods and their arguments.
   - **Lease release guard.** When `updateObj` contains `{ leaseTries: Number, leaseSendingAt: Number, ... }` (MailTime-internal keys stripped before persist), the update **must succeed only if** the stored row still holds that worker's lease: `tries === leaseTries AND isSending === true AND sendingAt === leaseSendingAt AND isCancelled === false AND isFailed === false`. Same predicate applies to `remove(email, { leaseTries, leaseSendingAt })`. When the guard fails, return `false` so a late SMTP callback from a superseded worker cannot complete or delete a row that another worker finalized or a user has since cancelled.
   - **Atomic concat append.** When `updateObj` contains `{ appendMailOption: object }`, atomically append one element to `mailOptions` only if the row is not in-flight (`isSending === false`) and not terminal.
 
+Redis Cluster queues must keep every hash, sorted-set, concat key, and any pointer index in one shared hash tag. Use Lua for atomic claims: node-redis `RedisClusterType` has no `watch()` or `scanIterator()`.
+
 ## Iterate predicate
 
 `iterate(opts)` must enumerate rows where every condition below is true:
