@@ -7,7 +7,7 @@ Three built-in queue adapters plus the contract for writing custom ones. Pick by
 | Adapter | Best for | Prerequisite NPM | Server requirement | Atomic claim |
 |---|---|---|---|---|
 | `PostgresQueue` | Multi-DC, mixed clocks, strongest consistency. | `pg` | `postgres ≥ 12` | `UPDATE … WHERE tries = $task.tries` (predicate guard) |
-| `RedisQueue` | High-throughput single-region, sub-second polling. | `redis@^4 \|\| ^5` | `redis-server ≥ 5.0.0` | `WATCH` + `MULTI` |
+| `RedisQueue` | High-throughput single-region, sub-second polling. | `redis@^4 \|\| ^5` | Redis / KeyDB / Valkey. Lua+ZSET ≥5; `concatEmails` needs `PXAT` (≥6.2). Cluster: `useHashTags: true` | Standalone: `WATCH` + `MULTI`. Cluster: Lua CAS on tagged hash + ZSET |
 | `MongoQueue` | Apps already running Mongo (especially Meteor.js). | `mongodb` (official) | `mongod ≥ 4.0.0` | `updateOne` with predicate guard |
 
 All adapters expose the same seven-method interface (`ping`, `iterate`, `getPendingTo`, `push`, `cancel`, `remove`, `update`) plus an optional `ready` that resolves once startup migrations / indexes are in place.
@@ -67,9 +67,9 @@ const redisClient = await createClient({ url: process.env.REDIS_URL }).connect()
 
 const mailQueue = new MailTime({
   type: 'server',
-  queue: new RedisQueue({ client: redisClient }),
+  queue: new RedisQueue({ client: redisClient /* , useHashTags: true */ }),
   josk: {
-    adapter: { type: 'redis', client: redisClient },
+    adapter: { type: 'redis', client: redisClient /* , useHashTags: true */ },
   },
   transports: [/* ... */],
 });
@@ -79,22 +79,52 @@ const mailQueue = new MailTime({
 
 | Option | Type | Default | Notes |
 |---|---|---|---|
-| `client` | `RedisClient` | — | **Required.** Already-connected `redis@^4` or `redis@^5` client (`RedisClientType` or `RedisClusterType`) with `watch()` and `multi()`. |
-| `prefix` | `string` | `'default'` | Scopes keys under `mailtime:<prefix>:…`. |
+| `client` | `RedisClient` | — | **Required.** Connected `redis@^4` or `redis@^5` `RedisClientType` or `RedisClusterType`. |
+| `prefix` | `string` | `'default'` | Scopes keys. With `useHashTags: true` must match `/^[A-Za-z0-9_\-:.]+$/` (`{` / `}` rejected). |
+| `useHashTags` | `boolean` | `false` | Redis / KeyDB / Valkey Cluster: tagged keys `mailtime:{prefix}:*` plus Lua CAS. Default keeps standalone `mailtime:prefix:*` keys. Set the same flag on the JoSk Redis adapter. |
 
 ### Keys (for `prefix: 'default'`)
 
-- `mailtime:default:letter:<uuid>` — JSON of the email task.
-- `mailtime:default:sendat:<uuid>` — `sendAt` timestamp, scanned by `iterate`.
-- `mailtime:default:concatletter:<to>` — uuid pointer for concat dedup. Has `PXAT` TTL.
+Standalone (`useHashTags: false`):
+
+- `mailtime:default:letter:<uuid>` — JSON task
+- `mailtime:default:sendat:<uuid>` — `sendAt`; `SCAN`'d by `iterate`
+- `mailtime:default:concatletter:<to>` — concat uuid pointer (`PXAT` TTL)
+
+Cluster (`useHashTags: true`):
+
+- `mailtime:{default}:letters` — hash of task JSON
+- `mailtime:{default}:schedule` — ZSET of due/recovery times
+- `mailtime:{default}:concatletter:<to>` — concat pointer
+- `mailtime:{default}:concatkeys` — ZSET of concat pointer keys for expiry cleanup
+
+Existing standalone keys are not read when `useHashTags: true`. Migrate first: `docs/migration-v5-v5.1.md`.
+
+### Engines: Redis, KeyDB, Valkey
+
+Same RESP client (`redis@^4 \|\| ^5`). Protocol surface: strings, HASH, ZSET, Lua `cjson`, `EVAL`/`EVALSHA`, `PING`. Standalone also `WATCH`/`MULTI`/`SCAN`. No RedisJSON, Streams, or modules.
+
+| Engine | Standalone | Cluster | Proven |
+|---|---|---|---|
+| Redis | Yes | `useHashTags: true` on **queue and JoSk** | CI: Redis 7 standalone + Cluster |
+| KeyDB | Yes, as single-writer Redis | `useHashTags: true` on both | JoSk well-tested; MailTime not in CI |
+| Valkey | Yes (Redis 7.2 fork) | `useHashTags: true` on both | Not in CI; treat as Redis 7 |
+
+**Will run well:** one writable primary, or Cluster with matching `useHashTags` on `RedisQueue` **and** `josk.adapter`. `concatEmails` needs Redis/KeyDB/Valkey ≥ 6.2 (`SET PXAT`).
+
+**Will not:** KeyDB active-replication / multi-master; Redis active-active (CRDT); replica reads for claims; Cluster without `useHashTags` (`CROSSSLOT`); mixing tagged and untagged keys (no dual-read). Multi-DC / mixed clocks → `PostgresQueue`, not these engines.
+
+JoSk under MailTime uses prefix `mailTimeQueue${prefix}` (tagged lock: `josk:{mailTimeQueueotp}:lock`). JoSk `useHashTags` only **renames** `josk:prefix:*` → `josk:{prefix}:*`. MailTime tagged mode is a **new** layout (hash + ZSET + Lua), not a rename of `letter:`/`sendat:` keys — do not apply JoSk `RENAME`/`DUMP` to the queue; use `scripts/migrate-redis-queue-to-cluster.mjs`. JoSk itself is Lua-always (no `WATCH`); MailTime standalone still needs `WATCH`+`MULTI`. Cluster clients have no `WATCH` — tagged Lua is required. Tagged `iterate` returns at most 100 due rows per tick.
+
+Scheduler leases, zombies, `setInterval`: **REQUIRED** `josk` skill.
 
 ### Topology guidelines
 
-- One writable primary endpoint, or a Redis Cluster endpoint where the prefix maps to one hash slot via hash-tagged prefixes.
-- **Do not** route reads to replicas. Lease writes must be immediately visible.
-- **Do not** use Redis active-active / multi-master or KeyDB active-replication. Conflict resolution can allow duplicate claims across writers.
-- The `push` path uses `MULTI` when the client supports it, falling back to three sequential `SET`s otherwise.
-- The send-claim path requires `WATCH` + `MULTI` for atomic compare-and-set. Minimal clients without those methods cannot safely claim rows.
+- One writable primary. Redis / KeyDB / Valkey Cluster: `useHashTags: true` on **both** `RedisQueue` and `josk.adapter`.
+- **Do not** route reads to replicas. Claims must be immediately visible.
+- **Do not** use Redis active-active / multi-master or KeyDB active-replication. Conflict resolution can duplicate claims.
+- Standalone send-claim requires `WATCH` + `MULTI`; clients without them fail closed.
+- Cluster clients have no `WATCH` / `SCAN`; tagged mode uses Lua. One prefix = one hash slot; shard high volume across prefixes.
 
 ## `MongoQueue`
 
@@ -152,7 +182,7 @@ const client = await MongoClient.connect(process.env.MONGO_URL, {
 | Adapter | Storage layout (for `prefix: 'app'`) |
 |---|---|
 | Postgres | Rows in `mail_time_queue` filtered by `prefix='app'`. Scheduler row in `josk_locks` with `lock_key='josk-mailTimeQueueapp.lock'`. |
-| Redis | Keys `mailtime:app:letter:*`, `mailtime:app:sendat:*`, `mailtime:app:concatletter:*`. Scheduler keys `josk:{mailTimeQueueapp}:…`. |
+| Redis / KeyDB / Valkey | Standalone: `mailtime:app:letter:*`. Cluster (`useHashTags: true`): `mailtime:{app}:letters` + `:schedule`. Scheduler: `josk:{mailTimeQueueapp}:…` (same `useHashTags` on JoSk). |
 | Mongo | Collection `__mailTimeQueue__app`. Scheduler collection `__JobTasks__mailTimeQueueapp`; shared lock collection `__JobTasks__.lock`. |
 
 Use distinct prefixes for tenants, environments, transactional vs marketing queues, etc.
@@ -169,12 +199,16 @@ DELETE FROM josk_locks WHERE lock_key = 'josk-mailTimeQueuedefault.lock';
 
 ### Redis
 
+Standalone:
+
 ```sh
 redis-cli --no-auth-warning --scan --pattern "mailtime:default:*" \
   | xargs redis-cli --no-auth-warning DEL
-redis-cli --no-auth-warning --scan --pattern "josk:{mailTimeQueuedefault}:*" \
-  | xargs redis-cli --no-auth-warning DEL
 ```
+
+Cluster (`useHashTags: true`): delete `mailtime:{default}:letters`, `:schedule`, `:concatkeys`, and `mailtime:{default}:concatletter:*`.
+
+Scheduler: standalone `josk:mailTimeQueuedefault:*`; Cluster `josk:{mailTimeQueuedefault}:*`.
 
 ### Mongo
 

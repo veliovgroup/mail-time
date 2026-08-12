@@ -102,7 +102,7 @@ Pass-through to the underlying `JoSk` constructor. The most useful keys:
 
 | Option | Default in MailTime | Notes |
 |---|---|---|
-| `adapter` | — (required) | Either a constructed adapter instance (`new RedisAdapter({...})`) **or** a config object `{ type: 'redis'\|'mongo'\|'postgres', client \| db, prefix?, resetOnInit?, useHashTags? }`. MailTime constructs the adapter from the config object. Set `useHashTags: true` on Redis/KeyDB Cluster. |
+| `adapter` | — (required) | Either a constructed adapter instance (`new RedisAdapter({...})`) **or** a config object `{ type: 'redis'\|'mongo'\|'postgres', client \| db, prefix?, resetOnInit?, useHashTags? }`. MailTime constructs the adapter from the config object. Set `useHashTags: true` on Redis / KeyDB / Valkey Cluster — same flag on `RedisQueue`. Engines: `references/adapters.md`. |
 | `adapter.type` | — | One of `'redis'`, `'mongo'`, `'postgres'`. |
 | `adapter.client` / `adapter.db` | — | Already-connected `redis` client / `pg.Pool` / Mongo `Db`. |
 | `adapter.prefix` | `'mailTimeQueue<MailTime.prefix>'` | Defaulted from `MailTime.prefix`. |

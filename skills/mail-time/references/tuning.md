@@ -99,6 +99,8 @@ Non-preset cases:
 - `sendingTimeout` < worst-case SMTP roundtrip — a live still-sending worker can lose its lock to a recovery worker, causing duplicate delivery. v5's `renewClaim` covers the healthy-but-slow case; it does not excuse a `sendingTimeout` shorter than your storage round-trip.
 - `resetOnInit` / `autoClear` in prod without intent.
 - Replica reads for queue or scheduler.
+- Redis / KeyDB / Valkey Cluster without `useHashTags: true` on both `RedisQueue` and `josk.adapter`.
+- KeyDB active-replication / Redis active-active. Single writable primary, or Postgres.
 - `concatEmails: true` on OTP / password reset.
 - Custom adapter calling `___send` from `iterate` instead of `___dispatch` — defeats the pool and holds the JoSk lease during SMTP.
 
