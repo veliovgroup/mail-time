@@ -14,6 +14,9 @@
 [![dependencies][badge-deps]][deps-url]
 [![Sponsor][badge-sponsor]][sponsor-url]
 [![Donate][badge-donate]][donate-url]
+<a href="https://bridge-cdn.com/?ref=github-mail-time-repo-top"><img src="https://bridge-cdn.com/favicon.svg" height="20"></a>
+<a href="https://ostr.io/info/built-by-developers-for-developers?ref=github-mail-time-repo-top"><img src="https://ostr.io/apple-touch-icon-60x60.png" height="20"></a>
+<a href="https://meteor-files.com/?ref=github-mail-time-repo-top"><img src="https://meteor-files.com/apple-touch-icon-60x60.png" height="20"></a>
 
 Bulletproof email queue for [horizontally scaled](#sending-emails-from-a-cluster) Node.js & Bun apps. Built on top of [`nodemailer`](https://github.com/nodemailer/nodemailer) and [`josk`](https://github.com/veliovgroup/josk). Single runtime dependency, ESM + CJS, full TypeScript declarations.
 
@@ -608,12 +611,13 @@ Mixed clusters (some Node, some Bun) share one schedule under the same `prefix` 
 
 ## Support this project
 
+- Try [🌉 Bridge CDN](https://bridge-cdn.com/?ref=github-mail-time-repo-footer) - A SEO-focused Cloudflare alternative. CDN, DNS, IndexNow, Prerender, SEO, Edge Computing.
+- Try [☄️ meteor-files.com](https://meteor-files.com/?ref=github-mail-time-repo-footer).
+- Try [▲ ostr.io](https://ostr.io?ref=github-mail-time-repo-footer) for server monitoring, web analytics, web-CRON, and SEO pre-rendering.
 - Star on [GitHub](https://github.com/veliovgroup/mail-time) and [NPM](https://www.npmjs.com/package/mail-time).
 - [Sponsor maintainer on GitHub](https://github.com/sponsors/dr-dimitru).
 - [Sponsor veliovgroup on GitHub](https://github.com/sponsors/veliovgroup).
 - [PayPal](https://paypal.me/veliovgroup).
-- Try [☄️ meteor-files.com](https://meteor-files.com/?ref=github-mail-time-repo-footer).
-- Try [▲ ostr.io](https://ostr.io?ref=github-mail-time-repo-footer) for server monitoring, web analytics, web-CRON, and SEO pre-rendering.
 
 [npm-url]: https://www.npmjs.com/package/mail-time
 [badge-npm-v]: https://img.shields.io/npm/v/mail-time.svg
