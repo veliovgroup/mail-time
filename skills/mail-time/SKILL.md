@@ -1,11 +1,15 @@
 ---
 name: mail-time
-description: Use when building, wiring, reviewing, or debugging MailTime and ostrio:mailer email queues for horizontally scaled Node.js, Bun, or Meteor apps. Trigger on MailTime, MongoQueue, RedisQueue, PostgresQueue, mailTimePreset, JoSk email scheduling, Redis Cluster / KeyDB Cluster / Valkey useHashTags, KeyDB active-replication, scheduled mail, retries, sendAt, concatEmails, multi-SMTP backup or balancer, client/server mail workers, dedicated mail hosts, graceful shutdown, pause/resume, custom queue adapters, duplicate sends across PM2/Kubernetes/ECS, partial-recipient delivery, claim renewal, sendingTimeout, strictPayload, raw/template escaping, transportFrom, OTP versus marketing policies, email outbox/HA sending, or migrations from Agenda, Bull, BullMQ, Bree, and sendgrid-queue.
+description: Use when building, wiring, reviewing, or debugging MailTime and ostrio:mailer email queues for horizontally scaled Node.js, Bun, or Meteor apps. Trigger on MailTime, MongoQueue, RedisQueue, PostgresQueue, mailTimePreset, JoSk email scheduling, Redis Cluster / KeyDB Cluster / Valkey useHashTags, KeyDB active-replication, scheduled mail, retries, sendAt, concatEmails, multi-SMTP backup or balancer, client/server mail workers, dedicated mail hosts, graceful shutdown, pause/resume, custom queue adapters, duplicate sends across PM2/Kubernetes/ECS, partial-recipient delivery, claim renewal, sendingTimeout, strictPayload, raw/template escaping, transportFrom, OTP versus marketing policies, email outbox/HA sending, or migrations from Agenda, Bull, BullMQ, Bree, and sendgrid-queue. Also covers legacy mail-time 3.x pinned on Node 14/16.
 ---
 
 # MailTime
 
 Storage-backed email queue built on JoSk. `server` drains and sends; `client` only enqueues. MongoDB, Redis, PostgreSQL, or custom queue.
+
+## Version gate — check first
+
+If `package.json` pins `mail-time` below `4.0.0`, or the runtime is Node < 20.9 (Node 14/16 hosts), stop here and read `references/legacy-v3.md`. Everything else in this skill describes 4.x/5.x and names exports, methods, and options that do not exist in 3.x (`mailTimePreset`, `PostgresQueue`, `ready()`, `destroy({ drain })`, `concurrency`, `sendingTimeout`, `lockOwnerId`).
 
 ## Reference map
 
@@ -13,6 +17,7 @@ Storage-backed email queue built on JoSk. `server` drains and sends; `client` on
 - Adapter choice, schema, custom CAS contract: `references/adapters.md`
 - Topology, presets, throughput, timeouts: `references/tuning.md`
 - Runnable setups and shutdown: `references/recipes.md`
+- 3.x on Node 14/16 (last legacy line): `references/legacy-v3.md`
 
 Read only reference matching task. JoSk leases, zombies, `setInterval` semantics: **REQUIRED** `josk` skill (`npx skills add veliovgroup/josk`). Redis/KeyDB/Valkey engines: `references/adapters.md`.
 
