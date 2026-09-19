@@ -2318,6 +2318,34 @@ const mailTimePreset = (name, overrides) => {
   return overrides ? deepMerge(cloned, overrides) : cloned;
 };
 
+const policyError = (message) => new Error(`[mail-time] [recipientPolicies] ${message}`);
+
+const validateRecipientPolicies = (value, queue) => {
+  if (value === void 0) return null;
+  if (!Array.isArray(value) || !value.length) throw policyError('recipientPolicies must be a nonempty array');
+  if (queue.supportsRecipientPolicies !== true) throw policyError('queue must declare recipient policy support');
+  const names = new Set();
+  return value.map((provider) => {
+    if (!isPlainObject(provider)) throw policyError('each provider must be a plain object');
+    const name = typeof provider.name === 'string' ? provider.name.trim() : '';
+    if (!name || name.length > 128 || names.has(name)) throw policyError('provider names must be unique and contain 1-128 characters');
+    names.add(name);
+    const failureMode = provider.failureMode === void 0 ? 'retry' : provider.failureMode;
+    if (failureMode !== 'retry' && failureMode !== 'continue') throw policyError('failureMode must be retry or continue');
+    const normalized = { name, failureMode };
+    let count = 0;
+    for (const hook of ['beforeSend', 'classifyRejections', 'observeAttempt']) {
+      if (hasOwnProp(provider, hook)) {
+        if (typeof provider[hook] !== 'function') throw policyError(`${hook} must be a function`);
+        normalized[hook] = provider[hook].bind(provider);
+        count++;
+      }
+    }
+    if (!count) throw policyError('provider requires at least one supported hook');
+    return normalized;
+  });
+};
+
 const noop = () => {};
 const queueMethods = ['ping', 'iterate', 'getPendingTo', 'push', 'remove', 'update', 'cancel'];
 
@@ -2523,7 +2551,28 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
  */
 
 /**
- * @typedef {{ uuid: string, to?: string | string[], tries: number, sendAt: number, isSent: boolean, isCancelled: boolean, isFailed: boolean, isSending?: boolean, sendingAt?: number, template?: string | false, transport: number, concatSubject?: string | false, mailOptions: MailTimeMailOptions[] }} MailTimeTask
+ * @typedef {string | { address: string, name?: string }} MailTimeMailbox
+ */
+
+/**
+ * @typedef {{ address: string, sources: Array<'envelope' | 'to' | 'cc' | 'bcc'> }} MailTimePolicyRecipient
+ * @typedef {{ address: string, status: 'suppressed' | 'rejected' | 'retry', reason: string }} MailTimePolicyDecision
+ * @typedef {{ decisions?: MailTimePolicyDecision[] }} MailTimePolicyResult
+ * @typedef {{ index: number, name?: string }} MailTimePolicyTransport
+ * @typedef {{ from?: string, to: string[] }} MailTimePolicyEnvelope
+ * @typedef {{ task: MailTimeTask, attempt: number, transport: MailTimePolicyTransport, envelope: MailTimePolicyEnvelope, recipients: MailTimePolicyRecipient[] }} MailTimePolicyContext
+ * @typedef {MailTimePolicyContext} MailTimeBeforeSendPolicyContext
+ * @typedef {{ address: string | null, command?: string, responseCode?: number, response?: string, message?: string, transportIndex: number, transportName?: string }} MailTimeStructuredRejection
+ * @typedef {MailTimePolicyContext & { error?: unknown, info?: unknown, rejections: MailTimeStructuredRejection[] }} MailTimeRejectionPolicyContext
+ * @typedef {{ address: string, status: 'sent' | 'error' | 'suppressed' | 'rejected', sources?: Array<'envelope' | 'to' | 'cc' | 'bcc'>, reasons: Array<{ provider: string, reason: string }>, attempt: number, transportIndex?: number, transportName?: string, command?: string, responseCode?: number, response?: string, message?: string }} MailTimeRecipientResult
+ * @typedef {MailTimeRejectionPolicyContext & { decisions: MailTimeRecipientResult[] }} MailTimeRecipientAttemptContext
+ * @typedef {{ uuid: string, tries: number, isSettled: boolean, recipients: { sent: MailTimeRecipientResult[], error: MailTimeRecipientResult[], suppressed: MailTimeRecipientResult[], rejected: MailTimeRecipientResult[] } }} MailTimeRecipientSummary
+ * @typedef {{ name: string, failureMode?: 'retry' | 'continue', beforeSend?: (context: MailTimeBeforeSendPolicyContext) => void | MailTimePolicyResult | Promise<void | MailTimePolicyResult>, classifyRejections?: (context: MailTimeRejectionPolicyContext) => void | MailTimePolicyResult | Promise<void | MailTimePolicyResult>, observeAttempt?: (context: MailTimeRecipientAttemptContext) => void | Promise<void> }} MailTimeRecipientPolicy
+ * @description Policy contexts are read-only by contract. Providers must bound their own I/O; renewal budgets do not limit hook duration.
+ */
+
+/**
+ * @typedef {{ uuid: string, to?: MailTimeMailbox | MailTimeMailbox[], tries: number, sendAt: number, isSent: boolean, isSettled?: boolean, recipientResults?: MailTimeRecipientResult[], isCancelled: boolean, isFailed: boolean, isSending?: boolean, sendingAt?: number, template?: string | false, transport: number, concatSubject?: string | false, mailOptions: MailTimeMailOptions[] }} MailTimeTask
  */
 
 /**
@@ -2531,7 +2580,7 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
  */
 
 /**
- * @typedef {{ ping: () => Promise<MailTimePingResult>, iterate: (opts?: MailTimeIterateOptions) => Promise<void> | void, getPendingTo: (to: string, sendAt: number) => Promise<MailTimeTask | object | null>, push: (email: MailTimeTask) => Promise<void> | void, cancel: (uuid: string) => Promise<boolean>, remove: (email: MailTimeTask | object, opts?: { leaseTries: number, leaseSendingAt: number }) => Promise<boolean>, update: (email: MailTimeTask | object, updateObj: object) => Promise<boolean>, ready?: () => Promise<void> }} CustomQueue
+ * @typedef {{ ping: () => Promise<MailTimePingResult>, iterate: (opts?: MailTimeIterateOptions) => Promise<void> | void, getPendingTo: (to: string, sendAt: number) => Promise<MailTimeTask | object | null>, push: (email: MailTimeTask) => Promise<void> | void, cancel: (uuid: string) => Promise<boolean>, remove: (email: MailTimeTask | object, opts?: { leaseTries: number, leaseSendingAt: number }) => Promise<boolean>, update: (email: MailTimeTask | object, updateObj: object) => Promise<boolean>, ready?: () => Promise<void>, supportsRecipientPolicies?: boolean }} CustomQueue
  */
 
 /**
@@ -2539,7 +2588,7 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
  */
 
 /**
- * @typedef {{ [key: string]: any, to: string | string[], sendAt?: Date | number, template?: string, concatSubject?: string, text?: string | false, html?: string | false, subject?: string, accepted?: string[], rejected?: MailTimeRejectedRecipient[] }} MailTimeMailOptions
+ * @typedef {{ [key: string]: any, to: MailTimeMailbox | MailTimeMailbox[], cc?: MailTimeMailbox | MailTimeMailbox[], bcc?: MailTimeMailbox | MailTimeMailbox[], sendAt?: Date | number, template?: string, concatSubject?: string, text?: string | false, html?: string | false, subject?: string, accepted?: string[], rejected?: MailTimeRejectedRecipient[] }} MailTimeMailOptions
  */
 
 /**
@@ -2551,7 +2600,7 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
  */
 
 /**
- * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport, details: MailTimeFromDetails) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, shouldFailOver?: (error: unknown, info: object | undefined, email: MailTimeTask) => boolean, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, renewClaim?: boolean | number, maxRenewals?: number, strictPayload?: boolean, allowedMailFields?: string[], verifyTransports?: boolean, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask | null, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
+ * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport, details: MailTimeFromDetails) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, shouldFailOver?: (error: unknown, info: object | undefined, email: MailTimeTask) => boolean, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, renewClaim?: boolean | number, maxRenewals?: number, strictPayload?: boolean, allowedMailFields?: string[], verifyTransports?: boolean, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, recipientPolicies?: MailTimeRecipientPolicy[], onError?: (error: unknown, email: MailTimeTask | null, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>, onSent?: (email: MailTimeTask, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>, onSuppressed?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void>, onRejected?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void> }} MailTimeOptions
  */
 
 /** Class of MailTime */
@@ -2569,6 +2618,7 @@ class MailTime {
       throw new Error('[mail-time] {queue} option is required: provide a MongoQueue, RedisQueue, PostgresQueue, or CustomQueue instance');
     }
 
+    this.__recipientPolicies = validateRecipientPolicies(opts.recipientPolicies, opts.queue);
     this.queue = opts.queue;
 
     for (let i = queueMethods.length - 1; i >= 0; i--) {
@@ -2608,6 +2658,8 @@ class MailTime {
     this.keepHistory = opts.keepHistory === true;
     this.onSent = (typeof opts.onSent === 'function') ? opts.onSent.bind(this) : noop;
     this.onError = (typeof opts.onError === 'function') ? opts.onError.bind(this) : noop;
+    this.onSuppressed = (typeof opts.onSuppressed === 'function') ? opts.onSuppressed.bind(this) : noop;
+    this.onRejected = (typeof opts.onRejected === 'function') ? opts.onRejected.bind(this) : noop;
 
     this.revolvingInterval = (typeof opts.revolvingInterval === 'number' && opts.revolvingInterval > 0) ? opts.revolvingInterval : 1536;
     this.mode = (opts.mode === 'one' || opts.mode === 'batch') ? opts.mode : 'batch';
@@ -2957,7 +3009,8 @@ class MailTime {
     delete mailOptions.template;
     delete mailOptions.concatSubject;
 
-    if (typeof mailOptions.to !== 'string' && (!Array.isArray(mailOptions.to) || !mailOptions.to.length)) {
+    const isMailbox = isPlainObject(mailOptions.to) && typeof mailOptions.to.address === 'string' && mailOptions.to.address.trim().length > 0;
+    if (!isMailbox && typeof mailOptions.to !== 'string' && (!Array.isArray(mailOptions.to) || !mailOptions.to.length)) {
       throw new Error('[mail-time] [sendMail] `mailOptions.to` is required and must be a string or non-empty Array');
     }
 
@@ -3117,6 +3170,7 @@ class MailTime {
       uuid: crypto.randomUUID(),
       tries: 0,
       isSent: false,
+      isSettled: false,
       sendAt: opts.sendAt,
       isFailed: false,
       isSending: false,
@@ -3250,7 +3304,7 @@ class MailTime {
     }
 
     const acceptedSet = collectAcceptedSet(task);
-    if (acceptedSet.size > 0) {
+    if (!this.__recipientPolicies && acceptedSet.size > 0) {
       compiledOpts.to = filterAddressField(compiledOpts.to, acceptedSet);
       compiledOpts.cc = filterAddressField(compiledOpts.cc, acceptedSet);
       compiledOpts.bcc = filterAddressField(compiledOpts.bcc, acceptedSet);

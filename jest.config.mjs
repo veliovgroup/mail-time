@@ -8,6 +8,9 @@ export default {
   collectCoverageFrom: [
     'index.js',
     'presets.js',
+    'recipient-policy.js',
+    'recipient-rejections.js',
+    'recipient-policy-lease.js',
     'adapters/*.js',
     '!adapters/blank-example.js'
   ],

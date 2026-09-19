@@ -53,12 +53,97 @@ export type MailTimeScheduler = {
     pause: (timerId?: string) => boolean;
     resume: (timerId?: string) => boolean;
 };
+export type MailTimeMailbox = string | {
+    address: string;
+    name?: string;
+};
+export type MailTimePolicyRecipient = {
+    address: string;
+    sources: Array<"envelope" | "to" | "cc" | "bcc">;
+};
+export type MailTimePolicyDecision = {
+    address: string;
+    status: "suppressed" | "rejected" | "retry";
+    reason: string;
+};
+export type MailTimePolicyResult = {
+    decisions?: MailTimePolicyDecision[];
+};
+export type MailTimePolicyTransport = {
+    index: number;
+    name?: string;
+};
+export type MailTimePolicyEnvelope = {
+    from?: string;
+    to: string[];
+};
+export type MailTimePolicyContext = {
+    task: MailTimeTask;
+    attempt: number;
+    transport: MailTimePolicyTransport;
+    envelope: MailTimePolicyEnvelope;
+    recipients: MailTimePolicyRecipient[];
+};
+export type MailTimeBeforeSendPolicyContext = MailTimePolicyContext;
+export type MailTimeStructuredRejection = {
+    address: string | null;
+    command?: string;
+    responseCode?: number;
+    response?: string;
+    message?: string;
+    transportIndex: number;
+    transportName?: string;
+};
+export type MailTimeRejectionPolicyContext = MailTimePolicyContext & {
+    error?: unknown;
+    info?: unknown;
+    rejections: MailTimeStructuredRejection[];
+};
+export type MailTimeRecipientResult = {
+    address: string;
+    status: "sent" | "error" | "suppressed" | "rejected";
+    sources?: Array<"envelope" | "to" | "cc" | "bcc">;
+    reasons: Array<{
+        provider: string;
+        reason: string;
+    }>;
+    attempt: number;
+    transportIndex?: number;
+    transportName?: string;
+    command?: string;
+    responseCode?: number;
+    response?: string;
+    message?: string;
+};
+export type MailTimeRecipientAttemptContext = MailTimeRejectionPolicyContext & {
+    decisions: MailTimeRecipientResult[];
+};
+export type MailTimeRecipientSummary = {
+    uuid: string;
+    tries: number;
+    isSettled: boolean;
+    recipients: {
+        sent: MailTimeRecipientResult[];
+        error: MailTimeRecipientResult[];
+        suppressed: MailTimeRecipientResult[];
+        rejected: MailTimeRecipientResult[];
+    };
+};
+export type MailTimeRecipientPolicy = {
+    name: string;
+    failureMode?: "retry" | "continue";
+    beforeSend?: (context: MailTimeBeforeSendPolicyContext) => void | MailTimePolicyResult | Promise<void | MailTimePolicyResult>;
+    classifyRejections?: (context: MailTimeRejectionPolicyContext) => void | MailTimePolicyResult | Promise<void | MailTimePolicyResult>;
+    observeAttempt?: (context: MailTimeRecipientAttemptContext) => void | Promise<void>;
+};
 export type MailTimeTask = {
     uuid: string;
-    to?: string | string[];
+    to?: MailTimeMailbox | MailTimeMailbox[];
     tries: number;
     sendAt: number;
     isSent: boolean;
+    isSettled?: boolean;
+    recipientResults?: MailTimeRecipientResult[];
     isCancelled: boolean;
     isFailed: boolean;
     isSending?: boolean;
@@ -84,6 +169,7 @@ export type CustomQueue = {
     }) => Promise<boolean>;
     update: (email: MailTimeTask | object, updateObj: object) => Promise<boolean>;
     ready?: () => Promise<void>;
+    supportsRecipientPolicies?: boolean;
 };
 export type MailTimeRejectedRecipient = {
     address: string;
@@ -91,7 +177,9 @@ export type MailTimeRejectedRecipient = {
 };
 export type MailTimeMailOptions = {
     [key: string]: any;
-    to: string | string[];
+    to: MailTimeMailbox | MailTimeMailbox[];
+    cc?: MailTimeMailbox | MailTimeMailbox[];
+    bcc?: MailTimeMailbox | MailTimeMailbox[];
     sendAt?: Date | number;
     template?: string;
     concatSubject?: string;
@@ -139,8 +227,11 @@ export type MailTimeOptions = {
     prefix?: string;
     debug?: boolean;
     josk?: MailTimeJoSkOptions;
-    onError?: (error: unknown, email: MailTimeTask | null, details?: object) => void;
-    onSent?: (email: MailTimeTask, details?: object) => void;
+    recipientPolicies?: MailTimeRecipientPolicy[];
+    onError?: (error: unknown, email: MailTimeTask | null, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>;
+    onSent?: (email: MailTimeTask, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>;
+    onSuppressed?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void>;
+    onRejected?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void>;
 };
 /**
  * @typedef {import('./presets.js').MailTimePresetName} MailTimePresetName
@@ -170,19 +261,38 @@ export type MailTimeOptions = {
  * @typedef {{ [key: string]: any, ping: () => Promise<MailTimePingResult>, setInterval: (func: (...args: any[]) => unknown, delay: number, uid: string) => Promise<string>, destroy: () => boolean, pause: (timerId?: string) => boolean, resume: (timerId?: string) => boolean }} MailTimeScheduler
  */
 /**
- * @typedef {{ uuid: string, to?: string | string[], tries: number, sendAt: number, isSent: boolean, isCancelled: boolean, isFailed: boolean, isSending?: boolean, sendingAt?: number, template?: string | false, transport: number, concatSubject?: string | false, mailOptions: MailTimeMailOptions[] }} MailTimeTask
+ * @typedef {string | { address: string, name?: string }} MailTimeMailbox
+ */
+/**
+ * @typedef {{ address: string, sources: Array<'envelope' | 'to' | 'cc' | 'bcc'> }} MailTimePolicyRecipient
+ * @typedef {{ address: string, status: 'suppressed' | 'rejected' | 'retry', reason: string }} MailTimePolicyDecision
+ * @typedef {{ decisions?: MailTimePolicyDecision[] }} MailTimePolicyResult
+ * @typedef {{ index: number, name?: string }} MailTimePolicyTransport
+ * @typedef {{ from?: string, to: string[] }} MailTimePolicyEnvelope
+ * @typedef {{ task: MailTimeTask, attempt: number, transport: MailTimePolicyTransport, envelope: MailTimePolicyEnvelope, recipients: MailTimePolicyRecipient[] }} MailTimePolicyContext
+ * @typedef {MailTimePolicyContext} MailTimeBeforeSendPolicyContext
+ * @typedef {{ address: string | null, command?: string, responseCode?: number, response?: string, message?: string, transportIndex: number, transportName?: string }} MailTimeStructuredRejection
+ * @typedef {MailTimePolicyContext & { error?: unknown, info?: unknown, rejections: MailTimeStructuredRejection[] }} MailTimeRejectionPolicyContext
+ * @typedef {{ address: string, status: 'sent' | 'error' | 'suppressed' | 'rejected', sources?: Array<'envelope' | 'to' | 'cc' | 'bcc'>, reasons: Array<{ provider: string, reason: string }>, attempt: number, transportIndex?: number, transportName?: string, command?: string, responseCode?: number, response?: string, message?: string }} MailTimeRecipientResult
+ * @typedef {MailTimeRejectionPolicyContext & { decisions: MailTimeRecipientResult[] }} MailTimeRecipientAttemptContext
+ * @typedef {{ uuid: string, tries: number, isSettled: boolean, recipients: { sent: MailTimeRecipientResult[], error: MailTimeRecipientResult[], suppressed: MailTimeRecipientResult[], rejected: MailTimeRecipientResult[] } }} MailTimeRecipientSummary
+ * @typedef {{ name: string, failureMode?: 'retry' | 'continue', beforeSend?: (context: MailTimeBeforeSendPolicyContext) => void | MailTimePolicyResult | Promise<void | MailTimePolicyResult>, classifyRejections?: (context: MailTimeRejectionPolicyContext) => void | MailTimePolicyResult | Promise<void | MailTimePolicyResult>, observeAttempt?: (context: MailTimeRecipientAttemptContext) => void | Promise<void> }} MailTimeRecipientPolicy
+ * @description Policy contexts are read-only by contract. Providers must bound their own I/O; renewal budgets do not limit hook duration.
+ */
+/**
+ * @typedef {{ uuid: string, to?: MailTimeMailbox | MailTimeMailbox[], tries: number, sendAt: number, isSent: boolean, isSettled?: boolean, recipientResults?: MailTimeRecipientResult[], isCancelled: boolean, isFailed: boolean, isSending?: boolean, sendingAt?: number, template?: string | false, transport: number, concatSubject?: string | false, mailOptions: MailTimeMailOptions[] }} MailTimeTask
  */
 /**
  * @typedef {{ limit?: number, sendingTimeout?: number }} MailTimeIterateOptions
  */
 /**
- * @typedef {{ ping: () => Promise<MailTimePingResult>, iterate: (opts?: MailTimeIterateOptions) => Promise<void> | void, getPendingTo: (to: string, sendAt: number) => Promise<MailTimeTask | object | null>, push: (email: MailTimeTask) => Promise<void> | void, cancel: (uuid: string) => Promise<boolean>, remove: (email: MailTimeTask | object, opts?: { leaseTries: number, leaseSendingAt: number }) => Promise<boolean>, update: (email: MailTimeTask | object, updateObj: object) => Promise<boolean>, ready?: () => Promise<void> }} CustomQueue
+ * @typedef {{ ping: () => Promise<MailTimePingResult>, iterate: (opts?: MailTimeIterateOptions) => Promise<void> | void, getPendingTo: (to: string, sendAt: number) => Promise<MailTimeTask | object | null>, push: (email: MailTimeTask) => Promise<void> | void, cancel: (uuid: string) => Promise<boolean>, remove: (email: MailTimeTask | object, opts?: { leaseTries: number, leaseSendingAt: number }) => Promise<boolean>, update: (email: MailTimeTask | object, updateObj: object) => Promise<boolean>, ready?: () => Promise<void>, supportsRecipientPolicies?: boolean }} CustomQueue
  */
 /**
  * @typedef {{ address: string, error: string }} MailTimeRejectedRecipient
  */
 /**
- * @typedef {{ [key: string]: any, to: string | string[], sendAt?: Date | number, template?: string, concatSubject?: string, text?: string | false, html?: string | false, subject?: string, accepted?: string[], rejected?: MailTimeRejectedRecipient[] }} MailTimeMailOptions
+ * @typedef {{ [key: string]: any, to: MailTimeMailbox | MailTimeMailbox[], cc?: MailTimeMailbox | MailTimeMailbox[], bcc?: MailTimeMailbox | MailTimeMailbox[], sendAt?: Date | number, template?: string, concatSubject?: string, text?: string | false, html?: string | false, subject?: string, accepted?: string[], rejected?: MailTimeRejectedRecipient[] }} MailTimeMailOptions
  */
 /**
  * @typedef {{ subject?: string }} MailTimeConcatEmailsOptions
@@ -191,7 +301,7 @@ export type MailTimeOptions = {
  * @typedef {{ index: number, from: string | undefined }} MailTimeFromDetails
  */
 /**
- * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport, details: MailTimeFromDetails) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, shouldFailOver?: (error: unknown, info: object | undefined, email: MailTimeTask) => boolean, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, renewClaim?: boolean | number, maxRenewals?: number, strictPayload?: boolean, allowedMailFields?: string[], verifyTransports?: boolean, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, onError?: (error: unknown, email: MailTimeTask | null, details?: object) => void, onSent?: (email: MailTimeTask, details?: object) => void }} MailTimeOptions
+ * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport, details: MailTimeFromDetails) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, shouldFailOver?: (error: unknown, info: object | undefined, email: MailTimeTask) => boolean, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, renewClaim?: boolean | number, maxRenewals?: number, strictPayload?: boolean, allowedMailFields?: string[], verifyTransports?: boolean, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, recipientPolicies?: MailTimeRecipientPolicy[], onError?: (error: unknown, email: MailTimeTask | null, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>, onSent?: (email: MailTimeTask, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>, onSuppressed?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void>, onRejected?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void> }} MailTimeOptions
  */
 /** Class of MailTime */
 export class MailTime {
@@ -223,8 +333,10 @@ export class MailTime {
     retryDelay: number;
     template: string;
     keepHistory: boolean;
-    onSent: (email: MailTimeTask, details?: object) => void;
-    onError: (error: unknown, email: MailTimeTask | null, details?: object) => void;
+    onSent: (email: MailTimeTask, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>;
+    onError: (error: unknown, email: MailTimeTask | null, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>;
+    onSuppressed: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void>;
+    onRejected: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void>;
     revolvingInterval: number;
     mode: "one" | "batch";
     concurrency: number;
