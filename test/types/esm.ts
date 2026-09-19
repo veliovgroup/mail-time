@@ -237,3 +237,58 @@ mailTimePreset('does-not-exist');
 const transactionalShape: MailTimePresetConfig = presets.transactional;
 void transactionalShape;
 void presetNames[0];
+
+import type {
+  MailTimeMailbox, MailTimeRecipientPolicy, MailTimePolicyRecipient, MailTimePolicyDecision,
+  MailTimePolicyResult, MailTimePolicyContext, MailTimeBeforeSendPolicyContext,
+  MailTimeRejectionPolicyContext, MailTimeStructuredRejection,
+  MailTimeRecipientAttemptContext, MailTimeRecipientResult, MailTimeRecipientSummary,
+  MailTimePolicyTransport, MailTimePolicyEnvelope,
+} from 'mail-time';
+
+const recipientPolicy: MailTimeRecipientPolicy = {
+  name: 'compliance', failureMode: 'retry',
+  async beforeSend(context: MailTimeBeforeSendPolicyContext): Promise<MailTimePolicyResult> {
+    const recipients: MailTimePolicyRecipient[] = context.recipients;
+    const shared: MailTimePolicyContext = context;
+    const envelope: MailTimePolicyEnvelope = shared.envelope;
+    const transport: MailTimePolicyTransport = shared.transport;
+    void envelope; void transport;
+    return { decisions: recipients.map(({ address }) => ({ address, status: 'suppressed', reason: 'opt-out' })) };
+  },
+  classifyRejections(context: MailTimeRejectionPolicyContext) {
+    const records: MailTimeStructuredRejection[] = context.rejections;
+    void records;
+    return { decisions: context.recipients.map(({ address }) => ({ address, status: 'retry' as const, reason: 'unknown' })) };
+  },
+  async observeAttempt(context: MailTimeRecipientAttemptContext) {
+    const results: MailTimeRecipientResult[] = context.decisions;
+    void results;
+  },
+};
+const invalidDecision: MailTimePolicyDecision = {
+  address: 'a@example.com', reason: 'bad',
+  // @ts-expect-error invalid policy status
+  status: 'allow',
+};
+const policyOptions: MailTimeOptions = {
+  ...opts, queue: { ...queue, supportsRecipientPolicies: true }, recipientPolicies: [recipientPolicy],
+  onSent(task, info, recipients, summary) {
+    const result: MailTimeRecipientSummary | undefined = summary;
+    void result; void recipients; void task; void info;
+  },
+  onError(error, task, info, recipients, summary) {
+    if (task === null) { void info; }
+    void error; void recipients; void summary;
+  },
+  onSuppressed(task, recipients, summary) { void task; void recipients[0].reasons; void summary.isSettled; },
+  async onRejected(task, recipients, summary) { void task; void recipients; void summary; },
+};
+const mailbox: MailTimeMailbox = { address: 'a@example.com', name: 'A' };
+const policyMail: MailTimeMailOptions = { to: mailbox, cc: [mailbox], bcc: mailbox, text: 'hello' };
+void policyOptions; void policyMail; void invalidDecision;
+// @ts-expect-error internal policy lifecycle is not public
+mailTime.___sendWithRecipientPolicies;
+// @ts-expect-error invalid failure mode
+const badPolicy: MailTimeRecipientPolicy = { name: 'bad', failureMode: 'ignore' };
+void badPolicy;

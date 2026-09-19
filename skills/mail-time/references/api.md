@@ -93,8 +93,8 @@ Constructor. The scheduler starts immediately when `opts.type === 'server'`.
 | `verifyTransports` | `boolean` | `true` | Probe each transport via `transport.verify()` once at `ready()`. Failing transports are marked unusable (skipped during rotation/fallback) and surfaced through `onError(err, null, { transportIndex, phase: 'verify' })`. `ready()` rejects if every transport fails. Transports without a `verify()` method are treated as healthy. Set to `false` to disable. |
 | `template` | `string` | `'{{{html}}}'` | Mustache-like default template wrapping every letter. |
 | `debug` | `boolean` | `false` | Verbose logs. |
-| `onSent` | `(task, info?) => void` | — | Called **once** after every recipient is accepted (full delivery). Not called per attempt or per partially-accepted recipient — see "Per-recipient delivery state" below. |
-| `onError` | `(error, email, details?) => void` | — | Called after the final retry attempt fails. Also fires once per transport that fails `verify()` at startup, with `email === null` and `details = { transportIndex, phase: 'verify' }`. |
+| `onSent` | `(task, info?) => void` | — | Without policies: called **once** after every recipient is accepted (full delivery). Policy mode uses terminal groups below. Not called per attempt or per partially-accepted recipient — see "Per-recipient delivery state" below. |
+| `onError` | `(error, email, details?) => void` | — | Without policies: called after the final retry attempt fails. Policy mode uses terminal groups below. Also fires once per transport that fails `verify()` at startup, with `email === null` and `details = { transportIndex, phase: 'verify' }`. |
 
 ### JoSk integration (`opts.josk`)
 
@@ -142,7 +142,7 @@ Pass-through to the underlying `JoSk` constructor. The most useful keys:
 
 Enqueue a letter.
 
-`opts.to` is required (string or non-empty array). At least one of `opts.text` / `opts.html` must be present. Nodemailer fields pass through (`subject`, `attachments`, `headers`, `cc`, `bcc`, …) with two exceptions: `raw` throws (it bypasses composition and nodemailer's file/URL guards), and under `strictPayload` only `allowedMailFields` survive. MailTime-specific options:
+`opts.to` is required (string, `{ address, name? }`, or non-empty array). At least one of `opts.text` / `opts.html` must be present. Nodemailer fields pass through (`subject`, `attachments`, `headers`, `cc`, `bcc`, …) with two exceptions: `raw` throws (it bypasses composition and nodemailer's file/URL guards), and under `strictPayload` only `allowedMailFields` survive. MailTime-specific options:
 
 | Field | Type | Notes |
 |---|---|---|
@@ -288,10 +288,11 @@ Whitespace around the key is allowed: `{{ userName }}` works the same as `{{user
 ```ts
 type MailTimeRejectedRecipient = { address: string; error: string };
 
+type MailTimeMailbox = string | { address: string; name?: string };
 type MailTimeMailOptions = {
-  to: string | string[];
-  cc?: string | string[];
-  bcc?: string | string[];
+  to: MailTimeMailbox | MailTimeMailbox[];
+  cc?: MailTimeMailbox | MailTimeMailbox[];
+  bcc?: MailTimeMailbox | MailTimeMailbox[];
   // ...any other nodemailer fields the caller passed (subject, html, text, attachments, headers, …)
   accepted?: string[];                  // lowercased addresses confirmed delivered across all attempts
   rejected?: MailTimeRejectedRecipient[]; // populated only once the task is finalized (isSent + isFailed)
@@ -303,6 +304,8 @@ type MailTimeTask = {
   tries: number;
   sendAt: number;                       // ms timestamp
   isSent: boolean;
+  isSettled?: boolean;
+  recipientResults?: MailTimeRecipientResult[];
   isCancelled: boolean;
   isFailed: boolean;
   isSending?: boolean;                  // per-row lock — true while a worker is doing the SMTP roundtrip
@@ -323,6 +326,8 @@ type MailTimeIterateOptions = {
 
 ### Per-row lifecycle (`isSending` lock)
 
+The following describes normal attempts. Built-ins also exclude `isSettled=true` and admit stale, exhausted policy claims for completion-only recovery. Policy rules below extend callback and recipient behavior; absence of providers preserves legacy behavior.
+
 - A row is **eligible for claim** when: `isSent=false AND isFailed=false AND isCancelled=false AND sendAt<=now AND tries<maxTries AND (isSending=false OR sendingAt<=now-sendingTimeout)`.
 - A row is **claimed atomically** by `queue.update(task, { isSending: true, sendingAt: now, tries: task.tries+1 })`. The storage CAS must reject the update if the predicate above no longer holds — this is what stops two workers (same instance or different cluster nodes) from delivering the same email.
 - A row is **released** in one of three ways:
@@ -332,7 +337,7 @@ type MailTimeIterateOptions = {
 - If a worker dies between claim and release, the row stays `isSending=true` until `sendingAt + sendingTimeout` is in the past. The next iterate tick then includes it in the eligibility predicate, and a recovery worker can re-claim it.
 - Post-claim completion updates (`remove`, retry release, `isSent`/`isFailed`) carry a **lease guard** (`leaseTries` + `leaseSendingAt`). A late SMTP callback from a superseded worker cannot complete or delete the row.
 
-### Per-recipient delivery state
+### Per-recipient delivery state without policies
 
 When a `to` / `cc` / `bcc` recipient list contains multiple addresses and the SMTP server accepts some but rejects others, MailTime records which addresses got through and retries only the rejected ones on the next attempt:
 
@@ -342,6 +347,37 @@ When a `to` / `cc` / `bcc` recipient list contains multiple addresses and the SM
 - The next attempt's `compiledOpts.to` / `cc` / `bcc` is the original list **minus** addresses already in `accepted` — so previously-delivered recipients do not receive duplicate copies.
 - `onSent` fires only once, after the task is fully delivered. `onError` fires only once, after the retry budget is exhausted with at least one un-accepted recipient — its `task.mailOptions[i].rejected` contains the addresses that never made it.
 - For nodemailer transports that don't populate `info.accepted` / `info.rejected` (some `sendmail`, JSON or in-memory transports), an empty `accepted` array routes through `onError`'s normal retry path — identical to the pre-existing behavior.
+
+## Recipient policies (5.2+)
+
+`recipientPolicies` is a nonempty array of plain providers with unique trimmed `name` (1-128 chars), optional `failureMode: 'retry' | 'continue'` (default retry), and at least one function hook:
+
+- `beforeSend(context)` returns `void | { decisions?: [{ address, status: 'suppressed', reason }] }`.
+- `classifyRejections(context)` permits `rejected | retry`; permanent rejection requires an attributable current-batch record.
+- `observeAttempt(context)` returns void; awaited after merged classification on unresolved/rejected SMTP attempts. Failures only log.
+
+All hooks may be async. Each decision phase runs every provider in order against the same complete batch. Validate the whole invocation before merging; unknown addresses, malformed returns, invalid status/reason, or conflicting duplicate decisions fail that invocation. Reasons: 1-512 chars. Retry-mode failure overrides other terminal decisions for unresolved recipients; continue-mode failure discards only that provider. SMTP acceptance always wins. Abstention preserves retry behavior.
+
+Contexts are read-only by contract: `task`, `attempt`, `transport: { index, name? }`, `envelope: { from?, to }`, `recipients: [{ address, sources }]`. Rejection contexts add raw `error`, `info`, and `rejections: [{ address: string | null, command?, responseCode?, response?, message?, transportIndex, transportName? }]`. Observation adds merged `decisions: MailTimeRecipientResult[]`. Do not infer permanence from unattributed records or assume all 5xx responses are permanent.
+
+Envelope authority: compiled `envelope.to`, else compiled `to/cc/bcc`. Normalize by trimming/lowercasing only; deduplicate with source union. Support simple mailbox/display strings, address objects, and arrays. Complex syntax needs explicit simple envelope; empty/ambiguous input retries without SMTP. Strict payload drops queued envelope by default; trusted transport defaults remain available. Policy retries filter only the explicit envelope, never headers. Recipient-set drift fails closed. Policy-initialized rows cannot receive concat appends.
+
+Persist `recipientResults` across attempts; sent/suppressed/rejected never retry. Result fields: `address`, `status`, optional `sources`, `reasons: [{ provider, reason }]`, `attempt`, optional `transportIndex/transportName/command/responseCode/response/message`. Diagnostics are scalar-only; response/message at most 2048 chars. No raw errors or arbitrary metadata.
+
+Terminal callbacks after storage, nonempty groups only, in order:
+
+```js
+onSent(task, info, recipients, summary)
+onError(error, task, info, recipients, summary)
+onSuppressed(task, recipients, summary)
+onRejected(task, recipients, summary)
+```
+
+`summary = { uuid, tries, isSettled, recipients: { sent, error, suppressed, rejected } }`. Raw info is terminal-attempt info, not cumulative truth. Exception: unparseable preparation failure with no known addresses calls onError with `[]`. Verification retains `onError(error, null, details)`. Callback failures do not block later groups. Notifications are best-effort, not durable exactly-once.
+
+`isSettled=true` includes exhausted error outcomes. `isSent=true` only for all sent; `isFailed=true` for terminal error/rejection or task-level preparation failure. All-suppressed and sent-plus-suppressed: settled, neither sent nor failed. Final `mailOption.rejected` excludes suppressed/header-only addresses.
+
+Accepted persistence precedes slow classifiers. Renewal/checkpoints serialize; graceful drain keeps renewal active. Provider I/O timeouts are application-owned. Stale final-attempt policy claims complete durable results without SMTP or an extra try. Custom queue marker and rollout rules: `adapters.md`.
 
 ## Exported types
 
@@ -360,6 +396,20 @@ export type MailTimeMailOptions;
 export type MailTimeRejectedRecipient;
 export type CustomQueue;
 export type MailTimeOptions;
+export type MailTimeMailbox;
+export type MailTimeRecipientPolicy;
+export type MailTimePolicyRecipient;
+export type MailTimePolicyDecision;
+export type MailTimePolicyResult;
+export type MailTimePolicyContext;
+export type MailTimeBeforeSendPolicyContext;
+export type MailTimeRejectionPolicyContext;
+export type MailTimeStructuredRejection;
+export type MailTimeRecipientAttemptContext;
+export type MailTimeRecipientResult;
+export type MailTimeRecipientSummary;
+export type MailTimePolicyTransport;
+export type MailTimePolicyEnvelope;
 ```
 
 Internal members prefixed with `__` or `___` are deliberately excluded from the public `.d.ts`. Treat them as private and never depend on them — they may change between minor releases.

@@ -403,6 +403,74 @@ new MailTime({
 
 Transports may also set `error.mayFailOver = false`. Retry timing stays unchanged. Edge cases: [v4.1 → v5 migration guide](https://github.com/veliovgroup/mail-time/blob/master/docs/migration-v4.1-v5.md#shouldfailovererror-info-email).
 
+## Recipient policies
+
+Since 5.2, `recipientPolicies` can suppress recipients before SMTP and classify transport rejections without retrying terminal recipients. Omit the option to keep existing delivery and callback behavior. MailTime does not provide a suppression store or assume that every SMTP 5xx response is permanent.
+
+```js
+// Application-owned example data. Replace with your own bounded lookup.
+const suppressionStore = new Set(['unsubscribed@example.com']);
+
+const mailTime = new MailTime({
+  queue, transports, josk, // Your existing storage, transports, and scheduler configuration.
+  recipientPolicies: [{
+    name: 'unsubscribe',
+    failureMode: 'retry',
+    async beforeSend({ recipients }) {
+      const decisions = [];
+      for (const { address } of recipients) {
+        if (await suppressionStore.has(address)) {
+          decisions.push({ address, status: 'suppressed', reason: 'unsubscribed' });
+        }
+      }
+      return { decisions };
+    },
+  }],
+  onSuppressed(task, recipients, summary) {
+    console.log(task.uuid, recipients.map(({ address }) => address), summary.isSettled);
+  },
+});
+```
+
+Each provider needs a unique nonblank `name` of at most 128 characters and at least one hook. Providers run sequentially in declared order, each receiving the complete batch for its phase. Decisions merge only after every provider has returned or failed:
+
+| Hook | Result | When |
+| --- | --- | --- |
+| `beforeSend(context)` | `{ decisions: [{ address, status: 'suppressed', reason }] }` | Before each attempt, for pending recipients only. |
+| `classifyRejections(context)` | `{ decisions: [{ address, status: 'rejected' \| 'retry', reason }] }` | After SMTP, for unresolved recipients. Permanent decisions require an attributable rejection record. |
+| `observeAttempt(context)` | Nothing | After classification for attempts with unresolved/rejected recipients, including retries. Receives the complete merged results as `decisions`. |
+
+Contexts contain `task`, `attempt`, `transport: { index, name? }`, `envelope`, and normalized `recipients: [{ address, sources }]`. Rejection and observation contexts also contain raw `error`/`info` and normalized `rejections`. Treat contexts as read-only. Return nothing or an empty decision list to abstain. Reasons must be nonblank and at most 512 characters. Unknown addresses, invalid statuses, malformed results, or conflicting duplicate decisions invalidate that provider's entire invocation.
+
+The default `failureMode: 'retry'` blocks pre-send delivery when a provider fails. After SMTP it keeps unresolved recipients retryable, but cannot undo accepted recipients. `failureMode: 'continue'` logs and discards that provider's failed result. Otherwise suppression wins before SMTP, and permanent rejection wins over retry/abstention after SMTP. Every retry reruns pre-send policies for remaining recipients. Observation failures only log; they do not change delivery outcomes.
+
+Policies use the actual envelope, not display headers. Compiled `envelope.to` is authoritative; otherwise MailTime derives recipients from `to`, `cc`, and `bcc`. It deduplicates lowercased, trimmed addresses without rewriting plus tags, dots, or domains, and sends an explicit filtered envelope. Original headers remain unchanged, including during retries; Nodemailer's transport-specific BCC behavior remains unchanged.
+
+Supported forms are a mailbox string, simple `Name <address>` string, `{ address, name? }`, or arrays of those values. Address-list strings, quoted commas, groups, and other ambiguous syntax require a simple explicit `envelope.to`. An empty or ambiguous envelope consumes an attempt without SMTP and follows retry/failover rules. `strictPayload` drops a queued envelope by default; use a trusted transport `options.mailOptions.envelope` for complex headers rather than widening untrusted payload access. The recipient set is fixed after first preparation. Changing transport-default recipients between attempts fails closed. Once a task has policy state, new concatenated content gets a separate task, even from clients without providers.
+
+### Grouped terminal outcomes
+
+After terminal storage succeeds, MailTime invokes nonempty groups once in this order:
+
+1. `onSent(task, info, recipients, summary)` for SMTP-accepted recipients.
+2. `onError(error, task, info, recipients, summary)` for remaining errors after attempts end.
+3. `onSuppressed(task, recipients, summary)` for pre-send suppression.
+4. `onRejected(task, recipients, summary)` for permanent transport rejection.
+
+Each callback receives the same summary with `uuid`, `tries`, `isSettled`, and `recipients: { sent, error, suppressed, rejected }`. Raw `info` describes the terminal SMTP attempt when one occurred; grouped recipients and the summary are authoritative across attempts. Callback throws/rejections are isolated. Startup transport verification still uses `onError(error, null, details)`.
+
+If preparation fails before any address can be normalized, terminal `onError` receives `recipients: []`. This is the exception to empty-group silence. MailTime does not invent an address from an unparseable list.
+
+With `keepHistory`, `recipientResults` stores one bounded result per address: status, sources, provider/reason pairs, latest attempt/transport identifiers, and scalar rejection diagnostics. Response/message strings are limited to 2,048 characters; raw errors and arbitrary provider metadata are not stored. `isSettled` means terminal completion, including exhausted errors; `isSent` means every recipient was accepted; `isFailed` means terminal error or permanent rejection. Fully suppressed and sent-plus-suppressed tasks are settled but neither sent nor failed. Without history, terminal tasks are removed.
+
+Renewal covers policy and observation work and continues during `destroy({ drain: true })`. Providers must set their own I/O timeouts: `maxRenewals` bounds lease renewal, not hook duration or drain time. Stale final-attempt policy claims recover by completing durable results without another SMTP attempt. Accepted recipients survive classifier delays and worker restarts, subject to SMTP's unavoidable acceptance/persistence ambiguity. Callbacks are best-effort, not durable exactly-once notifications; a crash after storage completion can lose a notification.
+
+### Policy rollout
+
+Deploy 5.2 or newer to **every server on a prefix with policies disabled first**. Verify versions, then enable identical policies on those servers. Clients only enqueue and do not need providers. Custom queues must declare `supportsRecipientPolicies = true` and implement the [queue contract](https://github.com/veliovgroup/mail-time/blob/master/docs/queue-api.md#recipient-policy-capability).
+
+Do not disable policies or downgrade while active policy state remains. Before downgrade, pause/drain workers and archive, remove, or isolate settled policy history too: an older server cannot recognize a fully suppressed row. Schema/index changes are additive; new Mongo indexes are `mailtime_policy_due_v1` / `mailtime_policy_pending_to_v1`, and PostgreSQL uses `idx_mail_time_queue_policy_due_v1` / `idx_mail_time_queue_policy_pending_to_v1`. Old indexes remain during rolling upgrades. After all old servers are gone, inspect indexes and remove only the superseded MailTime due/pending indexes during planned maintenance; do not remove UUID indexes or new policy indexes.
+
 ## Queue payload trust
 
 `raw` is always refused. Use `strictPayload` when queue writers should not control attachments, URLs, envelope, DKIM, or other nodemailer capabilities:
@@ -481,7 +549,7 @@ await mailQueue.sendMail({
 | `failsToNext`                 | `number`                                            | `4`                        | (`backup`) failures-in-a-row before rotating.                                                                                                                                               |
 | `retries`                     | `number`                                            | `59`                       | Re-send attempts after first failure. Total attempts = `retries + 1` (defaults to 60). Legacy alias `maxTries` is honored when `retries` is absent: `new MailTime({ maxTries: N })` sets total attempts to `N`.                |
 | `retryDelay`                  | `number` (ms)                                       | `60000`                    | Wait between attempts.                                                                                                                                                                      |
-| `keepHistory`                 | `boolean`                                           | `false`                    | Keep sent/failed/cancelled rows.                                                                                                                                                            |
+| `keepHistory`                 | `boolean`                                           | `false`                    | Keep terminal rows, including settled policy outcomes.                                                                                                                                                            |
 | `concatEmails`                | `boolean \| { subject?: string }`                   | `false`                    | Fold same-`to` letters into one. Pass `{ subject: 'X' }` to set the folded-letter subject inline; the string supports the `{{count}}` placeholder and overrides `concatSubject`.            |
 | `concatSubject`               | `string`                                            | `'Multiple notifications'` | Subject when folded. Supports `{{count}}` for the folded letter count.                                                                                                                      |
 | `concatDelimiter`             | `string`                                            | `'<hr>'`                   | Separator between folded bodies.                                                                                                                                                            |
@@ -500,8 +568,11 @@ await mailQueue.sendMail({
 | `prefix`                      | `string`                                            | `''`                       | Queue namespace. **Same** on every `client` and `server` for one logical queue; **different** per email class. Inherited by the queue adapter; JoSk scheduler uses `mailTimeQueue<prefix>`. |
 | `from`                        | `string \| (transport, details) => string`          | —                          | Strongly recommended for spam-passing `From:` formatting. `details` is `{ index, from }` — see [Resolving the sender](#resolving-the-sender).                                                |
 | `debug`                       | `boolean`                                           | `false`                    | Verbose logs.                                                                                                                                                                               |
-| `onSent(email, info)`         | `function`                                          | —                          | Called once the task is fully delivered. `email.mailOptions[i].accepted` lists every address that got through (across all attempts).                                                        |
-| `onError(error, email, info)` | `function`                                          | —                          | Called once the retry budget is exhausted with at least one un-accepted recipient. `email.mailOptions[i].rejected` lists each un-delivered address with its last error. Also fires once per transport that fails `verify()` at startup with `email === null` and `info = { transportIndex, phase: 'verify' }`. |
+| `onSent(email, info)`         | `function`                                          | —                          | Without policies, called once the task is fully delivered. Policy mode adds grouped `recipients, summary` arguments. `email.mailOptions[i].accepted` lists every address that got through (across all attempts).                                                        |
+| `onError(error, email, info)` | `function`                                          | —                          | Without policies, called once the retry budget is exhausted with at least one un-accepted recipient. Policy mode adds grouped `recipients, summary` arguments. `email.mailOptions[i].rejected` lists each un-delivered address with its last error. Also fires once per transport that fails `verify()` at startup with `email === null` and `info = { transportIndex, phase: 'verify' }`. |
+| `recipientPolicies` | `MailTimeRecipientPolicy[]` | — | Optional nonempty provider list. See [Recipient policies](#recipient-policies). |
+| `onSuppressed(task, recipients, summary)` | `function` | — | Terminal suppressed group in policy mode. |
+| `onRejected(task, recipients, summary)` | `function` | — | Terminal permanently rejected group in policy mode. |
 
 ### JoSk options
 

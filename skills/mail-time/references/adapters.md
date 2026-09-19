@@ -228,6 +228,7 @@ Custom queues implement the `CustomQueue` interface and follow the design rules 
 
 ```ts
 interface CustomQueue {
+  supportsRecipientPolicies?: boolean;
   ping(): Promise<MailTimePingResult>;
   iterate(opts?: MailTimeIterateOptions): Promise<void> | void;
   getPendingTo(to: string, sendAt: number): Promise<MailTimeTask | object | null>;
@@ -249,6 +250,20 @@ type MailTimeIterateOptions = {
 ```
 
 Start from `adapters/blank-example.js` in the source tree — it is the canonical scaffold.
+
+### Recipient policy storage (5.2+)
+
+Built-ins declare `supportsRecipientPolicies = true`; custom adapters need this marker before configuring providers. Canonical contract: `docs/queue-api.md` and `adapters/blank-example.js`.
+
+- Persist/project `isSettled`, `recipientResults`. Missing isSettled means false; absent results mean legacy state; `[]` marks policy ownership at claim.
+- Exclude settled rows from iterate, claim, lease updates/removal, cancellation, and concat. Concat lookup/atomic append exclude any policy-initialized row, even when the enqueue client has no providers.
+- Serialize renewal/checkpoints per attempt. Return true for unchanged but lease-matched checkpoints. Return false on stale/cancelled/failed/settled operations. Guard cancellation in the atomic storage operation; never replace a row from a stale cancellation snapshot.
+- Iterate also includes stale in-flight policy rows at `tries >= maxTries`. Reclaim with unchanged tries and newer sendingAt; core performs completion only, no SMTP or providers.
+- Redis standalone WATCH sequences serialize per shared client. Tagged Lua keeps existing keys; normalize cjson empty result/reason/source tables back to arrays. Terminal settlement removes schedule and owned tagged concat pointers.
+- Mongo adds named `mailtime_policy_due_v1` / `mailtime_policy_pending_to_v1` indexes and uses `isSettled: { $ne: true }`.
+- PostgreSQL idempotently adds `is_settled BOOLEAN NOT NULL DEFAULT false`, nullable `recipient_results JSONB`; new indexes are `idx_mail_time_queue_policy_due_v1` / `idx_mail_time_queue_policy_pending_to_v1`. SQL NULL means absent policy state, never `[]`.
+
+Rollout per prefix: upgrade every server with policies off; verify versions; enable identical providers. Clients need no providers. Resolve active policy state before disabling/downgrading; archive/remove/isolate settled history before older readers return. Old indexes stay during rolling upgrades; remove only superseded due/pending indexes after old servers are gone, not UUID/new policy indexes.
 
 ### Required design rules
 
