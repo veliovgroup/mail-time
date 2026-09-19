@@ -3949,7 +3949,8 @@ class MailTime {
   /** @internal Serialize every policy checkpoint with this attempt's claim renewal. */
   async ___sendWithRecipientPolicies(task) {
     if (!task || task.isSent || task.isFailed || task.isCancelled || task.isSettled || this.__abortInFlight) return;
-    const fields = { tries: task.tries + 1, isSending: true, sendingAt: Math.max(Date.now(), (task.sendingAt || 0) + 1), recipientResults: task.recipientResults || [] };
+    const recoveryOnly = Array.isArray(task.recipientResults) && task.tries >= this.maxTries;
+    const fields = { tries: recoveryOnly ? task.tries : task.tries + 1, isSending: true, sendingAt: Math.max(Date.now(), (task.sendingAt || 0) + 1), recipientResults: task.recipientResults || [] };
     try {
       if (!await this.queue.update(task, fields)) return;
     } catch (error) {
@@ -3964,6 +3965,20 @@ class MailTime {
     });
     try {
       if (!lease.active) return;
+      if (recoveryOnly) {
+        let preparationFailure = false;
+        if (!task.recipientResults.length) {
+          try {
+            const compiled = this.___compileMailOpts(this.transports[task.transport], task);
+            const prepared = preparePolicyEnvelope(compiled);
+            task.recipientResults = mergePolicyResults([], prepared.recipients, { retryFailure: false, decisions: [] }, {
+              phase: 'beforeSend', attempt: task.tries, transportIndex: task.transport, accepted: [...collectAcceptedSet(task)],
+            });
+          } catch { preparationFailure = true; }
+        }
+        await this.___completePolicyTask(task, lease, policyError('last attempt interrupted; completing durable recipient state'), void 0, preparationFailure);
+        return;
+      }
       if (!this.___isHealthyTransport(task.transport)) task.transport = this.___nextHealthyTransport(task.transport);
       const transport = this.transports[task.transport];
       const compiled = this.___compileMailOpts(transport, task);

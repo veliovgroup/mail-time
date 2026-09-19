@@ -55,7 +55,7 @@ it.each([null, [], true, { decisions: null }, { decisions: [{}] },
   { decisions: [{ ...decision, reason: '' }] },
   { decisions: [{ ...decision, reason: 'r'.repeat(513) }] },
   { decisions: [decision, { ...decision, reason: 'different' }] },
-])('discards the whole malformed result %j', async (result) => {
+].map((value) => [value]))('discards the whole malformed result %j', async (result) => {
   const report = jest.fn();
   const evaluated = await evaluatePolicyPhase([{ name: 'p', beforeSend: async () => result }], 'beforeSend', context, report);
   expect(evaluated).toEqual({ retryFailure: true, decisions: [] });

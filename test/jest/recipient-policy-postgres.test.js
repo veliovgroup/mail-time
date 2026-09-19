@@ -37,7 +37,7 @@ it('does not confuse empty result arrays with absence on insert', async () => {
     expect(client.queries.at(-1).values.at(-1)).toBe(recipientResults ? '[]' : null);
   }
 });
-it.each(['[]', [], null])('returns result state %j from due rows and admits completion recovery', async (recipient_results) => {
+it.each(['[]', [], null].map((value) => [value]))('returns result state %j from due rows and admits completion recovery', async (recipient_results) => {
   const { client, queue } = await make();
   client.query = async (sql) => {
     expect(sql).toContain('recipient_results IS NOT NULL');
