@@ -105,7 +105,7 @@ clusterDescribe('Redis Cluster queue', function () {
     const queue = new RedisQueue({ client: cluster, prefix: `${prefix}-policy`, useHashTags: true });
     const rows = [];
     queue.mailTimeInstance = { maxTries: 1, sendingTimeout: 300000, keepHistory: true, ___dispatch: async (row) => rows.push(row) };
-    const task = { uuid: 'policy', tries: 1, sendAt: 1, isSending: true, sendingAt: 1, isSent: false, isFailed: false, isCancelled: false, recipientResults: [{ address: 'a@example.com', status: 'sent', reasons: [], sources: [], attempt: 1 }], mailOptions: [{ to: 'a@example.com' }] };
+    const task = { uuid: 'policy', tries: 1, sendAt: 1, isSending: true, sendingAt: 1, isSent: false, isFailed: false, isCancelled: false, recipientResults: [{ address: 'a@example.com', status: 'sent', reasons: [], sources: [], attempt: 1 }], mailOptions: [{ to: 'a@example.com', cc: [], bcc: [] }] };
     try {
       await queue.push(task);
       assert.isTrue(await queue.update(task, { recipientResults: task.recipientResults, leaseTries: 1, leaseSendingAt: 1 }));
@@ -113,6 +113,12 @@ clusterDescribe('Redis Cluster queue', function () {
       assert.lengthOf(rows, 1);
       assert.deepEqual(rows[0].recipientResults[0].reasons, []);
       assert.deepEqual(rows[0].recipientResults[0].sources, []);
+      assert.deepEqual(rows[0].mailOptions[0].cc, []);
+      assert.deepEqual(rows[0].mailOptions[0].bcc, []);
+      await queue.push({ ...task, uuid: 'malformed-header', mailOptions: [{ to: 'a@example.com', cc: {} }] });
+      assert.isTrue(await queue.update({ ...task, uuid: 'malformed-header' }, { mailOptions: [{ to: 'a@example.com', cc: {} }], leaseTries: 1, leaseSendingAt: 1 }));
+      const malformed = JSON.parse(await cluster.hGet(queue.lettersKey, 'malformed-header'));
+      assert.deepEqual(malformed.mailOptions[0].cc, {}, 'an invalid object must not be mistaken for an empty array');
       assert.isFalse(await queue.update(task, { appendMailOption: { to: 'b@example.com' } }));
       assert.isTrue(await queue.update(task, { isSettled: true, isSending: false, leaseTries: 1, leaseSendingAt: 1 }));
       assert.isFalse(await queue.cancel(task.uuid));

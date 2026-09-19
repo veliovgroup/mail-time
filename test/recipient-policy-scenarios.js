@@ -56,7 +56,7 @@ export const runRecipientPolicyScenario = async ({ MailTime, queue, assert, keep
   };
   try {
     const first = await make(queue);
-    const uuid = await first.sendMail({ to: ['a@example.com', 'b@example.com', 'c@example.com', 'd@example.com'], text: 'hello' });
+    const uuid = await first.sendMail({ to: ['a@example.com', 'b@example.com', 'c@example.com', 'd@example.com'], cc: [], bcc: [], text: 'hello' });
     await queue.iterate(); await first.drain();
     assert.deepEqual((await readPolicyTask(queue, uuid)).recipientResults.map((r) => r.status), ['sent', 'rejected', 'error', 'suppressed']);
     assert.lengthOf(groups, 0);

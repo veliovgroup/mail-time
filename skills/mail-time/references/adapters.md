@@ -259,7 +259,8 @@ Built-ins declare `supportsRecipientPolicies = true`; custom adapters need this 
 - Exclude settled rows from iterate, claim, lease updates/removal, cancellation, and concat. Concat lookup/atomic append exclude any policy-initialized row, even when the enqueue client has no providers.
 - Serialize renewal/checkpoints per attempt. Return true for unchanged but lease-matched checkpoints. Return false on stale/cancelled/failed/settled operations. Guard cancellation in the atomic storage operation; never replace a row from a stale cancellation snapshot.
 - Iterate also includes stale in-flight policy rows at `tries >= maxTries`. Reclaim with unchanged tries and newer sendingAt; core performs completion only, no SMTP or providers.
-- Redis standalone WATCH sequences serialize per shared client. Tagged Lua keeps existing keys; normalize cjson empty result/reason/source tables back to arrays. Terminal settlement removes schedule and owned tagged concat pointers.
+- Recipient-state field updates require claim/lease metadata; reject unguarded `recipientResults`/`isSettled` changes.
+- Redis standalone WATCH sequences serialize per shared client. Tagged mutations read raw JSON and compare its exact payload in Lua before storing a JS-serialized replacement, preserving empty header arrays without treating invalid objects as arrays. At most three snapshot-conflict attempts; existing keys unchanged. Normalize historical cjson empty result/reason/source tables. Terminal settlement removes schedule and owned tagged concat pointers.
 - Mongo adds named `mailtime_policy_due_v1` / `mailtime_policy_pending_to_v1` indexes and uses `isSettled: { $ne: true }`.
 - PostgreSQL idempotently adds `is_settled BOOLEAN NOT NULL DEFAULT false`, nullable `recipient_results JSONB`; new indexes are `idx_mail_time_queue_policy_due_v1` / `idx_mail_time_queue_policy_pending_to_v1`. SQL NULL means absent policy state, never `[]`.
 

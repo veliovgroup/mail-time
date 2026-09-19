@@ -1,6 +1,7 @@
 import {
   debug,
   logError,
+  hasOwnProp,
   isSendClaimUpdate,
   isSendLeaseGuardedUpdate,
   isAppendMailOptionUpdate,
@@ -392,6 +393,8 @@ class MongoQueue {
       return false;
     }
     this.__ensurePrefix();
+    if ((hasOwnProp(updateObj, 'recipientResults') || hasOwnProp(updateObj, 'isSettled'))
+      && !isSendClaimUpdate(updateObj) && !isSendLeaseGuardedUpdate(updateObj)) return false;
 
     if (isAppendMailOptionUpdate(updateObj)) {
       const res = await this.collection.updateOne({

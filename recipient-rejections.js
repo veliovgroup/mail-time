@@ -23,7 +23,7 @@ const normalizeRejections = (error, info, transport) => {
     if (typeof node === 'string') record.message = node.slice(0, 2048);
     records.push(record);
   };
-  const visit = (node, positional = null, root = false) => {
+  const visit = (node, positional = null, root = false, errorRoot = false) => {
     if (node === null || node === void 0) {
       if (!root) append(node, positional);
       return;
@@ -46,7 +46,7 @@ const normalizeRejections = (error, info, transport) => {
       for (const key of ['recipient', 'address', 'to']) {
         if (hasOwnProp(node, key)) { address = addressOf(node[key]); break; }
       }
-      if (!root || address || Object.keys(diagnosticFields(node)).length) append(node, address);
+      if (!root || errorRoot || address || Object.keys(diagnosticFields(node)).length) append(node, address);
     }
     const attributed = new Set(records.slice(start).map((r) => r.address));
     for (const address of rejected) {
@@ -54,7 +54,7 @@ const normalizeRejections = (error, info, transport) => {
     }
     ancestors.delete(node);
   };
-  visit(error, null, true);
+  visit(error, null, true, true);
   visit(info, null, true);
   return records;
 };

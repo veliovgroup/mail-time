@@ -1,5 +1,6 @@
 import {
   logError,
+  hasOwnProp,
   isSendClaimUpdate,
   isSendLeaseGuardedUpdate,
   isAppendMailOptionUpdate,
@@ -279,6 +280,8 @@ class BlankQueue {
       return false;
     }
 
+    if ((hasOwnProp(updateObj, 'recipientResults') || hasOwnProp(updateObj, 'isSettled'))
+      && !isSendClaimUpdate(updateObj) && !isSendLeaseGuardedUpdate(updateObj)) return false;
     const query = {
       uuid: email.uuid
     };

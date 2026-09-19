@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import {
   debug,
   logError,
+  hasOwnProp,
   isSendClaimUpdate,
   isSendLeaseGuardedUpdate,
   isAppendMailOptionUpdate,
@@ -456,6 +457,8 @@ class PostgresQueue {
     }
 
     await this.ready();
+    if ((hasOwnProp(updateObj, 'recipientResults') || hasOwnProp(updateObj, 'isSettled'))
+      && !isSendClaimUpdate(updateObj) && !isSendLeaseGuardedUpdate(updateObj)) return false;
 
     if (isAppendMailOptionUpdate(updateObj)) {
       const where = task.id ? 'id = $3' : 'uuid = $3';

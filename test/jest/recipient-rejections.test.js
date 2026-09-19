@@ -34,6 +34,10 @@ it('bounds scalars and never persists metadata', () => {
   expect(records[0].secret).toBeUndefined();
   expect(records.slice(1).map((r) => r.address)).toEqual([null, null, null]);
 });
+it('keeps an unknown root error visible without inventing empty info diagnostics', () => {
+  expect(normalizeRejections({ vendorDetail: { unknown: true } }, {}, { index: 0 })).toEqual([{ address: null, transportIndex: 0 }]);
+  expect(normalizeRejections(null, {}, { index: 0 })).toEqual([]);
+});
 it('handles absent records and simple to attribution', () => {
   expect(normalizeRejections(null, void 0, { index: 0 })).toEqual([]);
   expect(normalizeRejections({ to: 'a@example.com' }, null, { index: 0 })[0].address).toBe('a@example.com');

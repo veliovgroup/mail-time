@@ -332,6 +332,26 @@ describe('RedisQueue unit behavior', () => {
     await expect(queue.ready()).resolves.toBeUndefined();
   });
 
+  it.each(['append', 'lease'])('retries tagged %s snapshot races without changing JSON array types', async (mode) => {
+    const client = createRedisClient();
+    const task = { uuid: 'u', tries: 1, isSending: mode === 'lease', sendingAt: 10, sendAt: 1, mailOptions: [{ to: 'a@example.com', cc: [] }] };
+    client.hGet = jest.fn(async () => JSON.stringify(task));
+    client.eval = jest.fn().mockResolvedValueOnce(-1).mockResolvedValueOnce(1);
+    const queue = new RedisQueue({ client, prefix: 'cas', useHashTags: true });
+    queue.mailTimeInstance = createMailTimeHarness();
+    const fields = mode === 'append' ? { appendMailOption: { to: 'b@example.com', bcc: [] } } : { isSending: false, leaseTries: 1, leaseSendingAt: 10 };
+    expect(await queue.update(task, fields)).toBe(true);
+    expect(client.eval).toHaveBeenCalledTimes(2);
+    const args = client.eval.mock.calls[1][1].arguments;
+    expect(JSON.parse(args[args.length - 1]).mailOptions[0].cc).toEqual([]);
+    client.eval.mockResolvedValue(-1);
+    const before = client.eval.mock.calls.length;
+    expect(await queue.update(task, fields)).toBe(false);
+    expect(client.eval.mock.calls.length - before).toBe(3);
+    client.hGet.mockResolvedValue(null);
+    expect(await queue.update(task, fields)).toBe(false);
+  });
+
   it('uses Lua operations instead of WATCH and SCAN in hash-tagged mode', async () => {
     const client = createRedisClient();
     delete client.watch;
@@ -357,6 +377,7 @@ describe('RedisQueue unit behavior', () => {
       sendingAt: 0,
       mailOptions: [],
     };
+    client.hGet = jest.fn(async () => JSON.stringify(task));
 
     await queue.push(task);
     await queue.update(task, { isSending: true, sendingAt: Date.now(), tries: 1 });
@@ -451,6 +472,7 @@ describe('RedisQueue unit behavior', () => {
       sendingAt: 1000,
     };
 
+    client.hGet = jest.fn(async () => JSON.stringify(task));
     await expect(queue.update(task, {
       isSending: true,
       sendingAt: 1001,

@@ -1,6 +1,20 @@
 import { expect, it, jest } from '@jest/globals';
 import { MongoQueue } from '../../adapters/mongo.js';
 import { BlankQueue } from '../../adapters/blank-example.js';
+import { PostgresQueue } from '../../adapters/postgres.js';
+import { RedisQueue } from '../../adapters/redis.js';
+
+it.each(['mongo', 'postgres', 'redis', 'blank'])('requires a claim or lease guard for recipient-state changes on %s', async (name) => {
+  const task = { uuid: 'u', isSettled: true };
+  const mongo = makeMongo().queue;
+  mongo.collection.updateOne.mockResolvedValue({ modifiedCount: 1 });
+  const postgres = new PostgresQueue({ client: { query: async () => ({ rows: [], rowCount: 1 }) }, prefix: 'policy' });
+  const redis = new RedisQueue({ client: { get: async () => JSON.stringify(task), set: async () => {}, del: async () => 1 }, prefix: 'policy' });
+  const blank = new BlankQueue({ requiredOption: { update: async () => true } });
+  const queue = { mongo, postgres, redis, blank }[name];
+  expect(await queue.update(task, { recipientResults: [] })).toBe(false);
+  expect(await queue.update(task, { isSettled: false })).toBe(false);
+});
 
 const makeMongo = () => {
   const collection = {

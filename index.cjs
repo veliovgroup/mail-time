@@ -683,6 +683,8 @@ class MongoQueue {
       return false;
     }
     this.__ensurePrefix();
+    if ((hasOwnProp(updateObj, 'recipientResults') || hasOwnProp(updateObj, 'isSettled'))
+      && !isSendClaimUpdate(updateObj) && !isSendLeaseGuardedUpdate(updateObj)) return false;
 
     if (isAppendMailOptionUpdate(updateObj)) {
       const res = await this.collection.updateOne({
@@ -807,10 +809,10 @@ const ITERATE_TAGGED_TASKS_SCRIPT = `
         if eligibleAt > now then
           redis.call('ZADD', KEYS[2], eligibleAt, uuid)
         else
-          table.insert(tasks, task)
+          table.insert(tasks, payload)
         end
       elseif tonumber(task.sendAt or 0) <= now then
-        table.insert(tasks, task)
+        table.insert(tasks, payload)
       else
         redis.call('ZADD', KEYS[2], tonumber(task.sendAt), uuid)
       end
@@ -837,6 +839,7 @@ const UPDATE_TAGGED_TASK_SCRIPT = `
   local sendingTimeout = tonumber(ARGV[5])
   local expectedTries = tonumber(ARGV[6])
   local leaseSendingAt = tonumber(ARGV[7])
+  if payload ~= ARGV[8] then return -1 end
 
   if mode == 'claim' then
     if task.isSent or task.isFailed or task.isCancelled or task.isSettled or tonumber(task.tries or 0) ~= expectedTries then
@@ -860,7 +863,7 @@ const UPDATE_TAGGED_TASK_SCRIPT = `
   for key, value in pairs(update) do
     task[key] = value
   end
-  redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(task))
+  redis.call('HSET', KEYS[1], ARGV[1], ARGV[9])
 
   if task.isSent or task.isFailed or task.isCancelled or task.isSettled then
     redis.call('ZREM', KEYS[2], ARGV[1])
@@ -890,9 +893,8 @@ const APPEND_TAGGED_MAIL_OPTION_SCRIPT = `
   if task.isSending or task.isSent or task.isFailed or task.isCancelled or task.isSettled or type(task.recipientResults) == 'table' then
     return 0
   end
-  task.mailOptions = task.mailOptions or {}
-  table.insert(task.mailOptions, cjson.decode(ARGV[2]))
-  redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(task))
+  if payload ~= ARGV[3] then return -1 end
+  redis.call('HSET', KEYS[1], ARGV[1], ARGV[4])
   return 1
 `;
 
@@ -1195,8 +1197,8 @@ class RedisQueue {
         if (!Array.isArray(candidates)) {
           return;
         }
-        for (const candidate of candidates) {
-          normalizePolicyArrays(candidate);
+        for (const value of candidates) {
+          const candidate = normalizePolicyArrays(typeof value === 'string' ? JSON.parse(value) : value);
           if (isIterateCandidate(candidate, now, sendingTimeout, maxTries)) {
             await this.mailTimeInstance.___dispatch(candidate);
           }
@@ -1380,7 +1382,7 @@ class RedisQueue {
         if (task.to) keys.push(this.__getTaggedConcatKey(task.to), this.concatKeysKey);
         const keep = this.mailTimeInstance.keepHistory;
         const args = keep
-          ? [uuid, JSON.stringify({ isCancelled: true }), 'cancel', `${Date.now()}`, `${this.mailTimeInstance.sendingTimeout || 300000}`, '0', '0']
+          ? [uuid, JSON.stringify({ isCancelled: true }), 'cancel', `${Date.now()}`, `${this.mailTimeInstance.sendingTimeout || 300000}`, '0', '0', payload, JSON.stringify({ ...task, isCancelled: true })]
           : [uuid, 'cancel', '0', '0'];
         return Number(await this.__runScript(keep ? 'update' : 'remove', { keys, arguments: args })) >= 1;
       }
@@ -1522,38 +1524,41 @@ class RedisQueue {
     const isClaim = isSendClaimUpdate(updateObj);
     const isAppend = isAppendMailOptionUpdate(updateObj);
     const isLeaseRelease = isSendLeaseGuardedUpdate(updateObj);
+    if ((hasOwnProp(updateObj, 'recipientResults') || hasOwnProp(updateObj, 'isSettled')) && !isClaim && !isLeaseRelease) return false;
     const now = isClaim && typeof updateObj.sendingAt === 'number' ? updateObj.sendingAt : Date.now();
     const sendingTimeout = this.mailTimeInstance?.sendingTimeout || 300000;
 
     try {
       if (this.useHashTags) {
-        if (isAppend) {
-          const result = await this.__runScript('append', {
-            keys: [this.lettersKey],
-            arguments: [task.uuid, JSON.stringify(updateObj.appendMailOption)],
-          });
-          return Number(result) >= 1;
+        // JS serialization preserves empty arrays and scalar values that Lua cjson changes.
+        // The script compares the exact payload as well as the claim/lease predicates.
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const payload = await this.client.hGet(this.lettersKey, task.uuid);
+          if (!payload) return false;
+          const current = normalizePolicyArrays(JSON.parse(payload));
+          const persist = stripInternalUpdateMeta(updateObj);
+          const next = isAppend
+            ? { ...current, mailOptions: [...(current.mailOptions || []), updateObj.appendMailOption] }
+            : { ...current, ...persist };
+          if (isAppend) {
+            const result = Number(await this.__runScript('append', {
+              keys: [this.lettersKey],
+              arguments: [task.uuid, JSON.stringify(updateObj.appendMailOption), payload, JSON.stringify(next)],
+            }));
+            if (result === -1) continue;
+            return result >= 1;
+          }
+          const keys = [this.lettersKey, this.scheduleKey];
+          if (current.to) keys.push(this.__getTaggedConcatKey(current.to), this.concatKeysKey);
+          const result = Number(await this.__runScript('update', {
+            keys,
+            arguments: [task.uuid, JSON.stringify(persist), isClaim ? 'claim' : (isLeaseRelease ? 'lease' : 'plain'),
+              `${now}`, `${sendingTimeout}`, `${isClaim ? task.tries : (updateObj.leaseTries || 0)}`,
+              `${updateObj.leaseSendingAt || 0}`, payload, JSON.stringify(next)],
+          }));
+          if (result !== -1) return result >= 1;
         }
-
-        const mode = isClaim ? 'claim' : (isLeaseRelease ? 'lease' : 'plain');
-        const keys = [this.lettersKey, this.scheduleKey];
-        if (task.to) {
-          keys.push(this.__getTaggedConcatKey(task.to));
-          keys.push(this.concatKeysKey);
-        }
-        const result = await this.__runScript('update', {
-          keys,
-          arguments: [
-            task.uuid,
-            JSON.stringify(stripInternalUpdateMeta(updateObj)),
-            mode,
-            `${now}`,
-            `${sendingTimeout}`,
-            `${isClaim ? task.tries : (updateObj.leaseTries || 0)}`,
-            `${updateObj.leaseSendingAt || 0}`,
-          ],
-        });
-        return Number(result) >= 1;
+        return false;
       }
 
       if (isAppend) {
@@ -2127,6 +2132,8 @@ class PostgresQueue {
     }
 
     await this.ready();
+    if ((hasOwnProp(updateObj, 'recipientResults') || hasOwnProp(updateObj, 'isSettled'))
+      && !isSendClaimUpdate(updateObj) && !isSendLeaseGuardedUpdate(updateObj)) return false;
 
     if (isAppendMailOptionUpdate(updateObj)) {
       const where = task.id ? 'id = $3' : 'uuid = $3';
@@ -2597,7 +2604,7 @@ const normalizeRejections = (error, info, transport) => {
     if (typeof node === 'string') record.message = node.slice(0, 2048);
     records.push(record);
   };
-  const visit = (node, positional = null, root = false) => {
+  const visit = (node, positional = null, root = false, errorRoot = false) => {
     if (node === null || node === void 0) {
       if (!root) append(node, positional);
       return;
@@ -2620,7 +2627,7 @@ const normalizeRejections = (error, info, transport) => {
       for (const key of ['recipient', 'address', 'to']) {
         if (hasOwnProp(node, key)) { address = addressOf(node[key]); break; }
       }
-      if (!root || address || Object.keys(diagnosticFields(node)).length) append(node, address);
+      if (!root || errorRoot || address || Object.keys(diagnosticFields(node)).length) append(node, address);
     }
     const attributed = new Set(records.slice(start).map((r) => r.address));
     for (const address of rejected) {
@@ -2628,7 +2635,7 @@ const normalizeRejections = (error, info, transport) => {
     }
     ancestors.delete(node);
   };
-  visit(error, null, true);
+  visit(error, null, true, true);
   visit(info, null, true);
   return records;
 };
