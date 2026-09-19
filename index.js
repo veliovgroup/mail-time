@@ -7,7 +7,9 @@ import { PostgresQueue } from './adapters/postgres.js';
 import { mailTimePreset, presets, presetNames } from './presets.js';
 import { debug, escapeHtml, logError, hasOwnProp, deepMerge, equals, isPlainObject, extractEmail, toAddressList, filterAddressField } from './helpers.js';
 
-import { validateRecipientPolicies } from './recipient-policy.js';
+import { validateRecipientPolicies, policyError, normalizePolicyAddress, preparePolicyEnvelope, evaluatePolicyPhase, mergePolicyResults, summarizePolicyTask } from './recipient-policy.js';
+import { normalizeRejections } from './recipient-rejections.js';
+import { RecipientPolicyLease } from './recipient-policy-lease.js';
 
 const noop = () => {};
 const queueMethods = ['ping', 'iterate', 'getPendingTo', 'push', 'remove', 'update', 'cancel'];
@@ -1233,6 +1235,188 @@ class MailTime {
     return { stop };
   }
 
+  /** @internal Serialize every policy checkpoint with this attempt's claim renewal. */
+  async ___sendWithRecipientPolicies(task) {
+    if (!task || task.isSent || task.isFailed || task.isCancelled || task.isSettled || this.__abortInFlight) return;
+    const fields = { tries: task.tries + 1, isSending: true, sendingAt: Math.max(Date.now(), (task.sendingAt || 0) + 1), recipientResults: task.recipientResults || [] };
+    try {
+      if (!await this.queue.update(task, fields)) return;
+    } catch (error) {
+      if (!this.__abortInFlight) logError('[recipientPolicies] claim failed', error);
+      return;
+    }
+    Object.assign(task, fields);
+    const lease = new RecipientPolicyLease({
+      task, queue: this.queue, interval: this.renewClaim, maxRenewals: this.maxRenewals,
+      shouldAbort: () => this.__abortInFlight,
+      report: (error) => logError('[recipientPolicies] lease persistence failed', error),
+    });
+    try {
+      if (!lease.active) return;
+      if (!this.___isHealthyTransport(task.transport)) task.transport = this.___nextHealthyTransport(task.transport);
+      const transport = this.transports[task.transport];
+      const compiled = this.___compileMailOpts(transport, task);
+      if (!compiled.from) compiled.from = MailTime.transportFrom(transport);
+      const prepared = preparePolicyEnvelope(compiled, task.recipientResults);
+      const transportName = typeof transport.name === 'string' ? transport.name : transport.options?.name;
+      const details = { phase: 'beforeSend', attempt: task.tries, transportIndex: task.transport, transportName, accepted: [...collectAcceptedSet(task)] };
+      task.recipientResults = mergePolicyResults(task.recipientResults, prepared.recipients, { retryFailure: false, decisions: [] }, details);
+      const pending = new Set(task.recipientResults.filter((r) => r.status === 'error').map((r) => r.address));
+      const context = {
+        task, attempt: task.tries, transport: { index: task.transport, ...(typeof transportName === 'string' ? { name: transportName.slice(0, 128) } : {}) },
+        envelope: { ...prepared.envelope, to: prepared.envelope.to.filter((a) => pending.has(a)) },
+        recipients: prepared.recipients.filter((r) => pending.has(r.address)),
+      };
+      if (!pending.size) {
+        await this.___completePolicyTask(task, lease);
+        return;
+      }
+      const evaluated = await evaluatePolicyPhase(this.__recipientPolicies, 'beforeSend', context, (error, name, hook) => {
+        if (!this.__abortInFlight) logError(`[recipientPolicies] ${name}.${hook} failed`, error);
+      });
+      if (!lease.active) return;
+      task.recipientResults = mergePolicyResults(task.recipientResults, context.recipients, evaluated, details);
+      if (!await lease.update({ recipientResults: task.recipientResults, mailOptions: task.mailOptions })) return;
+      if (!lease.active) return;
+      if (evaluated.retryFailure) {
+        await this.___retryPolicyTask(task, lease, policyError('beforeSend provider failed'), void 0, true);
+        return;
+      }
+      const eligible = new Set(task.recipientResults.filter((r) => r.status === 'error').map((r) => r.address));
+      if (!eligible.size) {
+        await this.___completePolicyTask(task, lease);
+        return;
+      }
+      context.envelope = { ...context.envelope, to: context.envelope.to.filter((a) => eligible.has(a)) };
+      context.recipients = context.recipients.filter((r) => eligible.has(r.address));
+      await this.___attemptPolicyTransport(task, lease, compiled, context);
+    } catch (error) {
+      if (lease.active) await this.___retryPolicyTask(task, lease, error, void 0, true, true);
+    } finally {
+      await lease.stop();
+    }
+  }
+
+  /** @internal Persist SMTP acceptance before awaiting rejection classification or observation. */
+  async ___attemptPolicyTransport(task, lease, compiled, context) {
+    const transport = this.transports[context.transport.index];
+    const outgoing = { ...compiled, envelope: context.envelope };
+    const { error, info } = await new Promise((resolve) => {
+      let called = false;
+      const done = (error, info) => {
+        if (called) return;
+        called = true;
+        resolve({ error, info });
+      };
+      try { transport.sendMail(outgoing, done); }
+      catch (error) { done(error, void 0); }
+    });
+    if (!lease.active) return;
+    const attempted = new Set(context.envelope.to);
+    const accepted = new Set();
+    for (const source of [info, error]) {
+      for (const value of Array.isArray(source?.accepted) ? source.accepted : []) {
+        try {
+          const address = normalizePolicyAddress(value);
+          if (attempted.has(address)) accepted.add(address);
+        } catch { /* Transport records outside supported address forms remain unresolved. */ }
+      }
+    }
+    const details = { phase: 'classifyRejections', attempt: task.tries, transportIndex: context.transport.index, transportName: context.transport.name, accepted: [...accepted] };
+    task.recipientResults = mergePolicyResults(task.recipientResults, context.recipients, { retryFailure: false, decisions: [] }, details);
+    this.___mapPolicyMailOptions(task, false);
+    if (!await lease.update({ recipientResults: task.recipientResults, mailOptions: task.mailOptions })) return;
+    if (!lease.active) return;
+    const unresolved = context.recipients.filter((r) => !accepted.has(r.address));
+    if (unresolved.length) {
+      const rejections = normalizeRejections(error, info, context.transport);
+      const rejectionContext = { ...context, recipients: unresolved, error, info, rejections };
+      const evaluated = await evaluatePolicyPhase(this.__recipientPolicies, 'classifyRejections', rejectionContext, (hookError, name, hook) => {
+        if (!this.__abortInFlight) logError(`[recipientPolicies] ${name}.${hook} failed`, hookError);
+      });
+      if (!lease.active) return;
+      task.recipientResults = mergePolicyResults(task.recipientResults, unresolved, evaluated, { ...details, rejections });
+      const observation = { ...rejectionContext, decisions: task.recipientResults };
+      for (const provider of this.__recipientPolicies) {
+        if (!lease.active) return;
+        if (typeof provider.observeAttempt !== 'function') continue;
+        try { await provider.observeAttempt(observation); }
+        catch (hookError) {
+          if (!this.__abortInFlight) logError(`[recipientPolicies] ${provider.name}.observeAttempt failed`, hookError);
+        }
+      }
+    }
+    if (!lease.active) return;
+    if (task.recipientResults.some((r) => r.status === 'error')) {
+      await this.___retryPolicyTask(task, lease, error || policyError('recipients remain unaccepted'), info, !!error || accepted.size === 0);
+    } else {
+      await this.___completePolicyTask(task, lease, error, info);
+    }
+  }
+
+  /** @internal Keep legacy per-mail-option state limited to actual envelope recipients. */
+  ___mapPolicyMailOptions(task, terminal) {
+    const results = new Map(task.recipientResults.map((r) => [r.address, r]));
+    for (const option of task.mailOptions || []) {
+      const addresses = new Set();
+      for (const field of ['to', 'cc', 'bcc']) {
+        const values = Array.isArray(option[field]) ? option[field] : [option[field]];
+        for (const value of values) {
+          try { addresses.add(normalizePolicyAddress(value)); } catch { /* Explicit envelopes permit complex headers. */ }
+        }
+      }
+      const accepted = new Set(Array.isArray(option.accepted) ? option.accepted : []);
+      const rejected = [];
+      for (const address of addresses) {
+        const result = results.get(address);
+        if (result?.status === 'sent') accepted.add(address);
+        if (terminal && (result?.status === 'error' || result?.status === 'rejected')) {
+          rejected.push({ address, error: result.message || result.response || result.reasons[0]?.reason || 'Recipient not accepted by transport' });
+        }
+      }
+      option.accepted = [...accepted];
+      if (terminal) option.rejected = rejected;
+    }
+  }
+
+  /** @internal Release a policy claim with all durable outcomes, or settle at exhaustion. */
+  async ___retryPolicyTask(task, lease, error, info, allowRotation, preparationFailure = false) {
+    if (!lease.active) return false;
+    if (task.tries >= this.maxTries) return await this.___completePolicyTask(task, lease, error, info, preparationFailure);
+    let transport = task.transport;
+    if (allowRotation && this.strategy === 'backup' && this.transports.length > 1
+      && task.tries % this.failsToNext === 0 && this.___mayFailOver(error, info, task)) transport = this.___nextHealthyTransport(transport);
+    return await lease.finish({ isSending: false, sendingAt: 0, sendAt: Date.now() + this.retryDelay, transport,
+      recipientResults: task.recipientResults, mailOptions: task.mailOptions }, false);
+  }
+
+  /** @internal Settle truthfully before invoking any best-effort terminal notification. */
+  async ___completePolicyTask(task, lease, error, info, preparationFailure = false) {
+    if (!lease.active) return false;
+    this.___mapPolicyMailOptions(task, true);
+    const results = task.recipientResults;
+    const fields = {
+      isSettled: true, isSent: results.length > 0 && results.every((r) => r.status === 'sent'),
+      isFailed: preparationFailure || results.some((r) => r.status === 'error' || r.status === 'rejected'),
+      isSending: false, sendingAt: 0, recipientResults: results, mailOptions: task.mailOptions,
+    };
+    const completed = await lease.finish(fields, !this.keepHistory);
+    if (completed && !this.__abortInFlight) this.___notifyPolicyGroups(task, error, info, preparationFailure);
+    return completed;
+  }
+
+  /** @internal Empty groups are silent except unparseable terminal preparation failures. */
+  ___notifyPolicyGroups(task, error, info, preparationFailure) {
+    const summary = summarizePolicyTask(task, true);
+    const groups = summary.recipients;
+    if (groups.sent.length) callHook('onSent', this.onSent, task, info, groups.sent, summary);
+    if (!this.__abortInFlight && (groups.error.length || (preparationFailure && !task.recipientResults.length))) {
+      callHook('onError', this.onError, error || policyError('recipients remain unaccepted'), task, info, groups.error, summary);
+    }
+    if (!this.__abortInFlight && groups.suppressed.length) callHook('onSuppressed', this.onSuppressed, task, groups.suppressed, summary);
+    if (!this.__abortInFlight && groups.rejected.length) callHook('onRejected', this.onRejected, task, groups.rejected, summary);
+  }
+
   /**
    * @async
    * @internal
@@ -1276,6 +1460,12 @@ class MailTime {
    * @returns {Promise<void 0>}
    */
   async ___send(task) {
+    if (this.__recipientPolicies) return await this.___sendWithRecipientPolicies(task);
+    if (task?.isSettled === true) return;
+    if (Array.isArray(task?.recipientResults)) {
+      logError('[recipientPolicies] active policy state requires a policy-configured worker', task.uuid);
+      return;
+    }
     this.__debug('[private send]', task);
     try {
       if (!task || task.isSent === true || task.isFailed === true || task.isCancelled === true) {
