@@ -17,6 +17,8 @@ class BlankQueue {
    */
   constructor (opts) {
     this.name = 'queue-name';
+    // Declare this only after the storage methods atomically implement every predicate below.
+    this.supportsRecipientPolicies = true;
     if (!opts || typeof opts !== 'object' || opts === null) {
       throw new TypeError('[mail-time] Configuration object must be passed into BlankQueue constructor');
     }
@@ -34,6 +36,8 @@ class BlankQueue {
     // to          {string|[string]}
     // tries       {number}  - qty of send attempts
     // sendAt      {number}  - When letter should be sent
+    // isSettled   {boolean} - policy terminal completion; missing means false
+    // recipientResults {Array} - durable policy outcomes; [] marks policy ownership
     // isSent      {boolean} - `true` once delivery has fully completed
     // isCancelled {boolean} - `true` if email was cancelled before it was sent
     // isFailed    {boolean} - `true` if email has failed to send
@@ -131,15 +135,14 @@ class BlankQueue {
       isSent: false,
       isFailed: false,
       isCancelled: false,
-      tries: {
-        $lt: this.mailTimeInstance.maxTries
-      },
-      sendAt: {
-        $lte: now
-      },
-      $or: [
-        { isSending: { $ne: true } },
-        { sendingAt: { $lte: now - sendingTimeout } }
+      isSettled: { $ne: true },
+      sendAt: { $lte: now },
+      $and: [
+        { $or: [{ isSending: { $ne: true } }, { sendingAt: { $lte: now - sendingTimeout } }] },
+        { $or: [
+          { tries: { $lt: this.mailTimeInstance.maxTries } },
+          { recipientResults: { $type: 'array' }, isSending: true, sendingAt: { $lte: now - sendingTimeout } },
+        ] },
       ]
     });
 
@@ -176,6 +179,8 @@ class BlankQueue {
       isFailed: false,
       isCancelled: false,
       isSending: false,
+      isSettled: { $ne: true },
+      recipientResults: { $exists: false },
       tries: {
         $lt: this.mailTimeInstance.maxTries
       },
@@ -184,7 +189,7 @@ class BlankQueue {
       }
     });
 
-    if (!email || email.isSent === true || email.isCancelled === true || email.isFailed === true || email.isSending === true || email.tries >= this.mailTimeInstance.maxTries) {
+    if (!email || email.isSettled === true || Array.isArray(email.recipientResults) || email.isSent === true || email.isCancelled === true || email.isFailed === true || email.isSending === true || email.tries >= this.mailTimeInstance.maxTries) {
       return null;
     }
 
@@ -224,21 +229,10 @@ class BlankQueue {
       return false;
     }
 
-    const email = JSON.parse(await this.requiredOption.get({
-      uuid: uuid
-    }));
-
-    if (!email || email.isSent === true || email.isCancelled === true) {
-      return false;
-    }
-
-    if (!this.mailTimeInstance.keepHistory) {
-      return await this.remove(email);
-    }
-
-    return await this.update(email, {
-      isCancelled: true,
-    });
+    const query = { uuid, isSent: false, isCancelled: false, isSettled: { $ne: true },
+      $or: [{ recipientResults: { $exists: false } }, { isFailed: false }] };
+    if (!this.mailTimeInstance.keepHistory) return await this.requiredOption.remove(query);
+    return await this.requiredOption.update(query, { isCancelled: true });
   }
 
   /**
@@ -258,6 +252,8 @@ class BlankQueue {
     const query = { uuid: email.uuid };
     if (isSendLeaseRemove(opts)) {
       Object.assign(query, {
+        isSent: false,
+        isSettled: { $ne: true },
         tries: opts.leaseTries,
         isSending: true,
         sendingAt: opts.leaseSendingAt,
@@ -292,6 +288,8 @@ class BlankQueue {
         isFailed: false,
         isCancelled: false,
         isSending: false,
+        isSettled: { $ne: true },
+        recipientResults: { $exists: false },
       });
       return await this.requiredOption.appendMailOption(query, updateObj.appendMailOption);
     }
@@ -305,6 +303,7 @@ class BlankQueue {
         isSent: false,
         isFailed: false,
         isCancelled: false,
+        isSettled: { $ne: true },
         tries: email.tries,
         $or: [
           { isSending: { $ne: true } },
@@ -313,6 +312,8 @@ class BlankQueue {
       });
     } else if (isSendLeaseGuardedUpdate(updateObj)) {
       Object.assign(query, {
+        isSent: false,
+        isSettled: { $ne: true },
         tries: updateObj.leaseTries,
         isSending: true,
         sendingAt: updateObj.leaseSendingAt,
@@ -321,8 +322,8 @@ class BlankQueue {
       });
     }
 
-    const updatedEmail = { ...email, ...stripInternalUpdateMeta(updateObj) };
-    return await this.requiredOption.update(query, updatedEmail);
+    // Atomically patch matching rows; return true even for an unchanged matching checkpoint.
+    return await this.requiredOption.update(query, stripInternalUpdateMeta(updateObj));
   }
 }
 

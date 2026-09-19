@@ -371,6 +371,7 @@ class MongoQueue {
    */
   constructor (opts) {
     this.name = 'mongo-queue';
+    this.supportsRecipientPolicies = true;
     if (!opts || typeof opts !== 'object') {
       throw new TypeError('[mail-time] Configuration object must be passed into MongoQueue constructor');
     }
@@ -391,8 +392,8 @@ class MongoQueue {
     this.collection = this.db.collection(`__mailTimeQueue__${prefix}`);
     this.__readyPromise = Promise.all([
       ensureIndex(this.collection, { uuid: 1 }, { background: false }),
-      ensureIndex(this.collection, { isSent: 1, isFailed: 1, isCancelled: 1, to: 1, sendAt: 1 }, { background: false }),
-      ensureIndex(this.collection, { isSent: 1, isFailed: 1, isCancelled: 1, isSending: 1, sendingAt: 1, sendAt: 1, tries: 1 }, { background: false }),
+      ensureIndex(this.collection, { isSettled: 1, isSent: 1, isFailed: 1, isCancelled: 1, to: 1, sendAt: 1 }, { name: 'mailtime_policy_pending_to_v1', background: false }),
+      ensureIndex(this.collection, { isSettled: 1, isSent: 1, isFailed: 1, isCancelled: 1, isSending: 1, sendingAt: 1, sendAt: 1, tries: 1 }, { name: 'mailtime_policy_due_v1', background: false }),
     ]).then(() => void 0);
   }
 
@@ -491,12 +492,13 @@ class MongoQueue {
         sendAt: {
           $lte: now,
         },
-        tries: {
-          $lt: this.mailTimeInstance.maxTries,
-        },
-        $or: [
-          { isSending: { $ne: true } },
-          { sendingAt: { $lte: now - sendingTimeout } },
+        isSettled: { $ne: true },
+        $and: [
+          { $or: [{ isSending: { $ne: true } }, { sendingAt: { $lte: now - sendingTimeout } }] },
+          { $or: [
+            { tries: { $lt: this.mailTimeInstance.maxTries } },
+            { recipientResults: { $type: 'array' }, isSending: true, sendingAt: { $lte: now - sendingTimeout } },
+          ] },
         ],
       }, {
         projection: {
@@ -512,6 +514,8 @@ class MongoQueue {
           sendingAt: 1,
           mailOptions: 1,
           concatSubject: 1,
+          isSettled: 1,
+          recipientResults: 1,
         },
       });
 
@@ -553,6 +557,8 @@ class MongoQueue {
       isFailed: false,
       isCancelled: false,
       isSending: { $ne: true },
+      isSettled: { $ne: true },
+      recipientResults: { $exists: false },
       tries: { $lt: this.mailTimeInstance.maxTries },
       sendAt: {
         $lte: sendAt,
@@ -566,6 +572,8 @@ class MongoQueue {
         isSent: 1,
         isFailed: 1,
         isCancelled: 1,
+        isSettled: 1,
+        recipientResults: 1,
         mailOptions: 1,
       },
     });
@@ -613,20 +621,20 @@ class MongoQueue {
         uuid: 1,
         isSent: 1,
         isCancelled: 1,
+        isSettled: 1,
       },
     });
 
-    if (!task || task.isSent === true || task.isCancelled === true) {
+    if (!task || task.isSent === true || task.isCancelled === true || task.isSettled === true) {
       return false;
     }
-
+    const query = { _id: task._id, isSent: false, isCancelled: false, isSettled: { $ne: true },
+      $or: [{ recipientResults: { $exists: false } }, { isFailed: false }] };
     if (!this.mailTimeInstance.keepHistory) {
-      return await this.remove(task);
+      return ((await this.collection.deleteOne(query))?.deletedCount || 0) >= 1;
     }
-
-    return await this.update(task, {
-      isCancelled: true,
-    });
+    const result = await this.collection.updateOne(query, { $set: { isCancelled: true } });
+    return (result?.matchedCount || result?.modifiedCount || 0) >= 1;
   }
 
   /**
@@ -647,6 +655,8 @@ class MongoQueue {
 
     const query = { _id: task._id };
     if (isSendLeaseRemove(opts)) {
+      query.isSent = false;
+      query.isSettled = { $ne: true };
       query.tries = opts.leaseTries;
       query.isSending = true;
       query.sendingAt = opts.leaseSendingAt;
@@ -681,6 +691,8 @@ class MongoQueue {
         isFailed: false,
         isCancelled: false,
         isSending: { $ne: true },
+        isSettled: { $ne: true },
+        recipientResults: { $exists: false },
       }, {
         $push: {
           mailOptions: updateObj.appendMailOption,
@@ -699,12 +711,15 @@ class MongoQueue {
       query.isSent = false;
       query.isFailed = false;
       query.isCancelled = false;
+      query.isSettled = { $ne: true };
       query.tries = task.tries;
       query.$or = [
         { isSending: { $ne: true } },
         { sendingAt: { $lte: now - sendingTimeout } },
       ];
     } else if (isSendLeaseGuardedUpdate(updateObj)) {
+      query.isSent = false;
+      query.isSettled = { $ne: true };
       query.tries = updateObj.leaseTries;
       query.isSending = true;
       query.sendingAt = updateObj.leaseSendingAt;
@@ -715,7 +730,7 @@ class MongoQueue {
     const res = await this.collection.updateOne(query, {
       $set: stripInternalUpdateMeta(updateObj),
     });
-    if (isSendClaimUpdate(updateObj)) {
+    if (isSendClaimUpdate(updateObj) || isSendLeaseGuardedUpdate(updateObj)) {
       return (res?.modifiedCount || res?.matchedCount || 0) >= 1;
     }
     return (res?.modifiedCount || 0) >= 1;

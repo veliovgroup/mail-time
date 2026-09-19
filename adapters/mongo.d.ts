@@ -34,6 +34,7 @@ export class MongoQueue {
      */
     constructor(opts: MongoQueueOption);
     name: string;
+    supportsRecipientPolicies: boolean;
     db: Db;
     prefix: any;
     collection: MongoCollection | undefined;

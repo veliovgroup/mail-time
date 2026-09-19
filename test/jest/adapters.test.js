@@ -213,6 +213,7 @@ describe('MongoQueue unit behavior', () => {
       isSent: false,
       isFailed: false,
       isCancelled: false,
+      isSettled: { $ne: true },
       tries: 0,
       $or: [
         { isSending: { $ne: true } },
@@ -1240,6 +1241,8 @@ describe('Helpers, equals, and deep merge corner cases', () => {
       isFailed: false,
       isCancelled: false,
       isSending: { $ne: true },
+      isSettled: { $ne: true },
+      recipientResults: { $exists: false },
     }, {
       $push: { mailOptions: { to: 'user@example.com', text: 'x' } },
     });

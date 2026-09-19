@@ -11,6 +11,7 @@ export class BlankQueue {
         prefix?: string | undefined;
     });
     name: string;
+    supportsRecipientPolicies: boolean;
     prefix: string;
     uniqueName: string;
     requiredOption: object;

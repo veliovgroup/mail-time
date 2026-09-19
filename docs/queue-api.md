@@ -47,6 +47,21 @@ List of required methods and their arguments.
 
 Redis Cluster queues must keep every hash, sorted-set, concat key, and any pointer index in one shared hash tag. Use Lua for atomic claims: node-redis `RedisClusterType` has no `watch()` or `scanIterator()`.
 
+## Recipient policy capability
+
+A queue used with `recipientPolicies` must declare `supportsRecipientPolicies = true`. This promises all of these behaviors, not merely support for two extra fields:
+
+- Persist and return `isSettled` and `recipientResults` on every task read. Missing `isSettled` means false. Absent results mean legacy state; an empty result array marks a policy-owned claim.
+- Exclude `isSettled === true` from iteration, claims, lease updates, lease removal, cancellation, and concat lookup/append. Lease operations also require `isSent === false`.
+- Guard cancellation atomically against terminal state at the storage operation, not only on an earlier read. Patch only cancellation fields; never replace the row from a stale snapshot.
+- Reject concat lookup and atomic append for any row with policy results, including `[]`. Clients need not configure providers, so inspect stored state rather than instance options.
+- Return true for a lease checkpoint whose predicate matched even if its field values did not change. Return false for stale, cancelled, failed, or settled lease writes.
+- Include stale in-flight policy rows even when `tries >= maxTries`. MailTime reclaims these for completion only, preserving `tries` and advancing `sendingAt`; it does not send SMTP or rerun decision hooks. The normal stale-lock predicate still applies.
+
+Policy completion persists `isSettled: true`; `isSent` is true only for all-sent outcomes, while `isFailed` marks terminal error/rejection. Sent-plus-suppressed and fully suppressed tasks are settled but neither sent nor failed. Keep result arrays and lease metadata separate: strip `leaseTries`/`leaseSendingAt` before storage. PostgreSQL uses SQL NULL for absent results. Redis Lua readers must normalize empty cjson tables back to the documented array fields.
+
+The complete result type is exported as `MailTimeRecipientResult`. It contains only normalized addresses, status, sources, bounded provider/reason pairs, attempt/transport identifiers, and documented scalar diagnostics. Do not persist raw transport errors or provider metadata.
+
 ## Iterate predicate
 
 `iterate(opts)` must enumerate rows where every condition below is true:
@@ -55,7 +70,8 @@ Redis Cluster queues must keep every hash, sorted-set, concat key, and any point
 - `isFailed === false`
 - `isCancelled === false`
 - `sendAt <= now`
-- `tries < mailTimeInstance.maxTries`
+- `isSettled !== true`
+- `tries < mailTimeInstance.maxTries` **OR** the row has policy results and an expired in-flight claim, for completion-only recovery
 - `isSending === false` **OR** `sendingAt <= now - opts.sendingTimeout`
 
 For each matching row, call `await this.mailTimeInstance.___dispatch(email)`. `___dispatch` performs the atomic claim, then hands the SMTP roundtrip off to MailTime's in-process worker pool (bounded by `concurrency`). It resolves as soon as the pool slot is acquired — **not** after the SMTP completes — which lets your `iterate` move on to the next due row and lets the surrounding JoSk lease be released quickly.
@@ -72,6 +88,8 @@ In order to process and send emails, `Queue#iterate` must call `await this.mailT
   to: String,           // optional; primary recipient (used for `concatEmails`)
   tries: Number,        // count of completed send attempts
   sendAt: Number,       // timestamp the row becomes due
+  isSettled: Boolean,   // policy terminal completion; missing means false
+  recipientResults: [], // optional durable policy results; absent on legacy rows
   isSent: Boolean,      // true only when delivery is confirmed
   isCancelled: Boolean, // true when the user cancelled the row
   isFailed: Boolean,    // true after `maxTries` attempts have all failed
