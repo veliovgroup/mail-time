@@ -1658,6 +1658,8 @@ const fieldMap = {
   tries: 'tries',
   sendAt: 'send_at',
   isSent: 'is_sent',
+  isSettled: 'is_settled',
+  recipientResults: 'recipient_results',
   isCancelled: 'is_cancelled',
   isFailed: 'is_failed',
   isSending: 'is_sending',
@@ -1687,6 +1689,8 @@ const normalizeRow = (row) => {
     tries: parseInt(row.tries, 10),
     sendAt: parseInt(row.send_at, 10),
     isSent: row.is_sent,
+    isSettled: row.is_settled === true,
+    recipientResults: row.recipient_results == null ? void 0 : parseMailOptions(row.recipient_results),
     isCancelled: row.is_cancelled,
     isFailed: row.is_failed,
     isSending: row.is_sending === true,
@@ -1706,6 +1710,7 @@ class PostgresQueue {
    */
   constructor(opts) {
     this.name = 'postgres-queue';
+    this.supportsRecipientPolicies = true;
     if (!opts || typeof opts !== 'object') {
       throw new TypeError('[mail-time] Configuration object must be passed into PostgresQueue constructor');
     }
@@ -1766,6 +1771,8 @@ class PostgresQueue {
           tries INTEGER NOT NULL DEFAULT 0,
           send_at BIGINT NOT NULL,
           is_sent BOOLEAN NOT NULL DEFAULT false,
+          is_settled BOOLEAN NOT NULL DEFAULT false,
+          recipient_results JSONB,
           is_cancelled BOOLEAN NOT NULL DEFAULT false,
           is_failed BOOLEAN NOT NULL DEFAULT false,
           is_sending BOOLEAN NOT NULL DEFAULT false,
@@ -1777,14 +1784,16 @@ class PostgresQueue {
           created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )`);
+      await this.client.query('ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS is_settled BOOLEAN NOT NULL DEFAULT false');
+      await this.client.query('ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS recipient_results JSONB');
       await this.client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_time_queue_prefix_uuid
         ON mail_time_queue (prefix, uuid)`);
 
-      await this.client.query(`CREATE INDEX IF NOT EXISTS idx_mail_time_queue_due
-        ON mail_time_queue (prefix, is_sent, is_failed, is_cancelled, is_sending, sending_at, send_at, tries)`);
+      await this.client.query(`CREATE INDEX IF NOT EXISTS idx_mail_time_queue_policy_due_v1
+        ON mail_time_queue (prefix, is_settled, is_sent, is_failed, is_cancelled, is_sending, sending_at, send_at, tries)`);
 
-      await this.client.query(`CREATE INDEX IF NOT EXISTS idx_mail_time_queue_pending_to
-        ON mail_time_queue (prefix, to_address, is_sent, is_failed, is_cancelled, send_at)`);
+      await this.client.query(`CREATE INDEX IF NOT EXISTS idx_mail_time_queue_policy_pending_to_v1
+        ON mail_time_queue (prefix, to_address, is_settled, is_sent, is_failed, is_cancelled, send_at)`);
     } finally {
       await this.client.query('SELECT pg_advisory_unlock($1, $2)', [ADVISORY_LOCK_NAMESPACE, advisoryLockKey]);
     }
@@ -1859,14 +1868,15 @@ class PostgresQueue {
 
     try {
       const res = await this.client.query(`SELECT id, uuid, to_address, tries, send_at, is_sent, is_cancelled, is_failed,
-               is_sending, sending_at, template, transport, concat_subject, mail_options
+               is_sending, sending_at, template, transport, concat_subject, mail_options, is_settled, recipient_results
         FROM mail_time_queue
         WHERE prefix = $1
           AND is_sent = false
           AND is_failed = false
           AND is_cancelled = false
+          AND is_settled = false
           AND send_at <= $2
-          AND tries < $3
+          AND (tries < $3 OR (recipient_results IS NOT NULL AND is_sending = true AND sending_at <= $4))
           AND (is_sending = false OR sending_at <= $4)
         ORDER BY send_at ASC
         LIMIT $5`, [this.prefix, now, this.mailTimeInstance.maxTries, now - sendingTimeout, limit]);
@@ -1897,7 +1907,7 @@ class PostgresQueue {
     await this.ready();
 
     const res = await this.client.query(`SELECT id, uuid, to_address, tries, send_at, is_sent, is_cancelled, is_failed,
-             is_sending, sending_at, template, transport, concat_subject, mail_options
+             is_sending, sending_at, template, transport, concat_subject, mail_options, is_settled, recipient_results
       FROM mail_time_queue
       WHERE prefix = $1
         AND to_address = $2
@@ -1905,6 +1915,8 @@ class PostgresQueue {
         AND is_failed = false
         AND is_cancelled = false
         AND is_sending = false
+        AND is_settled = false
+        AND recipient_results IS NULL
         AND tries < $4
         AND send_at <= $3
       ORDER BY send_at DESC
@@ -1935,9 +1947,9 @@ class PostgresQueue {
 
     await this.client.query(`INSERT INTO mail_time_queue (
         prefix, uuid, to_address, tries, send_at, is_sent, is_cancelled, is_failed,
-        is_sending, sending_at, template, transport, concat_subject, mail_options, created_at, updated_at
+        is_sending, sending_at, template, transport, concat_subject, mail_options, is_settled, recipient_results, created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT (prefix, uuid) DO UPDATE SET
         to_address = EXCLUDED.to_address,
         tries = EXCLUDED.tries,
@@ -1951,6 +1963,8 @@ class PostgresQueue {
         transport = EXCLUDED.transport,
         concat_subject = EXCLUDED.concat_subject,
         mail_options = EXCLUDED.mail_options,
+        is_settled = EXCLUDED.is_settled,
+        recipient_results = EXCLUDED.recipient_results,
         updated_at = CURRENT_TIMESTAMP`, [
       this.prefix,
       task.uuid,
@@ -1966,6 +1980,8 @@ class PostgresQueue {
       task.transport,
       task.concatSubject || null,
       JSON.stringify(task.mailOptions || []),
+      task.isSettled === true,
+      task.recipientResults === void 0 ? null : JSON.stringify(task.recipientResults),
     ]);
   }
 
@@ -1986,23 +2002,20 @@ class PostgresQueue {
     await this.ready();
 
     const task = normalizeRow((await this.client.query(`SELECT id, uuid, to_address, tries, send_at, is_sent, is_cancelled, is_failed,
-             template, transport, concat_subject, mail_options
+             template, transport, concat_subject, mail_options, is_settled, recipient_results
       FROM mail_time_queue
       WHERE prefix = $1
         AND uuid = $2
       LIMIT 1`, [this.prefix, uuid])).rows?.[0]);
 
-    if (!task || task.isSent === true || task.isCancelled === true) {
-      return false;
-    }
-
-    if (!this.mailTimeInstance.keepHistory) {
-      return await this.remove(task);
-    }
-
-    return await this.update(task, {
-      isCancelled: true,
-    });
+    if (!task || task.isSent === true || task.isCancelled === true || task.isSettled === true) return false;
+    const operation = this.mailTimeInstance.keepHistory
+      ? 'UPDATE mail_time_queue SET is_cancelled = true, updated_at = CURRENT_TIMESTAMP'
+      : 'DELETE FROM mail_time_queue';
+    const result = await this.client.query(`${operation}
+      WHERE prefix = $1 AND uuid = $2 AND is_sent = false AND is_cancelled = false
+        AND is_settled = false AND (recipient_results IS NULL OR is_failed = false)`, [this.prefix, uuid]);
+    return (result.rowCount || 0) >= 1;
   }
 
   /**
@@ -2028,7 +2041,7 @@ class PostgresQueue {
     const params = [this.prefix, value];
     if (isSendLeaseRemove(opts)) {
       params.push(opts.leaseTries, opts.leaseSendingAt);
-      leaseWhere = ` AND tries = $3 AND is_sending = true AND sending_at = $4 AND is_cancelled = false AND is_failed = false`;
+      leaseWhere = ` AND tries = $3 AND is_sending = true AND sending_at = $4 AND is_cancelled = false AND is_failed = false AND is_sent = false AND is_settled = false`;
     }
 
     const res = await this.client.query(`DELETE FROM mail_time_queue
@@ -2065,7 +2078,9 @@ class PostgresQueue {
           AND is_sent = false
           AND is_failed = false
           AND is_cancelled = false
-          AND is_sending = false`, [
+          AND is_sending = false
+          AND is_settled = false
+          AND recipient_results IS NULL`, [
         JSON.stringify([updateObj.appendMailOption]),
         this.prefix,
         value,
@@ -2085,7 +2100,7 @@ class PostgresQueue {
       if (key === 'sendAt' && value instanceof Date) {
         value = +value;
       }
-      if (key === 'mailOptions') {
+      if (key === 'mailOptions' || key === 'recipientResults') {
         value = JSON.stringify(value);
       }
 
@@ -2109,6 +2124,7 @@ class PostgresQueue {
         AND is_sent = false
         AND is_failed = false
         AND is_cancelled = false
+        AND is_settled = false
         AND tries = $${triesIndex}
         AND (is_sending = false OR sending_at <= $${staleIndex})
       `;
@@ -2118,6 +2134,8 @@ class PostgresQueue {
       values.push(updateObj.leaseSendingAt);
       const sendingAtIndex = values.length;
       claimWhere = `
+        AND is_sent = false
+        AND is_settled = false
         AND tries = $${triesIndex}
         AND is_sending = true
         AND sending_at = $${sendingAtIndex}

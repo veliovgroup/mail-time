@@ -914,6 +914,8 @@ describe('PostgresQueue contract', () => {
         }
         if (sql.includes('uuid = $2')) {
           const row = rows.get(values[1]);
+          if (row && sql.startsWith('UPDATE mail_time_queue SET is_cancelled = true')) row.is_cancelled = true;
+          if (row && sql.startsWith('DELETE FROM mail_time_queue')) rows.delete(row.uuid);
           return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
         }
         if (sql.includes('UPDATE mail_time_queue')) {

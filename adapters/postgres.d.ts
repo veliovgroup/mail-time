@@ -17,6 +17,7 @@ export class PostgresQueue {
      */
     constructor(opts: PostgresQueueOption);
     name: string;
+    supportsRecipientPolicies: boolean;
     client: PostgresClient;
     prefix: any;
     /**

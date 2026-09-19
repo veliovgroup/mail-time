@@ -358,6 +358,27 @@ describe('Postgres queue and scheduler combinations', function () {
     assert.isTrue(mailTime.destroy(), 'destroyed');
   });
 
+  it('migrates an old policy-free table idempotently without losing legacy rows', async function () {
+    const connection = await pgPool.connect();
+    const schema = `mailtime_policy_${Date.now()}_${process.pid}`;
+    try {
+      await connection.query(`CREATE SCHEMA "${schema}"`);
+      await connection.query(`CREATE TABLE "${schema}".mail_time_queue (LIKE public.mail_time_queue INCLUDING DEFAULTS)`);
+      await connection.query(`ALTER TABLE "${schema}".mail_time_queue DROP COLUMN is_settled, DROP COLUMN recipient_results`);
+      await connection.query(`SET search_path TO "${schema}"`);
+      await connection.query(`INSERT INTO mail_time_queue (id, prefix, uuid, send_at, mail_options) VALUES (1, 'migration', 'legacy', 0, '[]')`);
+      await new PostgresQueue({ client: connection, prefix: 'migration' }).ready();
+      await new PostgresQueue({ client: connection, prefix: 'migration' }).ready();
+      const row = (await connection.query("SELECT is_settled, recipient_results FROM mail_time_queue WHERE uuid = 'legacy'")).rows[0];
+      assert.isFalse(row.is_settled);
+      assert.isNull(row.recipient_results);
+    } finally {
+      await connection.query('RESET search_path');
+      await connection.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+      connection.release();
+    }
+  });
+
   it('distinct-prefix PostgresQueues complete __setup concurrently', async function () {
     const prefixA = `${TEST_TITLE}-cotenant-a`;
     const prefixB = `${TEST_TITLE}-cotenant-b`;
