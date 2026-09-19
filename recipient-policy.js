@@ -78,4 +78,89 @@ const validateRecipientPolicies = (value, queue) => {
   });
 };
 
-export { policyError, normalizePolicyAddress, preparePolicyEnvelope, validateRecipientPolicies };
+const validatePolicyResult = (raw, hook, context) => {
+  if (raw === void 0) return [];
+  if (!isPlainObject(raw)) throw policyError('hook must return a result object or nothing');
+  if (raw.decisions === void 0) return [];
+  if (!Array.isArray(raw.decisions)) throw policyError('decisions must be an array');
+  const batch = new Set(context.recipients.map((r) => r.address));
+  const attributable = new Set((context.rejections || []).map((r) => r.address).filter(Boolean));
+  const decisions = new Map();
+  for (const item of raw.decisions) {
+    if (!isPlainObject(item)) throw policyError('decision must be an object');
+    const address = normalizePolicyAddress(item.address);
+    if (!batch.has(address)) throw policyError('decision address is outside the input batch');
+    const allowed = hook === 'beforeSend' ? item.status === 'suppressed' : (item.status === 'retry' || item.status === 'rejected');
+    if (!allowed) throw policyError('invalid decision status for this phase');
+    if (item.status === 'rejected' && !attributable.has(address)) throw policyError('permanent rejection requires an attributable record');
+    if (typeof item.reason !== 'string' || !item.reason.trim() || item.reason.length > 512) throw policyError('reason must contain 1-512 characters');
+    const previous = decisions.get(address);
+    if (previous && (previous.status !== item.status || previous.reason !== item.reason)) throw policyError('conflicting duplicate decisions');
+    decisions.set(address, { address, status: item.status, reason: item.reason });
+  }
+  return [...decisions.values()];
+};
+
+const evaluatePolicyPhase = async (providers, hook, context, report) => {
+  const decisions = [];
+  let retryFailure = false;
+  for (const provider of providers) {
+    if (typeof provider[hook] !== 'function') continue;
+    try {
+      const validated = validatePolicyResult(await provider[hook](context), hook, context);
+      for (const decision of validated) decisions.push({ ...decision, provider: provider.name });
+    } catch (error) {
+      report(error, provider.name, hook);
+      if (provider.failureMode !== 'continue') retryFailure = true;
+    }
+  }
+  return { retryFailure, decisions };
+};
+
+const mergePolicyResults = (previous, recipients, evaluated, details) => {
+  const results = new Map(previous.map((r) => [r.address, r]));
+  const accepted = new Set(details.accepted || []);
+  const decisions = new Map();
+  for (const decision of evaluated.decisions) {
+    if (!decisions.has(decision.address)) decisions.set(decision.address, []);
+    decisions.get(decision.address).push(decision);
+  }
+  const diagnostics = new Map();
+  for (const record of details.rejections || []) {
+    if (record.address && !diagnostics.has(record.address)) diagnostics.set(record.address, record);
+  }
+  for (const recipient of recipients) {
+    const prior = results.get(recipient.address);
+    if (prior && prior.status !== 'error') continue;
+    const candidates = decisions.get(recipient.address) || [];
+    const terminal = details.phase === 'beforeSend' ? 'suppressed' : 'rejected';
+    let status = 'error';
+    if (accepted.has(recipient.address)) status = 'sent';
+    else if (!evaluated.retryFailure && candidates.some((d) => d.status === terminal)) status = terminal;
+    const reasons = [];
+    if (!evaluated.retryFailure && status !== 'sent') {
+      for (const candidate of candidates) {
+        if (candidate.status === (status === 'error' ? 'retry' : status)) reasons.push({ provider: candidate.provider, reason: candidate.reason });
+      }
+    }
+    const result = { address: recipient.address, status, sources: [...recipient.sources], reasons, attempt: details.attempt, transportIndex: details.transportIndex };
+    if (typeof details.transportName === 'string') result.transportName = details.transportName.slice(0, 128);
+    const record = diagnostics.get(recipient.address);
+    if (record) {
+      for (const key of ['command', 'response', 'message']) {
+        if (typeof record[key] === 'string') result[key] = record[key].slice(0, 2048);
+      }
+      if (Number.isFinite(record.responseCode)) result.responseCode = record.responseCode;
+    }
+    results.set(recipient.address, result);
+  }
+  return [...results.values()];
+};
+
+const summarizePolicyTask = (task, isSettled) => {
+  const recipients = { sent: [], error: [], suppressed: [], rejected: [] };
+  for (const result of task.recipientResults || []) recipients[result.status].push(result);
+  return { uuid: task.uuid, tries: task.tries, isSettled, recipients };
+};
+
+export { policyError, normalizePolicyAddress, preparePolicyEnvelope, validateRecipientPolicies, evaluatePolicyPhase, mergePolicyResults, summarizePolicyTask };
