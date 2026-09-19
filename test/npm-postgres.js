@@ -1,4 +1,5 @@
 import { MailTime, MongoQueue, PostgresQueue, RedisQueue } from '../index.js';
+import { runRecipientPolicyScenario } from './recipient-policy-scenarios.js';
 import { MongoClient } from 'mongodb';
 import { Pool } from 'pg';
 import { createClient } from 'redis';
@@ -357,6 +358,13 @@ describe('Postgres queue and scheduler combinations', function () {
 
     assert.isTrue(mailTime.destroy(), 'destroyed');
   });
+
+  for (const keepHistory of [false, true]) {
+    it(`restarts mixed recipient policy delivery (history=${keepHistory})`, async () => {
+      const queue = new PostgresQueue({ client: pgPool, prefix: `${TEST_TITLE}-policy-${keepHistory}` });
+      await runRecipientPolicyScenario({ MailTime, queue, assert, keepHistory });
+    });
+  }
 
   it('migrates an old policy-free table idempotently without losing legacy rows', async function () {
     const connection = await pgPool.connect();

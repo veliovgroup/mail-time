@@ -1,4 +1,5 @@
 import { MailTime, RedisQueue } from '../index.js';
+import { runRecipientPolicyScenario } from './recipient-policy-scenarios.js';
 import { createCluster } from 'redis';
 import { assert } from 'chai';
 import { after, before, describe, it } from 'mocha';
@@ -92,6 +93,13 @@ clusterDescribe('Redis Cluster queue', function () {
     await Promise.all([serverA?.destroy({ drain: true }), serverB?.destroy({ drain: true })]);
     await cluster?.close();
   });
+
+  for (const keepHistory of [false, true]) {
+    it(`restarts mixed recipient policy delivery (history=${keepHistory})`, async () => {
+      const queue = new RedisQueue({ client: cluster, prefix: `${prefix}-lifecycle-${keepHistory}`, useHashTags: true });
+      await runRecipientPolicyScenario({ MailTime, queue, assert, keepHistory });
+    });
+  }
 
   it('retains policy arrays through Lua and excludes settled rows from claims and cancellation', async () => {
     const queue = new RedisQueue({ client: cluster, prefix: `${prefix}-policy`, useHashTags: true });

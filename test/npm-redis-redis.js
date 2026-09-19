@@ -1,4 +1,5 @@
 import { MailTime, RedisQueue } from '../index.js';
+import { runRecipientPolicyScenario } from './recipient-policy-scenarios.js';
 import { createClient } from 'redis';
 import { assert } from 'chai';
 import { it, describe, before, after } from 'mocha';
@@ -585,6 +586,12 @@ describe('Redis - Redis', function () {
 
 describe('Redis recipient policy storage', () => {
   for (const useHashTags of [false, true]) {
+    for (const keepHistory of [false, true]) {
+      it(`restarts mixed policy delivery (tagged=${useHashTags}, history=${keepHistory})`, async () => {
+        const queue = new RedisQueue({ client: redisClient, prefix: `${TEST_TITLE}-lifecycle-${useHashTags}-${keepHistory}`, useHashTags });
+        await runRecipientPolicyScenario({ MailTime, queue, assert, keepHistory });
+      });
+    }
     it(`guards policy completion and recovers final claims (tagged=${useHashTags})`, async () => {
       const prefix = `${TEST_TITLE}-policy-${useHashTags}`;
       const queue = new RedisQueue({ client: redisClient, prefix, useHashTags });

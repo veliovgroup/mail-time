@@ -1,5 +1,6 @@
 import { MongoInternals } from 'meteor/mongo';
 import { MailTime, MongoQueue, PostgresQueue, RedisQueue } from '../index.js';
+import { createPolicyQueueLike, runRecipientPolicyScenario } from './recipient-policy-scenarios.js';
 import { createClient } from 'redis';
 import { Pool } from 'pg';
 import { assert } from 'chai';
@@ -301,6 +302,13 @@ const runTests = (label, concat) => {
   describe(label, function () {
     this.slow(5000);
     this.timeout(30000);
+
+    for (const keepHistory of [false, true]) {
+      it(`restarts mixed recipient policy delivery (history=${keepHistory})`, async () => {
+        const queue = createPolicyQueueLike(mailQueues[label].queue, `${TEST_TITLE}-${label}-policy-${keepHistory}`);
+        await runRecipientPolicyScenario({ MailTime, queue, assert, keepHistory });
+      });
+    }
 
     it('exposes MailTime properties', () => {
       const mailQueue = mailQueues[label];

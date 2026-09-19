@@ -78,5 +78,6 @@ Package.onTest((api) => {
     'mongo',
     profile.mocha,
   ], 'server');
+  api.addFiles('test/recipient-policy-scenarios.js', 'server', { lazy: true });
   api.addFiles('test/meteor.js', 'server');
 });

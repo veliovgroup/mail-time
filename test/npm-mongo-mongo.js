@@ -1,4 +1,5 @@
 import { MailTime, MongoQueue } from '../index.js';
+import { runRecipientPolicyScenario } from './recipient-policy-scenarios.js';
 import { MongoClient } from 'mongodb';
 import { assert } from 'chai';
 import { it, describe, before, after } from 'mocha';
@@ -612,4 +613,10 @@ describe('Mongo - Mongo', function () {
   runTests('WithConcatenation', true, false);
   runTests('WithoutConcatenation', false, false);
   runTests('WithHistory', false, true);
+  for (const keepHistory of [false, true]) {
+    it(`restarts mixed recipient policy delivery (history=${keepHistory})`, async () => {
+      const queue = new MongoQueue({ db, prefix: `${TEST_TITLE}-policy-${keepHistory}` });
+      await runRecipientPolicyScenario({ MailTime, queue, assert, keepHistory });
+    });
+  }
 });
