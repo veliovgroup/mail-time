@@ -93,6 +93,26 @@ clusterDescribe('Redis Cluster queue', function () {
     await cluster?.close();
   });
 
+  it('retains policy arrays through Lua and excludes settled rows from claims and cancellation', async () => {
+    const queue = new RedisQueue({ client: cluster, prefix: `${prefix}-policy`, useHashTags: true });
+    const rows = [];
+    queue.mailTimeInstance = { maxTries: 1, sendingTimeout: 300000, keepHistory: true, ___dispatch: async (row) => rows.push(row) };
+    const task = { uuid: 'policy', tries: 1, sendAt: 1, isSending: true, sendingAt: 1, isSent: false, isFailed: false, isCancelled: false, recipientResults: [{ address: 'a@example.com', status: 'sent', reasons: [], sources: [], attempt: 1 }], mailOptions: [{ to: 'a@example.com' }] };
+    try {
+      await queue.push(task);
+      assert.isTrue(await queue.update(task, { recipientResults: task.recipientResults, leaseTries: 1, leaseSendingAt: 1 }));
+      await queue.iterate();
+      assert.lengthOf(rows, 1);
+      assert.deepEqual(rows[0].recipientResults[0].reasons, []);
+      assert.deepEqual(rows[0].recipientResults[0].sources, []);
+      assert.isFalse(await queue.update(task, { appendMailOption: { to: 'b@example.com' } }));
+      assert.isTrue(await queue.update(task, { isSettled: true, isSending: false, leaseTries: 1, leaseSendingAt: 1 }));
+      assert.isFalse(await queue.cancel(task.uuid));
+      assert.isFalse(await queue.update(task, { isSending: true, tries: 2, sendingAt: Date.now() }));
+      assert.isNull(await cluster.zScore(queue.scheduleKey, task.uuid));
+    } finally { await cluster.del([queue.lettersKey, queue.scheduleKey, queue.concatKeysKey]); }
+  });
+
   it('delivers once when two servers claim a tagged queue concurrently', async () => {
     await client.sendMail({ to: 'cluster@example.com', subject: 'Cluster', text: 'one' });
     await Promise.all([serverA.___iterate(), serverB.___iterate()]);

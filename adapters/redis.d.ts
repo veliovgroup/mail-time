@@ -35,6 +35,7 @@ export class RedisQueue {
      */
     constructor(opts: RedisQueueOption);
     name: string;
+    supportsRecipientPolicies: boolean;
     client: RedisClient;
     useHashTags: boolean;
     prefix: any;

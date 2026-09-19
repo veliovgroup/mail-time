@@ -582,3 +582,36 @@ describe('Redis - Redis', function () {
   runTests('WithoutConcatenation', false, false);
   runTests('WithHistory', false, true);
 });
+
+describe('Redis recipient policy storage', () => {
+  for (const useHashTags of [false, true]) {
+    it(`guards policy completion and recovers final claims (tagged=${useHashTags})`, async () => {
+      const prefix = `${TEST_TITLE}-policy-${useHashTags}`;
+      const queue = new RedisQueue({ client: redisClient, prefix, useHashTags });
+      const dispatched = [];
+      queue.mailTimeInstance = { maxTries: 1, sendingTimeout: 300000, keepHistory: true, ___dispatch: async (task) => dispatched.push(task) };
+      const task = { uuid: 'policy', tries: 1, sendAt: 1, isSent: false, isFailed: false, isCancelled: false, isSending: true, sendingAt: 1, recipientResults: [], mailOptions: [{ to: 'a@example.com', text: 'hello' }] };
+      try {
+        await queue.push(task);
+        // A Lua write makes Redis cjson's empty-array behavior observable.
+        assert.isTrue(await queue.update(task, { recipientResults: [], leaseTries: 1, leaseSendingAt: 1 }));
+        await queue.iterate();
+        assert.lengthOf(dispatched, 1);
+        assert.isArray(dispatched[0].recipientResults);
+        assert.isFalse(await queue.update(task, { appendMailOption: { to: 'a@example.com' } }));
+        const stamp = Date.now();
+        assert.isTrue(await queue.update(task, { isSending: true, sendingAt: stamp, tries: 1 }));
+        assert.isTrue(await queue.update(task, { isSettled: true, isSending: false, sendingAt: 0, leaseTries: 1, leaseSendingAt: stamp }));
+        assert.isFalse(await queue.cancel(task.uuid));
+        assert.isFalse(await queue.update(task, { isSending: true, sendingAt: stamp + 300001, tries: 2 }));
+        await queue.iterate();
+        assert.lengthOf(dispatched, 1);
+        if (useHashTags) assert.isNull(await redisClient.zScore(queue.scheduleKey, task.uuid));
+        else assert.isNull(await redisClient.get(queue.__getKey(task.uuid, 'sendat')));
+      } finally {
+        if (useHashTags) await redisClient.del([queue.lettersKey, queue.scheduleKey, queue.concatKeysKey]);
+        else await clearRedisPattern(redisClient, `mailtime:${prefix}:*`);
+      }
+    });
+  }
+});

@@ -37,6 +37,7 @@ const KEY_TYPES = new Set(['letter', 'sendat', 'concatletter']);
 const DEFAULT_PREFIX = 'default';
 const VALID_PREFIX = /^[A-Za-z0-9_\-:.]+$/;
 const TAGGED_ITERATE_LIMIT = 100;
+const clientTransactions = new WeakMap();
 
 const PUSH_TAGGED_TASK_SCRIPT = `
   redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
@@ -69,7 +70,9 @@ const ITERATE_TAGGED_TASKS_SCRIPT = `
       redis.call('ZREM', KEYS[2], uuid)
     else
       local task = cjson.decode(payload)
-      if task.isSent or task.isFailed or task.isCancelled or tonumber(task.tries or 0) >= maxTries then
+      if task.isSent or task.isFailed or task.isCancelled or task.isSettled then
+        redis.call('ZREM', KEYS[2], uuid)
+      elseif tonumber(task.tries or 0) >= maxTries and not (type(task.recipientResults) == 'table' and task.isSending) then
         redis.call('ZREM', KEYS[2], uuid)
       elseif task.isSending then
         local eligibleAt = tonumber(task.sendingAt or 0) + sendingTimeout
@@ -108,26 +111,30 @@ const UPDATE_TAGGED_TASK_SCRIPT = `
   local leaseSendingAt = tonumber(ARGV[7])
 
   if mode == 'claim' then
-    if task.isSent or task.isFailed or task.isCancelled or tonumber(task.tries or 0) ~= expectedTries then
+    if task.isSent or task.isFailed or task.isCancelled or task.isSettled or tonumber(task.tries or 0) ~= expectedTries then
       return 0
     end
     if task.isSending and tonumber(task.sendingAt or 0) > now - sendingTimeout then
       return 0
     end
   elseif mode == 'lease' then
-    if task.isCancelled or task.isFailed or not task.isSending
+    if task.isSent or task.isSettled or task.isCancelled or task.isFailed or not task.isSending
       or tonumber(task.tries or 0) ~= expectedTries
       or tonumber(task.sendingAt or 0) ~= leaseSendingAt then
       return 0
     end
   end
 
+  if mode == 'cancel' and (task.isSent or task.isSettled or task.isCancelled
+    or (type(task.recipientResults) == 'table' and task.isFailed)) then
+    return 0
+  end
   for key, value in pairs(update) do
     task[key] = value
   end
   redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(task))
 
-  if task.isSent or task.isFailed or task.isCancelled then
+  if task.isSent or task.isFailed or task.isCancelled or task.isSettled then
     redis.call('ZREM', KEYS[2], ARGV[1])
     if #KEYS > 3 then
       local concatUuid = redis.call('GET', KEYS[3])
@@ -152,7 +159,7 @@ const APPEND_TAGGED_MAIL_OPTION_SCRIPT = `
     return 0
   end
   local task = cjson.decode(payload)
-  if task.isSending or task.isSent or task.isFailed or task.isCancelled then
+  if task.isSending or task.isSent or task.isFailed or task.isCancelled or task.isSettled or type(task.recipientResults) == 'table' then
     return 0
   end
   task.mailOptions = task.mailOptions or {}
@@ -168,7 +175,9 @@ const REMOVE_TAGGED_TASK_SCRIPT = `
     return 0
   end
   local task = cjson.decode(payload)
-  if ARGV[2] == 'lease' and (task.isCancelled or task.isFailed or not task.isSending
+  if ARGV[2] == 'cancel' and (task.isSent or task.isSettled or task.isCancelled
+    or (type(task.recipientResults) == 'table' and task.isFailed)) then return 0 end
+  if ARGV[2] == 'lease' and (task.isSent or task.isSettled or task.isCancelled or task.isFailed or not task.isSending
     or tonumber(task.tries or 0) ~= tonumber(ARGV[3])
     or tonumber(task.sendingAt or 0) ~= tonumber(ARGV[4])) then
     return 0
@@ -187,6 +196,18 @@ const REMOVE_TAGGED_TASK_SCRIPT = `
   return 1
 `;
 
+const normalizePolicyArrays = (task) => {
+  if (task.recipientResults && !Array.isArray(task.recipientResults) && Object.keys(task.recipientResults).length === 0) task.recipientResults = [];
+  if (Array.isArray(task.recipientResults)) {
+    for (const result of task.recipientResults) {
+      for (const field of ['sources', 'reasons']) {
+        if (result[field] && !Array.isArray(result[field]) && Object.keys(result[field]).length === 0) result[field] = [];
+      }
+    }
+  }
+  return task;
+};
+
 const sha1Hex = (string) => createHash('sha1').update(string).digest('hex');
 
 const isNoScriptError = (error) => {
@@ -199,6 +220,8 @@ const canReleaseLease = (currentTask, updateObj) => {
     && currentTask.isSending === true
     && (typeof currentTask.sendingAt === 'number' ? currentTask.sendingAt : 0) === updateObj.leaseSendingAt
     && currentTask.isCancelled !== true
+    && currentTask.isSent !== true
+    && currentTask.isSettled !== true
     && currentTask.isFailed !== true;
 };
 
@@ -206,7 +229,7 @@ const canClaimTask = (currentTask, task, now, sendingTimeout) => {
   if (!currentTask) {
     return false;
   }
-  if (currentTask.isSent === true || currentTask.isFailed === true || currentTask.isCancelled === true) {
+  if (currentTask.isSent === true || currentTask.isFailed === true || currentTask.isCancelled === true || currentTask.isSettled === true) {
     return false;
   }
   if (currentTask.tries !== task.tries) {
@@ -225,11 +248,11 @@ const isIterateCandidate = (candidate, now, sendingTimeout, maxTries) => {
   if (!candidate || typeof candidate !== 'object') {
     return false;
   }
-  if (candidate.isSent === true || candidate.isFailed === true || candidate.isCancelled === true) {
+  if (candidate.isSent === true || candidate.isFailed === true || candidate.isCancelled === true || candidate.isSettled === true) {
     return false;
   }
   const tries = typeof candidate.tries === 'number' ? candidate.tries : 0;
-  if (tries >= maxTries) {
+  if (tries >= maxTries && !(Array.isArray(candidate.recipientResults) && candidate.isSending === true)) {
     return false;
   }
   if (candidate.isSending === true) {
@@ -257,6 +280,7 @@ class RedisQueue {
    */
   constructor (opts) {
     this.name = 'redis-queue';
+    this.supportsRecipientPolicies = true;
     if (!opts || typeof opts !== 'object') {
       throw new TypeError('[mail-time] Configuration object must be passed into RedisQueue constructor');
     }
@@ -444,6 +468,7 @@ class RedisQueue {
           return;
         }
         for (const candidate of candidates) {
+          normalizePolicyArrays(candidate);
           if (isIterateCandidate(candidate, now, sendingTimeout, maxTries)) {
             await this.mailTimeInstance.___dispatch(candidate);
           }
@@ -520,7 +545,7 @@ class RedisQueue {
     }
 
     const task = JSON.parse(taskJSON);
-    if (!task || task.isSent === true || task.isCancelled === true || task.isFailed === true || task.sendAt > sendAt || task.isSending === true || task.tries >= this.mailTimeInstance.maxTries) {
+    if (!task || task.isSettled === true || task.recipientResults != null || task.isSent === true || task.isCancelled === true || task.isFailed === true || task.sendAt > sendAt || task.isSending === true || task.tries >= this.mailTimeInstance.maxTries) {
       return null;
     }
 
@@ -593,35 +618,59 @@ class RedisQueue {
    * @returns {Promise<boolean>} returns `true` if cancelled or `false` if not found, was sent, or was cancelled previously
    */
   async cancel(uuid) {
+    return await this.__serialize(() => this.__cancel(uuid));
+  }
+
+  /** @internal */
+  async __serialize(operation) {
+    if (this.useHashTags) return await operation();
+    const previous = clientTransactions.get(this.client) || Promise.resolve();
+    const pending = previous.then(operation);
+    const settled = pending.catch(() => void 0);
+    clientTransactions.set(this.client, settled);
+    try { return await pending; }
+    finally { if (clientTransactions.get(this.client) === settled) clientTransactions.delete(this.client); }
+  }
+
+  /** @internal */
+  async __cancel(uuid) {
     this.__debug('[cancel]', uuid);
     if (typeof uuid !== 'string') {
       return false;
     }
 
-    if (this.useHashTags) {
-      this.__ensurePrefix();
-    } else {
-      await this.client.del(this.__getKey(uuid, 'sendat'));
-    }
-    const taskJSON = this.useHashTags
-      ? await this.client.hGet(this.lettersKey, uuid)
-      : await this.client.get(this.__getKey(uuid, 'letter'));
-    if (!taskJSON) {
+    this.__ensurePrefix();
+    const atomic = typeof this.client.watch === 'function' && typeof this.client.multi === 'function';
+    const letterKey = this.__getKey(uuid);
+    try {
+      if (!this.useHashTags && atomic) await this.client.watch(letterKey);
+      const payload = this.useHashTags ? await this.client.hGet(this.lettersKey, uuid) : await this.client.get(letterKey);
+      const task = payload ? JSON.parse(payload) : null;
+      if (!task || task.isSent || task.isCancelled || task.isSettled || (task.recipientResults != null && task.isFailed)) return false;
+      if (this.useHashTags) {
+        const keys = [this.lettersKey, this.scheduleKey];
+        if (task.to) keys.push(this.__getTaggedConcatKey(task.to), this.concatKeysKey);
+        const keep = this.mailTimeInstance.keepHistory;
+        const args = keep
+          ? [uuid, JSON.stringify({ isCancelled: true }), 'cancel', `${Date.now()}`, `${this.mailTimeInstance.sendingTimeout || 300000}`, '0', '0']
+          : [uuid, 'cancel', '0', '0'];
+        return Number(await this.__runScript(keep ? 'update' : 'remove', { keys, arguments: args })) >= 1;
+      }
+      if (!atomic) {
+        if (task.recipientResults != null) return false;
+        return this.mailTimeInstance.keepHistory ? await this.__update(task, { isCancelled: true }) : await this.__remove(task);
+      }
+      const multi = this.client.multi();
+      if (this.mailTimeInstance.keepHistory) multi.set(letterKey, JSON.stringify({ ...task, isCancelled: true }));
+      else multi.del(letterKey);
+      multi.del(this.__getKey(uuid, 'sendat'));
+      return (await multi.exec()) !== null;
+    } catch (error) {
+      logError('[cancel] storage error', error);
       return false;
+    } finally {
+      if (!this.useHashTags && atomic) await this.client.unwatch?.();
     }
-
-    const task = JSON.parse(taskJSON);
-    if (!task || task.isSent === true || task.isCancelled === true) {
-      return false;
-    }
-
-    if (!this.mailTimeInstance.keepHistory) {
-      return await this.remove(task);
-    }
-
-    return await this.update(task, {
-      isCancelled: true,
-    });
   }
 
   /**
@@ -634,6 +683,11 @@ class RedisQueue {
    * @returns {Promise<boolean>} returns `true` if removed or `false` if not found
    */
   async remove(task, opts) {
+    return await this.__serialize(() => this.__remove(task, opts));
+  }
+
+  /** @internal */
+  async __remove(task, opts) {
     this.__debug('[remove]', task?.uuid);
     if (!task || typeof task !== 'object' || typeof task.uuid !== 'string') {
       return false;
@@ -680,6 +734,8 @@ class RedisQueue {
           || currentTask.isSending !== true
           || (typeof currentTask.sendingAt === 'number' ? currentTask.sendingAt : 0) !== opts.leaseSendingAt
           || currentTask.isCancelled === true
+          || currentTask.isSent === true
+          || currentTask.isSettled === true
           || currentTask.isFailed === true) {
           await this.client.unwatch?.();
           return false;
@@ -723,6 +779,11 @@ class RedisQueue {
    * @returns {Promise<boolean>} returns `true` if updated or `false` if not found or no changes was made
    */
   async update(task, updateObj) {
+    return await this.__serialize(() => this.__update(task, updateObj));
+  }
+
+  /** @internal */
+  async __update(task, updateObj) {
     this.__debug('[update]', task?.uuid);
     if (!task || typeof task !== 'object' || typeof task.uuid !== 'string' || !updateObj || typeof updateObj !== 'object') {
       return false;
@@ -778,7 +839,7 @@ class RedisQueue {
             return false;
           }
           const currentTask = JSON.parse(taskJSON);
-          if (currentTask.isSending === true || currentTask.isSent === true || currentTask.isFailed === true || currentTask.isCancelled === true) {
+          if (currentTask.isSending === true || currentTask.isSent === true || currentTask.isFailed === true || currentTask.isCancelled === true || currentTask.isSettled === true || Array.isArray(currentTask.recipientResults)) {
             return false;
           }
           currentTask.mailOptions = [...(currentTask.mailOptions || []), updateObj.appendMailOption];
@@ -793,7 +854,7 @@ class RedisQueue {
           return false;
         }
         const currentTask = JSON.parse(taskJSON);
-        if (currentTask.isSending === true || currentTask.isSent === true || currentTask.isFailed === true || currentTask.isCancelled === true) {
+        if (currentTask.isSending === true || currentTask.isSent === true || currentTask.isFailed === true || currentTask.isCancelled === true || currentTask.isSettled === true || Array.isArray(currentTask.recipientResults)) {
           await this.client.unwatch?.();
           return false;
         }
@@ -833,7 +894,7 @@ class RedisQueue {
         const updatedTask = { ...currentTask, ...stripInternalUpdateMeta(updateObj) };
         const multi = this.client.multi();
         multi.set(letterKey, JSON.stringify(updatedTask));
-        if (updatedTask.isSent === true || updatedTask.isFailed === true || updatedTask.isCancelled === true) {
+        if (updatedTask.isSent === true || updatedTask.isFailed === true || updatedTask.isCancelled === true || updatedTask.isSettled === true) {
           multi.del(sendatKey);
         } else if (updatedTask.sendAt) {
           multi.set(sendatKey, `${+updatedTask.sendAt}`);
@@ -852,7 +913,7 @@ class RedisQueue {
       const updatedTask = { ...currentTask, ...stripInternalUpdateMeta(updateObj) };
       await this.client.set(letterKey, JSON.stringify(updatedTask));
 
-      if (updatedTask.isSent === true || updatedTask.isFailed === true || updatedTask.isCancelled === true) {
+      if (updatedTask.isSent === true || updatedTask.isFailed === true || updatedTask.isCancelled === true || updatedTask.isSettled === true) {
         await this.client.del(sendatKey);
       } else if (updatedTask.sendAt) {
         await this.client.set(sendatKey, `${+updatedTask.sendAt}`);

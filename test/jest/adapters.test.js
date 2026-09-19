@@ -83,6 +83,61 @@ const createMongoDb = (collection, command = async () => ({ ok: 1 })) => ({
   command: jest.fn(command)
 });
 
+describe('Redis recipient policy guards', () => {
+  it('serializes WATCH transactions across queues sharing one client', async () => {
+    const client = createRedisClient();
+    const first = new RedisQueue({ client, prefix: 'serial' });
+    const second = new RedisQueue({ client, prefix: 'serial' });
+    first.mailTimeInstance = second.mailTimeInstance = createMailTimeHarness(true);
+    const task = { uuid: 'u', tries: 0, isSending: false, sendAt: 1 };
+    await first.push(task);
+    let release;
+    let entered;
+    const started = new Promise((resolve) => { entered = resolve; });
+    client.watch.mockImplementationOnce(async () => { entered(); await new Promise((resolve) => { release = resolve; }); });
+    const claim = first.update(task, { isSending: true, sendingAt: Date.now(), tries: 1 });
+    await started;
+    const cancel = second.cancel('u');
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(client.watch).toHaveBeenCalledTimes(1);
+    } finally { release(); await claim; await cancel; }
+    expect(JSON.parse(await client.get(first.__getKey('u'))).isCancelled).toBe(true);
+  });
+  it('excludes settled claims and policy concat appends without deleting history', async () => {
+    const client = createRedisClient();
+    const queue = new RedisQueue({ client, prefix: 'policy' });
+    queue.mailTimeInstance = createMailTimeHarness(true);
+    const task = { uuid: 'u', tries: 0, isSettled: true, isSent: false, isFailed: false, isCancelled: false, isSending: false, sendAt: 1, mailOptions: [] };
+    await queue.push(task);
+    expect(await queue.update(task, { isSending: true, sendingAt: Date.now(), tries: 1 })).toBe(false);
+    expect(await queue.cancel(task.uuid)).toBe(false);
+    expect(JSON.parse(await client.get(queue.__getKey('u'))).isSettled).toBe(true);
+    await queue.push({ ...task, isSettled: false, recipientResults: [] });
+    expect(await queue.update(task, { appendMailOption: { to: 'a@example.com' } })).toBe(false);
+  });
+  it('removes the schedule for fully suppressed completion', async () => {
+    const client = createRedisClient();
+    const queue = new RedisQueue({ client, prefix: 'policy' });
+    queue.mailTimeInstance = createMailTimeHarness(true);
+    const task = { uuid: 'u', tries: 1, isSending: true, sendingAt: 10, sendAt: 1 };
+    await queue.push(task);
+    expect(await queue.update(task, { isSettled: true, isSending: false, leaseTries: 1, leaseSendingAt: 10 })).toBe(true);
+    expect(await client.get(queue.__getKey('u', 'sendat'))).toBe(null);
+  });
+  it('dispatches stale exhausted policy rows but not exhausted legacy or settled rows', async () => {
+    const client = createRedisClient();
+    const queue = new RedisQueue({ client, prefix: 'policy' });
+    queue.mailTimeInstance = createMailTimeHarness(true);
+    for (const uuid of ['policy', 'legacy', 'settled']) {
+      await queue.push({ uuid, sendAt: 1, tries: 3, isSending: true, sendingAt: 1, ...(uuid === 'policy' ? { recipientResults: [] } : {}), isSettled: uuid === 'settled' });
+    }
+    client.scanIterator = () => (async function* () { yield ['policy', 'legacy', 'settled'].map((uuid) => queue.__getKey(uuid, 'sendat')); })();
+    await queue.iterate();
+    expect(queue.mailTimeInstance.___dispatch.mock.calls.map(([task]) => task.uuid)).toEqual(['policy']);
+  });
+});
+
 describe('MongoQueue unit behavior', () => {
   it('validates constructor and handles index conflicts', async () => {
     expect(() => new MongoQueue()).toThrow('[mail-time] Configuration object must be passed');
