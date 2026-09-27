@@ -4,6 +4,7 @@
 
 - Opt-in recipient policies, durable mixed outcomes, and grouped terminal callbacks.
 - JoSk 6.4 upgrade, graceful scheduler shutdown, completed-recipient recovery, and Redis 4 Cluster compatibility.
+- Send-claim renewal continues during `destroy({ drain: true })`.
 
 ## 5.1.0
 
