@@ -1198,7 +1198,7 @@ class MailTime {
     };
 
     const renew = async () => {
-      if (stopped || this.__isDestroyed || this.__abortInFlight) {
+      if (stopped || this.__abortInFlight) {
         halt();
         return;
       }

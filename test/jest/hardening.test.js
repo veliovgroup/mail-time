@@ -236,6 +236,29 @@ describe('claim renewal', () => {
     await send;
   });
 
+  it('keeps renewing during a graceful drain', async () => {
+    const { transport, started, finish } = createHeldTransport();
+    const mailTime = createMailTime({
+      transports: [transport],
+      sendingTimeout: 200,
+      renewClaim: 30
+    });
+
+    const uuid = await mailTime.sendMail({ to: 'a@example.com', text: 'hi' });
+    const send = mailTime.___send({ ...mailTime.queue.records.get(uuid) });
+
+    await started;
+    const drained = mailTime.destroy({ drain: true });
+    const atDestroy = mailTime.queue.records.get(uuid).sendingAt;
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    expect(mailTime.queue.records.get(uuid).sendingAt).toBeGreaterThan(atDestroy);
+
+    finish(null);
+    await send;
+    await expect(drained).resolves.toBe(true);
+  });
+
   it('stops renewing and reports a storage failure', async () => {
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     const { transport, started, finish } = createHeldTransport();
