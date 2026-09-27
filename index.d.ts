@@ -50,6 +50,9 @@ export type MailTimeScheduler = {
     ping: () => Promise<MailTimePingResult>;
     setInterval: (func: (...args: any[]) => unknown, delay: number, uid: string) => Promise<string>;
     destroy: () => boolean;
+    shutdown: (opts?: {
+        timeout?: number;
+    }) => Promise<boolean>;
     pause: (timerId?: string) => boolean;
     resume: (timerId?: string) => boolean;
 };
@@ -258,7 +261,7 @@ export type MailTimeOptions = {
  * @typedef {{ [key: string]: any, adapter: MailTimeJoSkAdapterOptions | object, debug?: boolean, autoClear?: boolean, zombieTime?: number, lockLeaseTime?: number, minRevolvingDelay?: number, maxRevolvingDelay?: number, execute?: 'batch' | 'one', concurrency?: number, lockOwnerId?: string, resetOnInit?: boolean, onError?: (title: string, details: object) => void, onExecuted?: (uid: string, details: object) => void }} MailTimeJoSkOptions
  */
 /**
- * @typedef {{ [key: string]: any, ping: () => Promise<MailTimePingResult>, setInterval: (func: (...args: any[]) => unknown, delay: number, uid: string) => Promise<string>, destroy: () => boolean, pause: (timerId?: string) => boolean, resume: (timerId?: string) => boolean }} MailTimeScheduler
+ * @typedef {{ [key: string]: any, ping: () => Promise<MailTimePingResult>, setInterval: (func: (...args: any[]) => unknown, delay: number, uid: string) => Promise<string>, destroy: () => boolean, shutdown: (opts?: { timeout?: number }) => Promise<boolean>, pause: (timerId?: string) => boolean, resume: (timerId?: string) => boolean }} MailTimeScheduler
  */
 /**
  * @typedef {string | { address: string, name?: string }} MailTimeMailbox
@@ -401,12 +404,13 @@ export class MailTime {
     /**
      * @memberOf MailTime
      * @name destroy
-     * @description Stop the scheduler and block future dispatches. Without `{ drain: true }`, any in-flight SMTP attempts are neutralized on completion — they perform no storage writes, no `onSent`/`onError` callbacks, and no logging once `destroy()` returns; their claimed rows are recovered by stale-lock timeout (`sendingTimeout`). Pass `{ drain: true }` to instead let in-flight attempts run to completion (returns a Promise that resolves once they settle).
-     * @param {{ drain?: boolean }} [opts]
+     * @description Stop the scheduler and block future dispatches. Without `{ drain: true }`, in-flight SMTP attempts are neutralized and their claims recover after `sendingTimeout`. With `{ drain: true }`, await JoSk shutdown and in-flight SMTP; resolves false if a scheduler handler exceeds `schedulerTimeout` (default 10000ms). The timeout does not bound SMTP drain time.
+     * @param {{ drain?: boolean, schedulerTimeout?: number }} [opts] - schedulerTimeout must be finite and non-negative; used only with drain
      * @returns {boolean | Promise<boolean>}
      */
     destroy(opts?: {
         drain?: boolean;
+        schedulerTimeout?: number;
     }): boolean | Promise<boolean>;
     /**
      * @async

@@ -28,6 +28,9 @@ const resolvedFrom: string | undefined = mailTime.MailTime.transportFrom({
 void resolvedFrom;
 
 client.ping();
+void client.destroy({ drain: true, schedulerTimeout: 10000 });
+declare const scheduler: mailTime.MailTimeScheduler;
+void scheduler.shutdown({ timeout: 10000 });
 void client.pause();
 void client.resume();
 void client.isPaused;

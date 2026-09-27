@@ -180,6 +180,33 @@ describe('MailTime core options', () => {
     expect(mailTime.scheduler.isDestroyed).toBe(true);
     expect(mailTime.destroy()).toBe(false);
   });
+
+  it('waits for JoSk shutdown on graceful destroy and forwards its timeout', async () => {
+    const mailTime = createMailTime();
+    await mailTime.ready();
+    const shutdown = jest.spyOn(mailTime.scheduler, 'shutdown');
+
+    await expect(mailTime.destroy({ drain: true, schedulerTimeout: 250 })).resolves.toBe(true);
+    expect(shutdown).toHaveBeenCalledWith({ timeout: 250 });
+    expect(mailTime.scheduler.isDestroyed).toBe(true);
+  });
+
+  it('rejects an invalid scheduler timeout without stopping the instance', () => {
+    const mailTime = createMailTime();
+    expect(() => mailTime.destroy({ drain: true, schedulerTimeout: -1 })).toThrow('[mail-time] [destroy]');
+    expect(mailTime.scheduler.isDestroyed).toBe(false);
+  });
+
+  it('returns false when JoSk cannot finish its scan before the graceful shutdown timeout', async () => {
+    const mailTime = createMailTime();
+    await mailTime.ready();
+    jest.spyOn(mailTime.scheduler, 'shutdown').mockImplementation(async () => {
+      mailTime.scheduler.destroy();
+      return false;
+    });
+
+    await expect(mailTime.destroy({ drain: true })).resolves.toBe(false);
+  });
 });
 
 describe('MailTime send and render behavior', () => {

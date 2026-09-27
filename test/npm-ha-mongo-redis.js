@@ -148,4 +148,34 @@ describe('HA — Mongo queue + Redis JoSk', function () {
     const remaining = await standby.queue.collection.find({ uuid }).toArray();
     assert.equal(remaining.length, 0, 'standby removed row after send');
   });
+
+  it('graceful shutdown waits for an active JoSk queue scan', async () => {
+    const prefix = `${haPrefix}-shutdown`;
+    const queue = new MongoQueue({ db, prefix });
+    let scanning = false;
+    let release;
+    const blocked = new Promise((resolve) => { release = resolve; });
+    queue.iterate = async () => { scanning = true; await blocked; };
+    const worker = new MailTime({
+      queue, prefix, transports: [createTransport()], verifyTransports: false,
+      revolvingInterval: 32,
+      josk: { adapter: { type: 'redis', client: redisClient }, minRevolvingDelay: 16, maxRevolvingDelay: 32 },
+    });
+    let shutdown;
+    try {
+      await worker.ready();
+      assert.isTrue(await waitUntil(() => scanning, { timeout: 5000 }), 'JoSk started the queue scan');
+      let finished = false;
+      shutdown = worker.destroy({ drain: true, schedulerTimeout: 1000 });
+      shutdown.then(() => { finished = true; });
+      await wait(25);
+      assert.isFalse(finished);
+      release();
+      assert.isTrue(await shutdown);
+    } finally {
+      release();
+      if (shutdown) await shutdown;
+      else worker.destroy();
+    }
+  });
 });

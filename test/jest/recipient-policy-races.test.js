@@ -22,6 +22,31 @@ it.each(['mixed', 'empty', 'terminal', 'ambiguous'])('settles stale final-attemp
   expect(beforeSend).not.toHaveBeenCalled();
   expect(m.queue.records.get(uuid)).toMatchObject({ tries: 1, isSettled: true, isFailed: kind !== 'terminal' });
 });
+it('settles durable acceptance without recompiling or consuming another attempt after a lost completion', async () => {
+  const sendMail = jest.fn((mail, done) => done(null, { accepted: mail.envelope.to }));
+  const transport = { options: { from: 'sender@example.com', mailOptions: { envelope: { to: ['a@example.com'] } } }, sendMail };
+  const onSent = jest.fn();
+  const onError = jest.fn();
+  const m = make({ transports: [transport], onSent, onError });
+  const update = m.queue.update;
+  let lostCompletion = false;
+  m.queue.update = async (task, fields) => {
+    if (fields.isSettled && !lostCompletion) { lostCompletion = true; return false; }
+    return await update(task, fields);
+  };
+  const uuid = await m.sendMail({ to: 'a@example.com', text: 'hello' });
+  await attempt(m, uuid);
+  const row = m.queue.records.get(uuid);
+  expect(row).toMatchObject({ tries: 1, isSettled: false, recipientResults: [{ status: 'sent' }] });
+  row.sendingAt = Date.now() - m.sendingTimeout - 1;
+  transport.options.mailOptions.envelope.to = ['b@example.com'];
+  await m.queue.iterate();
+  await m.drain();
+  expect(m.queue.records.get(uuid)).toMatchObject({ tries: 1, isSent: true, isFailed: false, isSettled: true });
+  expect(sendMail).toHaveBeenCalledTimes(1);
+  expect(onSent).toHaveBeenCalledTimes(1);
+  expect(onError).not.toHaveBeenCalled();
+});
 it.each(['beforeSend', 'classifyRejections', 'observeAttempt'])('cancellation during %s prevents stale send/completion', async (phase) => {
   const entered = deferred();
   const release = deferred();

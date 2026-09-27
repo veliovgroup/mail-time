@@ -2946,7 +2946,7 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
  */
 
 /**
- * @typedef {{ [key: string]: any, ping: () => Promise<MailTimePingResult>, setInterval: (func: (...args: any[]) => unknown, delay: number, uid: string) => Promise<string>, destroy: () => boolean, pause: (timerId?: string) => boolean, resume: (timerId?: string) => boolean }} MailTimeScheduler
+ * @typedef {{ [key: string]: any, ping: () => Promise<MailTimePingResult>, setInterval: (func: (...args: any[]) => unknown, delay: number, uid: string) => Promise<string>, destroy: () => boolean, shutdown: (opts?: { timeout?: number }) => Promise<boolean>, pause: (timerId?: string) => boolean, resume: (timerId?: string) => boolean }} MailTimeScheduler
  */
 
 /**
@@ -3277,8 +3277,8 @@ class MailTime {
   /**
    * @memberOf MailTime
    * @name destroy
-   * @description Stop the scheduler and block future dispatches. Without `{ drain: true }`, any in-flight SMTP attempts are neutralized on completion — they perform no storage writes, no `onSent`/`onError` callbacks, and no logging once `destroy()` returns; their claimed rows are recovered by stale-lock timeout (`sendingTimeout`). Pass `{ drain: true }` to instead let in-flight attempts run to completion (returns a Promise that resolves once they settle).
-   * @param {{ drain?: boolean }} [opts]
+   * @description Stop the scheduler and block future dispatches. Without `{ drain: true }`, in-flight SMTP attempts are neutralized and their claims recover after `sendingTimeout`. With `{ drain: true }`, await JoSk shutdown and in-flight SMTP; resolves false if a scheduler handler exceeds `schedulerTimeout` (default 10000ms). The timeout does not bound SMTP drain time.
+   * @param {{ drain?: boolean, schedulerTimeout?: number }} [opts] - schedulerTimeout must be finite and non-negative; used only with drain
    * @returns {boolean | Promise<boolean>}
    */
   destroy(opts) {
@@ -3286,14 +3286,24 @@ class MailTime {
     if (this.__isDestroyed) {
       return false;
     }
+    if (opts?.drain === true && opts.schedulerTimeout !== void 0
+      && (typeof opts.schedulerTimeout !== 'number' || !Number.isFinite(opts.schedulerTimeout) || opts.schedulerTimeout < 0)) {
+      throw new Error('[mail-time] [destroy] schedulerTimeout must be a finite non-negative number');
+    }
 
     this.__isDestroyed = true;
     this.__isPaused = false;
-    if (this.scheduler && typeof this.scheduler.destroy === 'function') {
-      this.scheduler.destroy();
+    if (opts?.drain === true) {
+      return (async () => {
+        try {
+          return this.scheduler ? await this.scheduler.shutdown({ timeout: opts.schedulerTimeout }) : true;
+        } finally {
+          await this.__pool.drain();
+        }
+      })();
     }
-    if (opts && opts.drain === true && this.__pool) {
-      return this.__pool.drain().then(() => true);
+    if (this.scheduler) {
+      this.scheduler.destroy();
     }
     // No graceful drain requested: neutralize in-flight SMTP completions so a
     // destroyed instance performs no storage writes, no `onSent`/`onError`
@@ -3978,7 +3988,8 @@ class MailTime {
   /** @internal Serialize every policy checkpoint with this attempt's claim renewal. */
   async ___sendWithRecipientPolicies(task) {
     if (!task || task.isSent || task.isFailed || task.isCancelled || task.isSettled || this.__abortInFlight) return;
-    const recoveryOnly = Array.isArray(task.recipientResults) && task.tries >= this.maxTries;
+    const recoveryOnly = Array.isArray(task.recipientResults) && (task.tries >= this.maxTries
+      || (task.recipientResults.length > 0 && task.recipientResults.every((r) => r.status === 'sent' || r.status === 'suppressed' || r.status === 'rejected')));
     const fields = { tries: recoveryOnly ? task.tries : task.tries + 1, isSending: true, sendingAt: Math.max(Date.now(), (task.sendingAt || 0) + 1), recipientResults: task.recipientResults || [] };
     try {
       if (!await this.queue.update(task, fields)) return;

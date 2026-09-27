@@ -17,6 +17,10 @@ import type {
 
 declare const scheduler: MailTimeScheduler;
 void scheduler.pause();
+type IsAny<T> = 0 extends (1 & T) ? true : false;
+const shutdownIsTyped: false = false as IsAny<MailTimeScheduler['shutdown']>;
+void shutdownIsTyped;
+void scheduler.shutdown({ timeout: 10000 });
 
 // Subpath exports — must resolve and re-expose the same constructors / function.
 import { MongoQueue as MongoQueueSub } from 'mail-time/adapters/mongo';
@@ -140,6 +144,7 @@ void newlyResumed;
 void isPausedAfterResume;
 
 mailTime.destroy();
+void mailTime.destroy({ drain: true, schedulerTimeout: 10000 });
 
 const message: MailTimeMailOptions = {
   to: 'user@example.com',
