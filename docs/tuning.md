@@ -56,13 +56,21 @@ Reach for a [preset](../README.md#settings-presets) first; tune only what the pr
 
 For deeper JoSk semantics — adapter internals, lease lifecycle, recurring task patterns — install the JoSk skill: **`npx skills add veliovgroup/josk`**.
 
+## JoSk 6.4 restarts and shutdown
+
+JoSk 6.4 preserves a claimed interval's schedule when a worker registers the same task during a rolling deploy. A new worker does not run the same scan while another worker's claim is active. If a worker dies during `queue.iterate()`, however, the scan may wait the full `josk.zombieTime` (MailTime defaults to 60 seconds) before recovery. If no scan was claimed at death, normal polling resumes. `sendingTimeout` is separate: it controls recovery of an in-flight email row after SMTP or policy work stalls.
+
+`await mailTime.destroy({ drain: true, schedulerTimeout: 30_000 })` stops new dispatches, awaits JoSk `shutdown()` for the running scan, then drains the SMTP pool. `schedulerTimeout` defaults to 10 seconds for JoSk's running-handler wait; a timed-out handler makes destroy resolve `false` after the pool drains. JoSk first awaits its own storage scan, which this timeout does not bound. It also does not limit SMTP or provider hooks. Check the return value before closing shared storage. Plain `destroy()` remains immediate and leaves in-flight email claims to `sendingTimeout` recovery.
+
+Upgrade every server sharing a scheduler prefix. A JoSk 6.3 peer can still reset a claimed interval on startup. A Redis Cluster scheduler must set `josk.adapter.useHashTags: true` alongside `RedisQueue({ useHashTags: true })`; JoSk 6.4 rejects a cluster adapter without it and fixes `redis@4` script routing. Details: [JoSk 6.4 migration](https://github.com/veliovgroup/josk/blob/master/docs/migration-v6.3-v6.4.md).
+
 ## Pitfalls
 
 ### Reliability boundary
 
 MailTime atomically claims queue rows and lease-guards every completion write, preventing concurrent workers from sending the same attempt. It cannot atomically commit queue state with a remote SMTP server. If SMTP accepts a message and the worker dies before storing completion, stale-lock recovery retries it. This is an unavoidable at-least-once edge for SMTP-backed queues; monitor stable application IDs and make message content safe for rare retries.
 
-- **Many `server` pods on the same `prefix`, expecting N× send rate** — they compete for one drain lease per tick. Use `concurrency` (in-process) and/or distinct `prefix`es (cluster-wide) instead. Duplicate-prefix `server` is still useful as **failover/HA** — a warm standby with a different `lockOwnerId` takes over the lease the next tick if the leader dies.
+- **Many `server` pods on the same `prefix`, expecting N× send rate** — they compete for one drain lease per tick. Use `concurrency` (in-process) and/or distinct `prefix`es (cluster-wide) instead. Duplicate-prefix `server` is still useful as **failover/HA**; an unclean death during a claimed scan can defer its next run until `josk.zombieTime`.
 - **`zombieTime` too low** with slow storage scans — another node may start an overlapping drain. The atomic CAS on `isSending` still prevents double-send, but wasted work and SMTP pressure remain.
 - **`sendingTimeout` below the worst-case SMTP roundtrip** — a healthy still-sending worker can lose its lock to a recovery worker, causing a duplicate delivery. Always keep `sendingTimeout` comfortably above the slowest legitimate roundtrip; MailTime logs a warning below `120000`. Since v5 the claim is also **renewed while the send is in flight** (`renewClaim`, default `sendingTimeout / 3`), so `sendingTimeout` no longer has to cover the worst case on its own — but it is still the floor that decides how fast a *crashed* worker's row is recovered. `maxRenewals` caps renewal attempts; recovery begins `sendingTimeout` after the last successful stamp. Slow renewal writes can extend elapsed time beyond the nominal interval calculation.
 - **Replica reads** for queue or scheduler — use primary / writer endpoint only.

@@ -270,11 +270,12 @@ export const mailQueue = new MailTime({
 
 ```js
 process.on('SIGTERM', async () => {
-  await mailQueue.destroy({ drain: true }); // stop scheduler, then wait for in-flight SMTPs
+  const finished = await mailQueue.destroy({ drain: true, schedulerTimeout: 30_000 });
+  if (!finished) console.error('Queue scan did not finish before scheduler timeout');
 });
 ```
 
-`destroy()` without `{ drain: true }` stops immediately: in-flight completions make no storage writes and their claims recover after `sendingTimeout`. Use it for forced teardown, not graceful shutdown.
+Graceful destroy waits for JoSk's running queue scan, then in-flight SMTP. `schedulerTimeout` defaults to 10 seconds for JoSk's running-handler wait; it does not bound JoSk's own storage scan, SMTP, or policy hooks. A timed-out handler returns `false`. `destroy()` without `{ drain: true }` stops immediately: in-flight completions make no storage writes and their claims recover after `sendingTimeout`. See [JoSk 6.4 recovery and shutdown](https://github.com/veliovgroup/mail-time/blob/master/docs/tuning.md#josk-64-restarts-and-shutdown).
 
 #### Pause / resume a server (backpressure)
 
@@ -380,7 +381,7 @@ Defaults fit moderate traffic in a single region. Reach for a [preset](#settings
 | `strictPayload`                                | `false`          | Turn on when anything other than your own app can write to the queue storage. |
 | `revolvingInterval`                            | `1536` ms        | Lower → faster pickup; higher → less scheduler I/O                                                                                 |
 | `josk.minRevolvingDelay` / `maxRevolvingDelay` | `512` / `2048`   | Lower both → snappier polls, more storage load                                                                                     |
-| `josk.zombieTime`                              | `60000`          | **Never below 60s.** Iterate releases the JoSk lease as soon as scanning ends — only a stalled storage scan can blow this.         |
+| `josk.zombieTime`                              | `60000`          | **Never below 60s.** After an unclean stop during a claimed scan, JoSk 6.4 preserves the claim until `zombieTime`; use graceful destroy on redeploy. |
 | `josk.concurrency`                             | `Infinity`       | Set `1` if scheduler ticks overlap while `iterate` still runs                                                                      |
 | `josk.execute`                                 | `'batch'`        | Usually leave default; MailTime only registers one JoSk task per instance                                                          |
 | `josk.lockOwnerId`                             | random           | Set in production for observability                                                                                                |
@@ -405,71 +406,27 @@ Transports may also set `error.mayFailOver = false`. Retry timing stays unchange
 
 ## Recipient policies
 
-Since 5.2, `recipientPolicies` can suppress recipients before SMTP and classify transport rejections without retrying terminal recipients. Omit the option to keep existing delivery and callback behavior. MailTime does not provide a suppression store or assume that every SMTP 5xx response is permanent.
+Opt in with `recipientPolicies` to suppress recipients before SMTP or classify attributable transport rejections. Omitting it preserves existing delivery and callback behavior. Supply your own suppression store:
 
 ```js
-// Application-owned example data. Replace with your own bounded lookup.
-const suppressionStore = new Set(['unsubscribed@example.com']);
+const suppressed = new Set(['unsubscribed@example.com']);
 
-const mailTime = new MailTime({
-  queue, transports, josk, // Your existing storage, transports, and scheduler configuration.
+new MailTime({
+  queue, transports, josk,
   recipientPolicies: [{
     name: 'unsubscribe',
-    failureMode: 'retry',
-    async beforeSend({ recipients }) {
-      const decisions = [];
-      for (const { address } of recipients) {
-        if (await suppressionStore.has(address)) {
-          decisions.push({ address, status: 'suppressed', reason: 'unsubscribed' });
-        }
-      }
-      return { decisions };
+    beforeSend({ recipients }) {
+      return { decisions: recipients.filter(({ address }) => suppressed.has(address))
+        .map(({ address }) => ({ address, status: 'suppressed', reason: 'unsubscribed' })) };
     },
   }],
-  onSuppressed(task, recipients, summary) {
-    console.log(task.uuid, recipients.map(({ address }) => address), summary.isSettled);
+  onSuppressed(task, recipients) {
+    console.log(task.uuid, recipients.map(({ address }) => address));
   },
 });
 ```
 
-Each provider needs a unique nonblank `name` of at most 128 characters and at least one hook. Providers run sequentially in declared order, each receiving the complete batch for its phase. Decisions merge only after every provider has returned or failed:
-
-| Hook | Result | When |
-| --- | --- | --- |
-| `beforeSend(context)` | `{ decisions: [{ address, status: 'suppressed', reason }] }` | Before each attempt, for pending recipients only. |
-| `classifyRejections(context)` | `{ decisions: [{ address, status: 'rejected' \| 'retry', reason }] }` | After SMTP, for unresolved recipients. Permanent decisions require an attributable rejection record. |
-| `observeAttempt(context)` | Nothing | After classification for attempts with unresolved/rejected recipients, including retries. Receives the complete merged results as `decisions`. |
-
-Contexts contain `task`, `attempt`, `transport: { index, name? }`, `envelope`, and normalized `recipients: [{ address, sources }]`. Rejection and observation contexts also contain raw `error`/`info` and normalized `rejections`. Treat contexts as read-only. Return nothing or an empty decision list to abstain. Reasons must be nonblank and at most 512 characters. Unknown addresses, invalid statuses, malformed results, or conflicting duplicate decisions invalidate that provider's entire invocation.
-
-The default `failureMode: 'retry'` blocks pre-send delivery when a provider fails. After SMTP it keeps unresolved recipients retryable, but cannot undo accepted recipients. `failureMode: 'continue'` logs and discards that provider's failed result. Otherwise suppression wins before SMTP, and permanent rejection wins over retry/abstention after SMTP. Every retry reruns pre-send policies for remaining recipients. Observation failures only log; they do not change delivery outcomes.
-
-Policies use the actual envelope, not display headers. Compiled `envelope.to` is authoritative; otherwise MailTime derives recipients from `to`, `cc`, and `bcc`. It deduplicates lowercased, trimmed addresses without rewriting plus tags, dots, or domains, and sends an explicit filtered envelope. Original headers remain unchanged, including during retries; Nodemailer's transport-specific BCC behavior remains unchanged.
-
-Supported forms are a mailbox string, simple `Name <address>` string, `{ address, name? }`, or arrays of those values. Address-list strings, quoted commas, groups, and other ambiguous syntax require a simple explicit `envelope.to`. An empty or ambiguous envelope consumes an attempt without SMTP and follows retry/failover rules. `strictPayload` drops a queued envelope by default; use a trusted transport `options.mailOptions.envelope` for complex headers rather than widening untrusted payload access. The recipient set is fixed after first preparation. Changing transport-default recipients between attempts fails closed. Once a task has policy state, new concatenated content gets a separate task, even from clients without providers.
-
-### Grouped terminal outcomes
-
-After terminal storage succeeds, MailTime invokes nonempty groups once in this order:
-
-1. `onSent(task, info, recipients, summary)` for SMTP-accepted recipients.
-2. `onError(error, task, info, recipients, summary)` for remaining errors after attempts end.
-3. `onSuppressed(task, recipients, summary)` for pre-send suppression.
-4. `onRejected(task, recipients, summary)` for permanent transport rejection.
-
-Each callback receives the same summary with `uuid`, `tries`, `isSettled`, and `recipients: { sent, error, suppressed, rejected }`. Raw `info` describes the terminal SMTP attempt when one occurred; grouped recipients and the summary are authoritative across attempts. Callback throws/rejections are isolated. Startup transport verification still uses `onError(error, null, details)`.
-
-If preparation fails before any address can be normalized, terminal `onError` receives `recipients: []`. This is the exception to empty-group silence. MailTime does not invent an address from an unparseable list.
-
-With `keepHistory`, `recipientResults` stores one bounded result per address: status, sources, provider/reason pairs, latest attempt/transport identifiers, and scalar rejection diagnostics. Response/message strings are limited to 2,048 characters; raw errors and arbitrary provider metadata are not stored. `isSettled` means terminal completion, including exhausted errors; `isSent` means every recipient was accepted; `isFailed` means terminal error or permanent rejection. Fully suppressed and sent-plus-suppressed tasks are settled but neither sent nor failed. Without history, terminal tasks are removed.
-
-Renewal covers policy and observation work and continues during `destroy({ drain: true })`. Providers must set their own I/O timeouts: `maxRenewals` bounds lease renewal, not hook duration or drain time. Stale final-attempt policy claims recover by completing durable results without another SMTP attempt. Accepted recipients survive classifier delays and worker restarts, subject to SMTP's unavoidable acceptance/persistence ambiguity. Callbacks are best-effort, not durable exactly-once notifications; a crash after storage completion can lose a notification.
-
-### Policy rollout
-
-Deploy 5.2 or newer to **every server on a prefix with policies disabled first**. Verify versions, then enable identical policies on those servers. Clients only enqueue and do not need providers. Custom queues must declare `supportsRecipientPolicies = true` and implement the [queue contract](https://github.com/veliovgroup/mail-time/blob/master/docs/queue-api.md#recipient-policy-capability).
-
-Do not disable policies or downgrade while active policy state remains. Before downgrade, pause/drain workers and archive, remove, or isolate settled policy history too: an older server cannot recognize a fully suppressed row. Schema/index changes are additive; new Mongo indexes are `mailtime_policy_due_v1` / `mailtime_policy_pending_to_v1`, and PostgreSQL uses `idx_mail_time_queue_policy_due_v1` / `idx_mail_time_queue_policy_pending_to_v1`. Old indexes remain during rolling upgrades. After all old servers are gone, inspect indexes and remove only the superseded MailTime due/pending indexes during planned maintenance; do not remove UUID indexes or new policy indexes.
+Only the SMTP envelope is filtered. Headers remain unchanged; some transports retain BCC in generated MIME. If suppressed addresses must not appear in message content, remove them from headers before enqueueing. See [recipient policy hooks, outcomes, recovery, and rollout](https://github.com/veliovgroup/mail-time/blob/master/docs/recipient-policies.md).
 
 ## Queue payload trust
 
@@ -583,7 +540,7 @@ await mailQueue.sendMail({
 | `adapter`                 | —                 | Either a constructed adapter or a config object: `{ type: 'redis' \| 'mongo' \| 'postgres', client \| db, prefix?, resetOnInit?, useHashTags? }`. MailTime constructs the adapter from the config object. Set `useHashTags: true` on Redis/KeyDB Cluster. |
 | `minRevolvingDelay`       | `512`             | Lower bound of poll window.                                                                                    |
 | `maxRevolvingDelay`       | `2048`            | Upper bound.                                                                                                   |
-| `zombieTime`              | `60000`           | Re-claim if `queue.iterate()` runs longer than this. **Do not drop below 60s.**                                |
+| `zombieTime`              | `60000`           | Recovery after an unfinished scan or unclean worker death. **Do not drop below 60s.**                        |
 | `lockLeaseTime`           | `30000`           | JoSk scheduler lease TTL. JoSk floors it at `2 * maxRevolvingDelay + 1000`; increase for slow storage claim batches. Separate from `zombieTime`, which controls task recovery. |
 | `execute`                 | `'batch'`         | JoSk scheduler batching; low impact for MailTime (one interval task per instance).                             |
 | `concurrency`             | `Infinity`        | Cap overlapping JoSk handler runs on **this** process (`1` if ticks pile up).                                  |
@@ -602,7 +559,7 @@ For deeper JoSk semantics, install the JoSk skill: **`npx skills add veliovgroup
 - `cancel(uuid)` — alias of `cancelMail`.
 - `ping()` → `Promise<{status, code, statusCode, paused?, error?}>`. Pings scheduler then queue; `paused` reflects `isPaused`.
 - `ready()` → `Promise<MailTime>`. Awaits all startup work; rejects with `.cause` on storage failure.
-- `destroy(opts?)` → `boolean` or `Promise<boolean>` when `{ drain: true }`. Stops scheduler. Idempotent. Use `await destroy({ drain: true })` for graceful shutdown; plain `destroy()` aborts completion writes.
+- `destroy(opts?)` → `boolean` or `Promise<boolean>` when `{ drain: true }`. Graceful shutdown waits for JoSk's scan and the SMTP pool; `schedulerTimeout` defaults to 10000 ms and a timed-out scan resolves `false`. Plain `destroy()` aborts completion writes.
 - `drain()` → `Promise<void>`. Resolves once every in-flight SMTP attempt finishes. Useful in tests and graceful-shutdown paths.
 - `pause()` / `resume()` → `boolean`. Server-only reversible backpressure; no-ops on `client` or after `destroy()`. See [Shutdown](#6-shutdown).
 - `isPaused` → `boolean`. Read-only; always `false` on `client`.
@@ -619,7 +576,7 @@ For custom adapters see [docs/queue-api.md](https://github.com/veliovgroup/mail-
 
 ### Redis Cluster
 
-Set `useHashTags: true` on both `RedisQueue` and its JoSk Redis adapter. Queue state then uses `mailtime:{prefix}:letters` plus a tagged sorted-set schedule, so node-redis `createCluster()` can route every Lua operation to one slot. One prefix is one slot; shard high-volume traffic across prefixes. Tagged `iterate` returns at most 100 due rows per tick. Existing standalone keys are not read in this mode. Follow [Redis Cluster migration](https://github.com/veliovgroup/mail-time/blob/master/docs/migration-v5-v5.1.md) before cutover.
+Set `useHashTags: true` on both `RedisQueue` and its JoSk Redis adapter. Queue state then uses `mailtime:{prefix}:letters` plus a tagged sorted-set schedule, so node-redis `createCluster()` can route Lua operations to one slot with Redis client 4 or 5. JoSk 6.4 rejects Cluster clients without the setting. One prefix is one slot; shard high-volume traffic across prefixes. Tagged `iterate` returns at most 100 due rows per tick. Existing standalone keys are not read in this mode. Follow [Redis Cluster migration](https://github.com/veliovgroup/mail-time/blob/master/docs/migration-v5-v5.1.md) before cutover.
 
 ### Module functions
 

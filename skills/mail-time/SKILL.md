@@ -9,7 +9,7 @@ Storage-backed email queue built on JoSk. `server` drains and sends; `client` on
 
 ## Version gate — check first
 
-If `package.json` pins `mail-time` below `4.0.0`, or the runtime is Node < 20.9 (Node 14/16 hosts), stop here and read `references/legacy-v3.md`. Everything else in this skill describes 4.x/5.x and names exports, methods, and options that do not exist in 3.x (`mailTimePreset`, `PostgresQueue`, `ready()`, `destroy({ drain })`, `concurrency`, `sendingTimeout`, `lockOwnerId`).
+If `package.json` pins `mail-time` below `4.0.0`, or the runtime is Node < 20.9 (Node 14/16 hosts), stop here and read `references/legacy-v3.md`. Everything else in this skill describes 4.x/5.x and names exports, methods, and options that do not exist in 3.x (`mailTimePreset`, `PostgresQueue`, `ready()`, `pause()`, `concurrency`, `sendingTimeout`, `lockOwnerId`). 3.1.0 has `destroy({ drain: true })` and `drain()`, but with the 3.x semantics in that file, not the 5.x ones.
 
 ## Reference map
 

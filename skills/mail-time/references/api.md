@@ -95,6 +95,8 @@ Constructor. The scheduler starts immediately when `opts.type === 'server'`.
 | `debug` | `boolean` | `false` | Verbose logs. |
 | `onSent` | `(task, info?) => void` | — | Without policies: called **once** after every recipient is accepted (full delivery). Policy mode uses terminal groups below. Not called per attempt or per partially-accepted recipient — see "Per-recipient delivery state" below. |
 | `onError` | `(error, email, details?) => void` | — | Without policies: called after the final retry attempt fails. Policy mode uses terminal groups below. Also fires once per transport that fails `verify()` at startup, with `email === null` and `details = { transportIndex, phase: 'verify' }`. |
+| `recipientPolicies` | `MailTimeRecipientPolicy[]` | — | Optional providers; full contract: [recipient policies](https://github.com/veliovgroup/mail-time/blob/master/docs/recipient-policies.md). |
+| `onSuppressed` / `onRejected` | `(task, recipients, summary) => void` | — | Terminal recipient groups with policies. |
 
 ### JoSk integration (`opts.josk`)
 
@@ -206,7 +208,7 @@ make sure it is available and properly configured
 
 ### `mailTime.destroy(opts?)` → `boolean | Promise<boolean>`
 
-Stops the scheduler timer and blocks future dispatches. Returns `true` on the first call, `false` afterwards. Pass `{ drain: true }` to also wait for in-flight SMTP pool work (returns a Promise). Always wire to `SIGINT` / `SIGTERM` / test teardown.
+Stops new dispatches. Plain `destroy()` returns `true` on first call (`false` thereafter) and aborts in-flight completion writes. `await destroy({ drain: true, schedulerTimeout?: number })` awaits JoSk `shutdown()` and then the SMTP pool; returns `false` if a scheduler handler times out. Default `schedulerTimeout` is 10000 ms; it does not bound JoSk's own storage scan, SMTP, or policy hooks. Invalid timeouts throw before shutdown. See [JoSk 6.4 recovery](https://github.com/veliovgroup/mail-time/blob/master/docs/tuning.md#josk-64-restarts-and-shutdown).
 
 ### `mailTime.drain()` → `Promise<void>`
 
@@ -300,7 +302,7 @@ type MailTimeMailOptions = {
 
 type MailTimeTask = {
   uuid: string;
-  to?: string | string[];               // root `to` is the concat-dedup key; per-mailOption `to` is the source of truth
+  to?: MailTimeMailbox | MailTimeMailbox[]; // root `to` is the concat-dedup key; per-mailOption `to` is the source of truth
   tries: number;
   sendAt: number;                       // ms timestamp
   isSent: boolean;
@@ -326,7 +328,7 @@ type MailTimeIterateOptions = {
 
 ### Per-row lifecycle (`isSending` lock)
 
-The following describes normal attempts. Built-ins also exclude `isSettled=true` and admit stale, exhausted policy claims for completion-only recovery. Policy rules below extend callback and recipient behavior; absence of providers preserves legacy behavior.
+The following describes normal attempts. Built-ins also exclude `isSettled=true` and admit stale, exhausted policy claims for completion-only recovery. Durable terminal results recover without another attempt even before exhaustion. Without providers, legacy delivery and callbacks remain unchanged.
 
 - A row is **eligible for claim** when: `isSent=false AND isFailed=false AND isCancelled=false AND sendAt<=now AND tries<maxTries AND (isSending=false OR sendingAt<=now-sendingTimeout)`.
 - A row is **claimed atomically** by `queue.update(task, { isSending: true, sendingAt: now, tries: task.tries+1 })`. The storage CAS must reject the update if the predicate above no longer holds — this is what stops two workers (same instance or different cluster nodes) from delivering the same email.
@@ -350,34 +352,11 @@ When a `to` / `cc` / `bcc` recipient list contains multiple addresses and the SM
 
 ## Recipient policies (5.2+)
 
-`recipientPolicies` is a nonempty array of plain providers with unique trimmed `name` (1-128 chars), optional `failureMode: 'retry' | 'continue'` (default retry), and at least one function hook:
+`recipientPolicies` runs `beforeSend`, `classifyRejections`, and `observeAttempt` hooks; `beforeSend` can suppress an address, while a permanent rejection needs an attributable transport record. Default provider failure mode is `'retry'`; `'continue'` discards a failed provider's result. Accepted/suppressed/rejected recipients never retry. Custom adapters need `supportsRecipientPolicies = true` plus the guards in `adapters.md`.
 
-- `beforeSend(context)` returns `void | { decisions?: [{ address, status: 'suppressed', reason }] }`.
-- `classifyRejections(context)` permits `rejected | retry`; permanent rejection requires an attributable current-batch record.
-- `observeAttempt(context)` returns void; awaited after merged classification on unresolved/rejected SMTP attempts. Failures only log.
+Policies filter the SMTP envelope, **not message headers**. A stream transport can retain a suppressed BCC in generated MIME. Remove sensitive addresses from headers before enqueueing. Stale claims with only durable terminal results settle without another send or attempt. Provider I/O needs application timeouts; callbacks remain best-effort.
 
-All hooks may be async. Each decision phase runs every provider in order against the same complete batch. Validate the whole invocation before merging; unknown addresses, malformed returns, invalid status/reason, or conflicting duplicate decisions fail that invocation. Reasons: 1-512 chars. Retry-mode failure overrides other terminal decisions for unresolved recipients; continue-mode failure discards only that provider. SMTP acceptance always wins. Abstention preserves retry behavior.
-
-Contexts are read-only by contract: `task`, `attempt`, `transport: { index, name? }`, `envelope: { from?, to }`, `recipients: [{ address, sources }]`. Rejection contexts add raw `error`, `info`, and `rejections: [{ address: string | null, command?, responseCode?, response?, message?, transportIndex, transportName? }]`. Observation adds merged `decisions: MailTimeRecipientResult[]`. Do not infer permanence from unattributed records or assume all 5xx responses are permanent.
-
-Envelope authority: compiled `envelope.to`, else compiled `to/cc/bcc`. Normalize by trimming/lowercasing only; deduplicate with source union. Support simple mailbox/display strings, address objects, and arrays. Complex syntax needs explicit simple envelope; empty/ambiguous input retries without SMTP. Strict payload drops queued envelope by default; trusted transport defaults remain available. Policy retries filter only the explicit envelope, never headers. Recipient-set drift fails closed. Policy-initialized rows cannot receive concat appends.
-
-Persist `recipientResults` across attempts; sent/suppressed/rejected never retry. Result fields: `address`, `status`, optional `sources`, `reasons: [{ provider, reason }]`, `attempt`, optional `transportIndex/transportName/command/responseCode/response/message`. Diagnostics are scalar-only; response/message at most 2048 chars. No raw errors or arbitrary metadata.
-
-Terminal callbacks after storage, nonempty groups only, in order:
-
-```js
-onSent(task, info, recipients, summary)
-onError(error, task, info, recipients, summary)
-onSuppressed(task, recipients, summary)
-onRejected(task, recipients, summary)
-```
-
-`summary = { uuid, tries, isSettled, recipients: { sent, error, suppressed, rejected } }`. Raw info is terminal-attempt info, not cumulative truth. Exception: unparseable preparation failure with no known addresses calls onError with `[]`. Verification retains `onError(error, null, details)`. Callback failures do not block later groups. Notifications are best-effort, not durable exactly-once.
-
-`isSettled=true` includes exhausted error outcomes. `isSent=true` only for all sent; `isFailed=true` for terminal error/rejection or task-level preparation failure. All-suppressed and sent-plus-suppressed: settled, neither sent nor failed. Final `mailOption.rejected` excludes suppressed/header-only addresses.
-
-Accepted persistence precedes slow classifiers. Renewal/checkpoints serialize; graceful drain keeps renewal active. Provider I/O timeouts are application-owned. Stale final-attempt policy claims complete durable results without SMTP or an extra try. Custom queue marker and rollout rules: `adapters.md`.
+For hook signatures, context fields, decision validation, grouped callbacks, storage flags, and rollout steps, read [recipient policies](https://github.com/veliovgroup/mail-time/blob/master/docs/recipient-policies.md).
 
 ## Exported types
 
@@ -390,6 +369,7 @@ export type MailTimeMongoDb;
 export type MailTimeTransport;
 export type MailTimeJoSkAdapterOptions;
 export type MailTimeJoSkOptions;
+export type MailTimeScheduler;
 export type MailTimeTask;
 export type MailTimeIterateOptions;
 export type MailTimeMailOptions;

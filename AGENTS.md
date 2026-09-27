@@ -15,7 +15,7 @@ Send and queue emails in horizontally scaled Node.js and Bun.js. Bulletproof. Hi
 
 ### One mail host: 2–8 servers
 - Run **2–8 `server` instances** on one machine (~**1 per CPU core**) for **parallel drains across prefixes**, not duplicate drains of same `prefix`.
-- Same `prefix` cluster-wide = **one JoSk lease tick** at a time → extra pods ≠ N× throughput, but **do** buy failover/HA (warm standby with a different `lockOwnerId` takes the lease the next tick if the winner dies).
+- Same `prefix` cluster-wide = **one JoSk lease tick** at a time → extra pods ≠ N× throughput, but **do** buy failover/HA. JoSk 6.4 preserves claimed interval runs on restart: graceful `destroy({ drain: true })` hands back unfinished scans; an unclean death can delay the next scan until `josk.zombieTime`.
 - High volume one queue → **shard prefixes** (`marketing-0`, …), not duplicate instances same `prefix`.
 
 ### Throughput levers
@@ -36,7 +36,7 @@ Send and queue emails in horizontally scaled Node.js and Bun.js. Bulletproof. Hi
 | `sendingTimeout` | 300000 (5 min) | Stale-lock recovery. Must exceed slowest legitimate SMTP roundtrip. |
 | `revolvingInterval` | 1536 | Latency vs I/O |
 | `josk.min/maxRevolvingDelay` | 512 / 2048 | Poll jitter (MailTime overrides JoSk 128/768) |
-| `josk.zombieTime` | 60000 | **≥60s**. `___iterate` releases the JoSk lease as soon as scan completes, so zombies are rare unless storage itself stalls. |
+| `josk.zombieTime` | 60000 | **≥60s**. Claimed scans survive re-registration until completion or this deadline after an unclean death. SMTP rows use `sendingTimeout` separately. |
 | `josk.execute` | `'batch'` | Usually leave; one JoSk uid per instance |
 | `josk.concurrency` | `Infinity` | `1` if ticks overlap |
 | `josk.lockOwnerId` | random | **Set prod** (`hostname-pid`, pod name) |
@@ -58,7 +58,7 @@ Non-preset scenarios: Postgres+Postgres for multi-DC; few servers + `josk.concur
 
 ### Anti-patterns
 - Many `server` pods, one `prefix`, expecting N× send rate. (Buys failover/HA, not throughput — shard prefixes or raise `concurrency` for throughput.)
-- `zombieTime` < worst `iterate` (slow SMTP × many due rows).
+- `zombieTime` < worst `iterate` (pool saturation × many due rows).
 - `resetOnInit` / `autoClear` in prod without intent.
 - Replica reads for queue or scheduler.
 
@@ -165,7 +165,7 @@ REDIS_URL=redis://127.0.0.1:6379 MONGO_URL=mongodb://127.0.0.1:27017/test PG_URL
 - New adapter: copy `adapters/blank-example.js`, add an entry to `README.md` storage matrix, write Jest unit tests, regenerate types.
 - Bug fix: reproduce in a Jest test, fix, leave the regression test in place.
 - Feature: update tests first, then code, then docs. The interface is in JSDoc on `index.js` — the .d.ts is downstream.
-- JoSk knobs (`zombieTime`, `execute`, `concurrency`, `lockOwnerId`, `onError`) are pass-through except MailTime sets `minRevolvingDelay` 512, `maxRevolvingDelay` 2048, `zombieTime` 60000, `execute` `'batch'` when unset. Document non-passthrough in README/CHANGELOG.
+- JoSk knobs (`zombieTime`, `execute`, `concurrency`, `lockOwnerId`, `onError`) are pass-through except MailTime sets `minRevolvingDelay` 512, `maxRevolvingDelay` 2048, `zombieTime` 60000, `execute` `'batch'` when unset. With JoSk 6.4, `destroy({ drain: true, schedulerTimeout? })` awaits `scheduler.shutdown({ timeout })` before draining SMTP; a scheduler timeout returns `false`. Document non-passthrough in README/CHANGELOG.
 - Custom queue's `update` must atomically guard the send claim on `{ isSending: true, tries: Number }` updates. The predicate is `isSent=false AND isFailed=false AND isCancelled=false AND tries=email.tries AND (isSending=false OR sendingAt <= now - sendingTimeout)`. Returning `true` from a stale claim causes duplicate sends.
 - Custom queue's `iterate(opts)` must honor `opts.limit` (stop after that many dispatches per tick) and `opts.sendingTimeout` (treat rows where `sendingAt <= now - opts.sendingTimeout` as eligible even when `isSending=true`). Adapters dispatch each due row via `await this.mailTimeInstance.___dispatch(row)` — not `___send` directly.
 

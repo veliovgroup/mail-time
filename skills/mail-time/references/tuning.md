@@ -1,6 +1,6 @@
 # MailTime tuning (agent reference)
 
-One JoSk `setInterval` per `prefix` (`mailTimeQueue<prefix>` → `queue.iterate()`). Cluster-wide: **one lease winner per tick per prefix** — extra `server` pods on same `prefix` ≠ N× throughput, but **do** buy failover/HA (warm standby takes the lease the next tick if the winner dies).
+One JoSk `setInterval` per `prefix` (`mailTimeQueue<prefix>` → `queue.iterate()`). Cluster-wide: **one lease winner per tick per prefix**. Extra same-prefix servers buy failover, not N× throughput. JoSk 6.4 keeps an unfinished scan claim across restarts; after an unclean death, the next scan can wait until `josk.zombieTime`. Graceful `destroy({ drain: true })` uses JoSk `shutdown()`.
 
 ## Multiple instances — default pattern
 
@@ -19,7 +19,7 @@ One JoSk `setInterval` per `prefix` (`mailTimeQueue<prefix>` → `queue.iterate(
 
 - **2–8 `server` instances** (~**1 per CPU core**) → parallel drains **across prefixes**, not duplicate drains of same `prefix`.
 - One hot queue → **shard prefixes** (`marketing-0`, …), not many instances same `prefix`.
-- Duplicate same-`prefix` `server` (different `lockOwnerId`) only buys **failover/HA** — warm standby takes the lease the next tick when the winner dies; never adds throughput.
+- Duplicate same-`prefix` `server` (different `lockOwnerId`) buys **failover/HA**, never extra throughput. Use graceful shutdown for prompt handoff; an unclean death during a claimed scan waits for `josk.zombieTime`.
 
 ## Throughput levers
 
@@ -45,13 +45,15 @@ One JoSk `setInterval` per `prefix` (`mailTimeQueue<prefix>` → `queue.iterate(
 | `strictPayload` | false | Allowlist queued fields + force `disableFileAccess`/`disableUrlAccess`. |
 | `revolvingInterval` | 1536 | Latency vs I/O |
 | `josk.min/maxRevolvingDelay` | 512 / 2048 | Overrides JoSk 128/768 |
-| `josk.zombieTime` | 60000 | **≥60s**. `___iterate` releases the lease right after the scan, so only a stalled storage scan can blow this. |
-| `josk.lockLeaseTime` | 30000 | JoSk 6.3 scheduler lease TTL; floored at `2 * maxRevolvingDelay + 1000`. Raise for slow storage claim batches; separate from `zombieTime`. |
+| `josk.zombieTime` | 60000 | **≥60s**. Claim recovery after an unfinished scan or unclean restart; SMTP rows use `sendingTimeout`. |
+| `josk.lockLeaseTime` | 30000 | Scheduler lease TTL; floored at `2 * maxRevolvingDelay + 1000`. Separate from `zombieTime`. |
 | `josk.execute` | `'batch'` | Usually omit; one JoSk uid per instance |
 | `josk.concurrency` | `Infinity` | `1` if scheduler ticks overlap |
 | `josk.lockOwnerId` | random | **Prod:** `hostname-pid` or pod name |
 | `retries` / `retryDelay` | 59 / 60s | 60 total attempts by default; tune per class. |
 | `concatEmails` | `false` | `true` marketing only |
+
+`destroy({ drain: true, schedulerTimeout: 30000 })` waits for JoSk's scan, then SMTP. Default handler timeout: 10s; a timeout returns `false`. It does not bound JoSk's own storage scan or SMTP. [JoSk 6.4 recovery details](https://github.com/veliovgroup/mail-time/blob/master/docs/tuning.md#josk-64-restarts-and-shutdown).
 
 ## Per-row lifecycle (`isSending` lock)
 
@@ -112,6 +114,6 @@ josk: {
   lockOwnerId: `${process.env.K8S_POD_NAME || process.env.HOSTNAME}-${process.pid}`,
   onError: (title, d) => logger.error({ scheduler: title, ...d }),
   concurrency: 1,      // if ticks overlap long iterate
-  zombieTime: 120_000, // if backlog × slow SMTP > 60s
+  zombieTime: 120_000, // if a queue scan can exceed 60s
 },
 ```
