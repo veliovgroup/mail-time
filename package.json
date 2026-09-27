@@ -71,6 +71,7 @@
     "test:mocha:mongo": "mocha ./test/npm-redis-mongo.js ./test/npm-mongo-redis.js ./test/npm-ha-mongo-redis.js",
     "test:mocha:postgres": "mocha ./test/npm-postgres.js",
     "test:types": "tsc -p ./tsconfig.types.json",
+    "test:types:meteor": "node ./test/meteor-types/check.mjs",
     "test:redis": "mocha ./test/npm-redis-redis.js",
     "test:mongo": "mocha ./test/npm-mongo-mongo.js",
     "test:postgres": "mocha ./test/npm-postgres.js",

@@ -28,6 +28,10 @@ import { MailTime, MongoQueue, RedisQueue, PostgresQueue } from 'mail-time';
 
 The only difference between the two is the module specifier. Everything else — constructor, methods, options — is the same as documented in the main [README API section](../README.md#api).
 
+### TypeScript with Atmosphere
+
+Add `zodern:types` directly to the consuming Meteor app (`meteor add zodern:types`). Then run `meteor lint` to generate `.meteor/local/types/packages.d.ts` from this package's `package-types.json`. Include that generated file in your app's `tsconfig.json` and run `tsc --noEmit`; Meteor's TypeScript compiler alone does not type-check imports. This repository runs an isolated consumer check with `npm run test:types:meteor`.
+
 ## Pulling Meteor's Mongo `db`
 
 Meteor exposes the underlying Mongo `Db` instance through `MongoInternals`. Use it directly with `MongoQueue` and the Mongo `JoSk` adapter — no extra connection.
