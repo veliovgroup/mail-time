@@ -91,7 +91,7 @@ clusterDescribe('Redis Cluster queue', function () {
 
   after(async () => {
     await Promise.all([serverA?.destroy({ drain: true }), serverB?.destroy({ drain: true })]);
-    await cluster?.close();
+    if (cluster) await (typeof cluster.close === 'function' ? cluster.close() : cluster.quit());
   });
 
   for (const keepHistory of [false, true]) {
@@ -134,7 +134,7 @@ clusterDescribe('Redis Cluster queue', function () {
 
     assert.equal(sent.length, 1);
     assert.equal(sent[0].to, 'cluster@example.com');
-    assert.equal(typeof cluster.watch, 'undefined');
+    assert.equal(typeof cluster.nodeClient, 'function');
     assert.equal(typeof cluster.scanIterator, 'undefined');
   });
 
@@ -300,7 +300,7 @@ clusterDescribe('Redis Cluster queue', function () {
         '--overwrite',
       ], { cwd: process.cwd() });
     } finally {
-      await source.close();
+      await (typeof source.close === 'function' ? source.close() : source.quit());
     }
 
     const tagged = `mailtime:{${migrationPrefix}}`;

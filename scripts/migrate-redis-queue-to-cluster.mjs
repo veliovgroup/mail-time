@@ -26,6 +26,10 @@ const scheduleKey = `${taggedName}:schedule`;
 const concatKeysKey = `${taggedName}:concatkeys`;
 const source = await createClient({ url: sourceUrl }).connect();
 const target = createCluster({ rootNodes: [{ url: targetUrl }] });
+const disconnect = async (client) => {
+  if (typeof client.close === 'function') await client.close();
+  else await client.quit();
+};
 
 const scan = async function * (client, pattern) {
   for await (const batch of client.scanIterator({ TYPE: 'string', MATCH: pattern, COUNT: 9999 })) {
@@ -104,5 +108,5 @@ try {
 
   console.info(`Migrated ${migrated} RedisQueue tasks from "${legacyName}" to "${taggedName}".`);
 } finally {
-  await Promise.all([source.close(), target.close()]);
+  await Promise.all([disconnect(source), disconnect(target)]);
 }

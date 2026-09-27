@@ -352,6 +352,37 @@ describe('RedisQueue unit behavior', () => {
     expect(await queue.update(task, fields)).toBe(false);
   });
 
+  it('pings a redis@4 Cluster node when the cluster client has no ping method', async () => {
+    const ping = jest.fn(async () => 'PONG');
+    const client = { nodeClient: jest.fn(async () => ({ ping })), getRandomNode: jest.fn(() => ({ url: 'redis://cluster-node' })) };
+    const queue = new RedisQueue({ client, useHashTags: true });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await expect(queue.ping()).resolves.toMatchObject({ code: 200 });
+    expect(ping).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes tagged scripts by key on redis@4 Cluster and reloads after NOSCRIPT', async () => {
+    const client = {
+      nodeClient() {},
+      sendCommand: jest.fn(async (_key, _readonly, args) => {
+        if (args[0] === 'EVALSHA') throw new Error('NOSCRIPT No matching script');
+        return 1;
+      }),
+      eval: jest.fn(async () => { throw new Error('MOVED 1 127.0.0.1:7101'); }),
+    };
+    const queue = new RedisQueue({ client, prefix: 'cluster4', useHashTags: true });
+    await queue.push({ uuid: 'u', sendAt: Date.now(), mailOptions: [] });
+    expect(client.eval).not.toHaveBeenCalled();
+    expect(client.sendCommand.mock.calls.map(([key, readonly, args]) => [key, readonly, args[0]]))
+      .toEqual([[queue.lettersKey, false, 'EVALSHA'], [queue.lettersKey, false, 'EVAL']]);
+  });
+
+  it('does not hide a routed Redis script error', async () => {
+    const client = { nodeClient() {}, sendCommand: jest.fn(async () => { throw new Error('connection lost'); }) };
+    const queue = new RedisQueue({ client, prefix: 'cluster4', useHashTags: true });
+    await expect(queue.push({ uuid: 'u', sendAt: Date.now(), mailOptions: [] })).rejects.toThrow('connection lost');
+  });
+
   it('uses Lua operations instead of WATCH and SCAN in hash-tagged mode', async () => {
     const client = createRedisClient();
     delete client.watch;

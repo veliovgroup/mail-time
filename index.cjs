@@ -745,9 +745,12 @@ class MongoQueue {
  * @property {(key: string) => Promise<string|null>} get
  * @property {(key: string, value: string, options?: object) => Promise<unknown>} set
  * @property {(key: string|string[]) => Promise<number>} del
- * @property {() => Promise<string>} ping
+ * @property {() => Promise<string>} [ping]
+ * @property {() => unknown} [getRandomNode]
+ * @property {(...args: any[]) => any} [nodeClient]
+ * @property {(firstKey: string, isReadonly: boolean, args: string[]) => Promise<unknown>} [sendCommand]
  * @property {(options: object) => AsyncIterable<string|string[]>} [scanIterator]
- * @property {(key: string, field: string) => Promise<string|null>} [hGet]
+ * @property {(key: string, field: string) => Promise<string|null|undefined>} [hGet]
  * @property {(script: string, options: { keys: string[], arguments: string[] }) => Promise<unknown>} [eval]
  * @property {(sha: string, options: { keys: string[], arguments: string[] }) => Promise<unknown>} [evalSha]
  * @property {(script: string) => Promise<string>} [scriptLoad]
@@ -1073,6 +1076,17 @@ class RedisQueue {
       throw new Error(`[mail-time] [RedisQueue] unknown script "${scriptKey}"`);
     }
 
+    if (this.useHashTags && typeof this.client.nodeClient === 'function' && typeof this.client.sendCommand === 'function') {
+      const key = options.keys[0];
+      const args = [`${options.keys.length}`, ...options.keys, ...options.arguments];
+      try {
+        return await this.client.sendCommand(key, false, ['EVALSHA', sha, ...args]);
+      } catch (error) {
+        if (!isNoScriptError(error)) throw error;
+      }
+      return await this.client.sendCommand(key, false, ['EVAL', source, ...args]);
+    }
+
     if (this.__loadedShas.has(sha) && typeof this.client.evalSha === 'function') {
       try {
         return await this.client.evalSha(sha, options);
@@ -1140,7 +1154,9 @@ class RedisQueue {
     }
 
     try {
-      const ping = await this.client.ping();
+      const pingClient = typeof this.client.ping === 'function' ? this.client
+        : await this.client.nodeClient(this.client.getRandomNode());
+      const ping = await pingClient.ping();
       if (ping === 'PONG') {
         return {
           status: 'OK',

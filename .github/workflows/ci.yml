@@ -206,9 +206,13 @@ jobs:
         run: bun test ./test/jest
 
   redis-cluster:
-    name: node lts · redis Cluster · redis ^5
+    name: node lts · redis Cluster · redis ${{ matrix.redis-client }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        redis-client: ['^4', '^5']
     env:
       REDIS_URL: redis://127.0.0.1:6390
       REDIS_CLUSTER_URL: redis://127.0.0.1:7000
@@ -221,6 +225,9 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      - name: Pin Redis client
+        run: npm install --no-save "redis@${{ matrix.redis-client }}"
 
       - name: Start standalone Redis migration source
         run: |
