@@ -404,7 +404,7 @@ export class MailTime {
     /**
      * @memberOf MailTime
      * @name destroy
-     * @description Stop the scheduler and block future dispatches. Without `{ drain: true }`, in-flight SMTP attempts are neutralized and their claims recover after `sendingTimeout`. With `{ drain: true }`, await JoSk shutdown and in-flight SMTP; resolves false if a scheduler handler exceeds `schedulerTimeout` (default 10000ms). The timeout does not bound SMTP drain time.
+     * @description Stop the scheduler and block future dispatches. Without `{ drain: true }`, in-flight SMTP attempts are neutralized and their claims recover after `sendingTimeout`. With `{ drain: true }`, await JoSk shutdown and in-flight SMTP; resolves false if a scheduler handler exceeds `schedulerTimeout` (default 10000ms) or JoSk shutdown throws (logged); never rejects. The timeout does not bound SMTP drain time.
      * @param {{ drain?: boolean, schedulerTimeout?: number }} [opts] - schedulerTimeout must be finite and non-negative; used only with drain
      * @returns {boolean | Promise<boolean>}
      */

@@ -3277,7 +3277,7 @@ class MailTime {
   /**
    * @memberOf MailTime
    * @name destroy
-   * @description Stop the scheduler and block future dispatches. Without `{ drain: true }`, in-flight SMTP attempts are neutralized and their claims recover after `sendingTimeout`. With `{ drain: true }`, await JoSk shutdown and in-flight SMTP; resolves false if a scheduler handler exceeds `schedulerTimeout` (default 10000ms). The timeout does not bound SMTP drain time.
+   * @description Stop the scheduler and block future dispatches. Without `{ drain: true }`, in-flight SMTP attempts are neutralized and their claims recover after `sendingTimeout`. With `{ drain: true }`, await JoSk shutdown and in-flight SMTP; resolves false if a scheduler handler exceeds `schedulerTimeout` (default 10000ms) or JoSk shutdown throws (logged); never rejects. The timeout does not bound SMTP drain time.
    * @param {{ drain?: boolean, schedulerTimeout?: number }} [opts] - schedulerTimeout must be finite and non-negative; used only with drain
    * @returns {boolean | Promise<boolean>}
    */
@@ -3295,11 +3295,16 @@ class MailTime {
     this.__isPaused = false;
     if (opts?.drain === true) {
       return (async () => {
+        let finished = true;
         try {
-          return this.scheduler ? await this.scheduler.shutdown({ timeout: opts.schedulerTimeout }) : true;
+          if (this.scheduler) finished = await this.scheduler.shutdown({ timeout: opts.schedulerTimeout });
+        } catch (error) {
+          logError('[destroy] scheduler shutdown failed', error);
+          finished = false;
         } finally {
           await this.__pool.drain();
         }
+        return finished;
       })();
     }
     if (this.scheduler) {

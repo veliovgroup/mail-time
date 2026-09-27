@@ -208,7 +208,7 @@ make sure it is available and properly configured
 
 ### `mailTime.destroy(opts?)` → `boolean | Promise<boolean>`
 
-Stops new dispatches. Plain `destroy()` returns `true` on first call (`false` thereafter) and aborts in-flight completion writes. `await destroy({ drain: true, schedulerTimeout?: number })` awaits JoSk `shutdown()` and then the SMTP pool; returns `false` if a scheduler handler times out. Default `schedulerTimeout` is 10000 ms; it does not bound JoSk's own storage scan, SMTP, or policy hooks. Invalid timeouts throw before shutdown. See [JoSk 6.4 recovery](https://github.com/veliovgroup/mail-time/blob/master/docs/tuning.md#josk-64-restarts-and-shutdown).
+Stops new dispatches. Plain `destroy()` returns `true` on first call (`false` thereafter) and aborts in-flight completion writes. `await destroy({ drain: true, schedulerTimeout?: number })` awaits JoSk `shutdown()` and then the SMTP pool; returns `false` if a scheduler handler times out or JoSk shutdown throws (logged); never rejects. Default `schedulerTimeout` is 10000 ms; it does not bound JoSk's own storage scan, SMTP, or policy hooks. Invalid timeouts throw before shutdown. See [JoSk 6.4 recovery](https://github.com/veliovgroup/mail-time/blob/master/docs/tuning.md#josk-64-restarts-and-shutdown).
 
 ### `mailTime.drain()` → `Promise<void>`
 

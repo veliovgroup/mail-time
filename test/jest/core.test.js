@@ -207,6 +207,19 @@ describe('MailTime core options', () => {
 
     await expect(mailTime.destroy({ drain: true })).resolves.toBe(false);
   });
+
+  it('resolves false and logs when JoSk shutdown throws during graceful destroy', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const mailTime = createMailTime();
+    await mailTime.ready();
+    jest.spyOn(mailTime.scheduler, 'shutdown').mockRejectedValue(new Error('release failed'));
+    const drain = jest.spyOn(mailTime.__pool, 'drain');
+
+    await expect(mailTime.destroy({ drain: true })).resolves.toBe(false);
+    expect(drain).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls.some((args) => args.includes('[destroy] scheduler shutdown failed'))).toBe(true);
+    errorSpy.mockRestore();
+  });
 });
 
 describe('MailTime send and render behavior', () => {
