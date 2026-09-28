@@ -1979,13 +1979,23 @@ describe('MailTime stop with a queued send backlog', () => {
     await expect(mailTime.destroy({ drain: true })).resolves.toBe(true);
   });
 
-  it('___dispatch skips rows while paused', async () => {
+  it('___dispatch skips rows of a scheduler scan that is still running after pause()', async () => {
     const mailTime = createMailTime();
-    const send = jest.spyOn(mailTime, '___send');
+    const send = jest.spyOn(mailTime, '___send').mockResolvedValue(void 0);
     mailTime.pause();
+    mailTime.__schedulerScans = 1;
     await mailTime.___dispatch(inFlightTaskFor('paused-dispatch'));
     expect(send).not.toHaveBeenCalled();
     expect(mailTime.__inFlight.size).toBe(0);
+  });
+
+  it('a paused instance still sends rows from a manual queue.iterate()', async () => {
+    const mailTime = createMailTime();
+    mailTime.pause();
+    const uuid = await mailTime.sendMail({ to: 'user@example.com', text: 'hi' });
+    await mailTime.queue.iterate();
+    await mailTime.drain();
+    expect(mailTime.queue.records.has(uuid)).toBe(false);
   });
 
   it('send pool cancels queued jobs without running them', async () => {
@@ -2010,14 +2020,24 @@ describe('MailTime stop with a queued send backlog', () => {
     expect(pool.cancelQueued()).toBe(0);
   });
 
-  it('___isStopped reflects destroy() and pause()', () => {
+  it('___isStopped reflects destroy() and pause() during a scheduler scan', () => {
     const mailTime = createMailTime();
     expect(mailTime.___isStopped).toBe(false);
     mailTime.pause();
+    expect(mailTime.___isStopped).toBe(false);
+    mailTime.__schedulerScans = 1;
     expect(mailTime.___isStopped).toBe(true);
+    mailTime.__schedulerScans = 0;
     mailTime.resume();
     mailTime.destroy();
     expect(mailTime.___isStopped).toBe(true);
+  });
+
+  it('pause() keeps queued jobs when no scheduler scan is running', () => {
+    const mailTime = createMailTime();
+    const cancelQueued = jest.spyOn(mailTime.__pool, 'cancelQueued');
+    mailTime.pause();
+    expect(cancelQueued).not.toHaveBeenCalled();
   });
 });
 

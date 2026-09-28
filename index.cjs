@@ -3124,6 +3124,7 @@ class MailTime {
     this.__isDestroyed = false;
     this.__abortInFlight = false;
     this.__isPaused = false;
+    this.__schedulerScans = 0;
     this.__readyPromise = null;
     this.__schedulerTimer = null;
     this.__inFlight = new Set();
@@ -3376,7 +3377,9 @@ class MailTime {
     const paused = this.scheduler.pause();
     if (paused) {
       this.__isPaused = true;
-      this.__pool.cancelQueued();
+      if (this.__schedulerScans > 0) {
+        this.__pool.cancelQueued();
+      }
     }
     return paused;
   }
@@ -4223,7 +4226,7 @@ class MailTime {
    * @internal
    * @memberOf MailTime
    * @name ___dispatch
-   * @description Queue full-lifecycle send for `task` under the bounded send pool. No-op after `destroy()` or while paused; `destroy()` and `pause()` also drop jobs still waiting for a slot. Resolves as soon as a pool slot is acquired and the send has started — the SMTP roundtrip continues in the background so the adapter's `iterate` can move on to the next due row and the JoSk lease can be released. Call `await mailTime.drain()` to await in-flight sends; use `destroy({ drain: true })` for graceful shutdown.
+   * @description Queue full-lifecycle send for `task` under the bounded send pool. No-op after `destroy()`, or while paused during a scheduler-driven scan; `destroy()` and `pause()` also drop jobs still waiting for a slot. Resolves as soon as a pool slot is acquired and the send has started — the SMTP roundtrip continues in the background so the adapter's `iterate` can move on to the next due row and the JoSk lease can be released. Call `await mailTime.drain()` to await in-flight sends; use `destroy({ drain: true })` for graceful shutdown.
    * @param {MailTimeTask} task - email's task object from Storage
    * @returns {Promise<void 0>}
    */
@@ -4258,11 +4261,11 @@ class MailTime {
    * @internal
    * @memberOf MailTime
    * @name ___isStopped
-   * @description `true` after `destroy()` or while paused. Queue adapters check it to end an `iterate` scan early.
+   * @description `true` after `destroy()`, or while paused during a scheduler-driven scan. Queue adapters check it to end an `iterate` scan early.
    * @returns {boolean}
    */
   get ___isStopped() {
-    return this.__isDestroyed || this.__isPaused;
+    return this.__isDestroyed || (this.__isPaused && this.__schedulerScans > 0);
   }
 
   /**
@@ -4477,10 +4480,15 @@ class MailTime {
       return;
     }
     const limit = this.mode === 'one' ? 1 : Infinity;
-    return await this.queue.iterate({
-      limit,
-      sendingTimeout: this.sendingTimeout,
-    });
+    this.__schedulerScans++;
+    try {
+      return await this.queue.iterate({
+        limit,
+        sendingTimeout: this.sendingTimeout,
+      });
+    } finally {
+      this.__schedulerScans--;
+    }
   }
 
   /**
