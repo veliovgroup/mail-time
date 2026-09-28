@@ -2193,3 +2193,114 @@ describe('PostgresQueue branch coverage gaps', () => {
     expect(update.values).toContain(JSON.stringify([{ to: 'x', text: 'hi' }]));
   });
 });
+
+describe('adapters end the iterate scan once MailTime is stopped', () => {
+  const dueRow = (uuid) => ({
+    uuid,
+    to: 'user@example.com',
+    tries: 0,
+    sendAt: Date.now() - 1,
+    isSent: false,
+    isFailed: false,
+    isCancelled: false,
+    isSending: false,
+    sendingAt: 0,
+    mailOptions: [],
+  });
+
+  // Stops after the first dispatch, like destroy() or pause() during a scan.
+  const createStoppingHarness = () => {
+    const harness = createMailTimeHarness();
+    harness.___isStopped = false;
+    harness.___dispatch = jest.fn(async () => {
+      harness.___isStopped = true;
+    });
+    return harness;
+  };
+
+  it('MongoQueue', async () => {
+    const rows = [dueRow('a'), dueRow('b')];
+    const cursor = {
+      hasNext: jest.fn(async () => rows.length > 0),
+      next: jest.fn(async () => rows.shift()),
+      close: jest.fn(async () => void 0),
+      limit: jest.fn(() => cursor)
+    };
+    const queue = new MongoQueue({ db: createMongoDb(createMongoCollection({ find: jest.fn(() => cursor) })), prefix: 'stop' });
+    queue.mailTimeInstance = createStoppingHarness();
+    await queue.ready();
+
+    await queue.iterate();
+    expect(queue.mailTimeInstance.___dispatch).toHaveBeenCalledTimes(1);
+    expect(cursor.close).toHaveBeenCalled();
+  });
+
+  it('RedisQueue', async () => {
+    const client = createRedisClient();
+    const queue = new RedisQueue({ client, prefix: 'stop' });
+    queue.mailTimeInstance = createStoppingHarness();
+    for (const uuid of ['a', 'b']) {
+      const task = dueRow(uuid);
+      client.values.set(queue.__getKey(uuid), JSON.stringify(task));
+      client.values.set(queue.__getKey(uuid, 'sendat'), `${task.sendAt}`);
+    }
+    client.scanIterator = jest.fn(() => (async function* () {
+      yield [queue.__getKey('a', 'sendat'), queue.__getKey('b', 'sendat')];
+    })());
+
+    await queue.iterate();
+    expect(queue.mailTimeInstance.___dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('RedisQueue with useHashTags', async () => {
+    const client = createRedisClient();
+    delete client.watch;
+    delete client.unwatch;
+    delete client.multi;
+    client.eval = jest.fn(async (source) => source.includes('ZRANGEBYSCORE')
+      ? JSON.stringify([JSON.stringify(dueRow('a')), JSON.stringify(dueRow('b'))])
+      : 1);
+    const queue = new RedisQueue({ client, prefix: 'stop', useHashTags: true });
+    queue.mailTimeInstance = createStoppingHarness();
+
+    await queue.iterate();
+    expect(queue.mailTimeInstance.___dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('PostgresQueue', async () => {
+    const row = (id, uuid) => ({
+      id,
+      uuid,
+      to_address: 'user@example.com',
+      tries: 0,
+      send_at: Date.now() - 1,
+      is_sent: false,
+      is_cancelled: false,
+      is_failed: false,
+      is_sending: false,
+      sending_at: 0,
+      template: null,
+      transport: 0,
+      concat_subject: null,
+      mail_options: []
+    });
+    const client = {
+      async query(queryText) {
+        const sql = String(queryText);
+        if (sql.includes('SELECT 1 as ping')) {
+          return { rows: [{ ping: 1 }], rowCount: 1 };
+        }
+        if (sql.includes('send_at <= $2')) {
+          return { rows: [row(1, 'a'), row(2, 'b')], rowCount: 2 };
+        }
+        return { rows: [], rowCount: 1 };
+      }
+    };
+    const queue = new PostgresQueue({ client, prefix: 'stop' });
+    queue.mailTimeInstance = createStoppingHarness();
+    await queue.ready();
+
+    await queue.iterate();
+    expect(queue.mailTimeInstance.___dispatch).toHaveBeenCalledTimes(1);
+  });
+});

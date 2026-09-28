@@ -234,7 +234,7 @@ class MongoQueue {
       }
 
       try {
-        while (await cursor.hasNext()) {
+        while (!this.mailTimeInstance.___isStopped && await cursor.hasNext()) {
           await this.mailTimeInstance.___dispatch(await cursor.next());
         }
       } finally {
