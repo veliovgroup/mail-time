@@ -1,6 +1,3 @@
-
-# MailTime
-
 [![npm version][badge-npm-v]][npm-url]
 [![npm downloads][badge-npm-dm]][npm-url]
 [![CI][badge-ci]][ci-url]
@@ -17,6 +14,8 @@
 <a href="https://bridge-cdn.com/?ref=github-mail-time-repo-top"><img src="https://bridge-cdn.com/favicon.svg" height="20"></a>
 <a href="https://ostr.io/info/built-by-developers-for-developers?ref=github-mail-time-repo-top"><img src="https://ostr.io/apple-touch-icon-60x60.png" height="20"></a>
 <a href="https://meteor-files.com/?ref=github-mail-time-repo-top"><img src="https://meteor-files.com/apple-touch-icon-60x60.png" height="20"></a>
+
+# MailTime
 
 Bulletproof email queue for [horizontally scaled](#sending-emails-from-a-cluster) Node.js & Bun apps. Built on top of [`nodemailer`](https://github.com/nodemailer/nodemailer) and [`josk`](https://github.com/veliovgroup/josk). Single runtime dependency, ESM + CJS, full TypeScript declarations.
 
