@@ -21,7 +21,7 @@ describe('policy envelope preparation', () => {
       envelope: { from: '', to: ['actual@example.com'] }, recipients: [{ address: 'actual@example.com', sources: ['envelope', 'cc'] }],
     });
   });
-  it.each(['a@example.com, b@example.com', 'Team: a@example.com;', '"Family, Given" <a@example.com>', '', 'a@example.com\r\n', 'A <a@example.com> B <b@example.com>', ['a@example.com'], null, {}].map((value) => [value]))('rejects ambiguous single mailbox %j', (value) => {
+  it.each(['a@example.com, b@example.com', 'Team: a@example.com;', 'Family, Given <a@example.com>', '', 'a@example.com\r\n', 'A <a@example.com> B <b@example.com>', ['a@example.com'], null, {}].map((value) => [value]))('rejects ambiguous single mailbox %j', (value) => {
     expect(() => normalizePolicyAddress(value)).toThrow('[mail-time] [recipientPolicies]');
   });
   it.each([{ to: [] }, { to: 'a@example.com', envelope: { to: [] } }, { to: [['a@example.com']] }, { to: 'a@example.com', cc: null }])('rejects empty or malformed batches %j', (value) => {

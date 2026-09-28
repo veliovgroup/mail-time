@@ -352,7 +352,7 @@ When a `to` / `cc` / `bcc` recipient list contains multiple addresses and the SM
 
 ## Recipient policies (5.2+)
 
-`recipientPolicies` runs `beforeSend`, `classifyRejections`, and `observeAttempt` hooks; `beforeSend` can suppress an address, while a permanent rejection needs an attributable transport record. Default provider failure mode is `'retry'`; `'continue'` discards a failed provider's result. Accepted/suppressed/rejected recipients never retry. Custom adapters need `supportsRecipientPolicies = true` plus the guards in `adapters.md`.
+`recipientPolicies` runs `beforeSend`, `classifyRejections`, and `observeAttempt` hooks; `beforeSend` can suppress an address, while a permanent rejection needs an attributable transport record. Default provider failure mode is `'retry'`; `'continue'` discards a failed provider's result. Accepted/suppressed/rejected recipients never retry. Custom adapters need `supportsRecipientPolicies = true` plus the guards in `adapters.md`. Each `to`/`cc`/`bcc`/`from`/`envelope` entry must be one mailbox (quoted display names like `"Doe, John" <a@x.com>` and `{ name, address }` are fine; use arrays, not comma lists). Unparseable addresses fail the task on that attempt without SMTP, with `error.code === 'MAIL_TIME_INVALID_ADDRESS'` and `error.field` (for example `from` or `to[1]`).
 
 Policies filter the SMTP envelope, **not message headers**. A stream transport can retain a suppressed BCC in generated MIME. Remove sensitive addresses from headers before enqueueing. Stale claims with only durable terminal results settle without another send or attempt. Provider I/O needs application timeouts; callbacks remain best-effort.
 

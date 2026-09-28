@@ -7,7 +7,7 @@ import { PostgresQueue } from './adapters/postgres.js';
 import { mailTimePreset, presets, presetNames } from './presets.js';
 import { debug, escapeHtml, logError, hasOwnProp, deepMerge, equals, isPlainObject, extractEmail, toAddressList, filterAddressField } from './helpers.js';
 
-import { validateRecipientPolicies, policyError, normalizePolicyAddress, preparePolicyEnvelope, evaluatePolicyPhase, mergePolicyResults, summarizePolicyTask } from './recipient-policy.js';
+import { validateRecipientPolicies, policyError, isAddressError, normalizePolicyAddress, preparePolicyEnvelope, evaluatePolicyPhase, mergePolicyResults, summarizePolicyTask } from './recipient-policy.js';
 import { normalizeRejections } from './recipient-rejections.js';
 import { RecipientPolicyLease } from './recipient-policy-lease.js';
 
@@ -1352,7 +1352,15 @@ class MailTime {
       context.recipients = context.recipients.filter((r) => eligible.has(r.address));
       await this.___attemptPolicyTransport(task, lease, compiled, context);
     } catch (error) {
-      if (lease.active) await this.___retryPolicyTask(task, lease, error, void 0, true, true);
+      if (!lease.active) return;
+      if (isAddressError(error)) {
+        // Unparseable addresses fail identically on every attempt, so settle now instead of
+        // spending the retry budget. The message names the field, never the address.
+        if (!this.__abortInFlight) logError(`[recipientPolicies] task ${task.uuid} failed without retry:`, error.message);
+        await this.___completePolicyTask(task, lease, error, void 0, true);
+      } else {
+        await this.___retryPolicyTask(task, lease, error, void 0, true, true);
+      }
     } finally {
       await lease.stop();
     }
