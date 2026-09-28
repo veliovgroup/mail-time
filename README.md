@@ -274,11 +274,11 @@ process.on('SIGTERM', async () => {
 });
 ```
 
-Graceful destroy waits for JoSk's running queue scan, then in-flight SMTP; claim renewal keeps running while sends drain. `schedulerTimeout` defaults to 10 seconds for JoSk's running-handler wait; it does not bound JoSk's own storage scan, SMTP, or policy hooks. A timed-out handler or a failed JoSk shutdown (logged) returns `false`; the Promise never rejects. `destroy()` without `{ drain: true }` stops immediately: in-flight completions make no storage writes and their claims recover after `sendingTimeout`. See [JoSk 6.4 recovery and shutdown](https://github.com/veliovgroup/mail-time/blob/master/docs/tuning.md#josk-64-restarts-and-shutdown).
+Graceful destroy waits for JoSk's running queue scan, then in-flight SMTP; claim renewal keeps running while sends drain. Sends still waiting for a `concurrency` slot are dropped at once and their rows stay unclaimed for the next scan, so in-flight SMTP does not count against `schedulerTimeout`. `schedulerTimeout` defaults to 10 seconds for JoSk's running-handler wait; it does not bound JoSk's own storage scan, SMTP, or policy hooks. A timed-out handler or a failed JoSk shutdown (logged) returns `false`; the Promise never rejects. `destroy()` without `{ drain: true }` stops immediately: in-flight completions make no storage writes and their claims recover after `sendingTimeout`. See [JoSk 6.4 recovery and shutdown](https://github.com/veliovgroup/mail-time/blob/master/docs/tuning.md#josk-64-restarts-and-shutdown).
 
 #### Pause / resume a server (backpressure)
 
-`pause()` stops this **server** instance from competing for the queue-drain lease without tearing it down (unlike `destroy()`). In-flight SMTP sends finish; other `server` instances keep draining. `resume()` resumes and triggers an immediate scan.
+`pause()` stops this **server** instance from competing for the queue-drain lease without tearing it down (unlike `destroy()`). In-flight SMTP sends finish; sends still waiting for a `concurrency` slot are dropped and their rows stay queued; other `server` instances keep draining. `resume()` resumes and triggers an immediate scan.
 
 ```js
 mailQueue.pause();              // stop draining on this pod
@@ -558,7 +558,7 @@ For deeper JoSk semantics, install the JoSk skill: **`npx skills add veliovgroup
 - `cancel(uuid)` — alias of `cancelMail`.
 - `ping()` → `Promise<{status, code, statusCode, paused?, error?}>`. Pings scheduler then queue; `paused` reflects `isPaused`.
 - `ready()` → `Promise<MailTime>`. Awaits all startup work; rejects with `.cause` on storage failure.
-- `destroy(opts?)` → `boolean` or `Promise<boolean>` when `{ drain: true }`. Graceful shutdown waits for JoSk's scan and the SMTP pool; `schedulerTimeout` defaults to 10000 ms; a timed-out scan or failed JoSk shutdown resolves `false` (never rejects). Plain `destroy()` aborts completion writes.
+- `destroy(opts?)` → `boolean` or `Promise<boolean>` when `{ drain: true }`. Graceful shutdown waits for JoSk's scan and the SMTP pool; sends not yet started are dropped and stay queued; `schedulerTimeout` defaults to 10000 ms; a timed-out scan or failed JoSk shutdown resolves `false` (never rejects). Plain `destroy()` aborts completion writes.
 - `drain()` → `Promise<void>`. Resolves once every in-flight SMTP attempt finishes. Useful in tests and graceful-shutdown paths.
 - `pause()` / `resume()` → `boolean`. Server-only reversible backpressure; no-ops on `client` or after `destroy()`. See [Shutdown](#6-shutdown).
 - `isPaused` → `boolean`. Read-only; always `false` on `client`.

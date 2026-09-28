@@ -208,7 +208,7 @@ make sure it is available and properly configured
 
 ### `mailTime.destroy(opts?)` → `boolean | Promise<boolean>`
 
-Stops new dispatches. Plain `destroy()` returns `true` on first call (`false` thereafter) and aborts in-flight completion writes. `await destroy({ drain: true, schedulerTimeout?: number })` awaits JoSk `shutdown()` and then the SMTP pool; returns `false` if a scheduler handler times out or JoSk shutdown throws (logged); never rejects. Default `schedulerTimeout` is 10000 ms; it does not bound JoSk's own storage scan, SMTP, or policy hooks. Invalid timeouts throw before shutdown. See [JoSk 6.4 recovery](https://github.com/veliovgroup/mail-time/blob/master/docs/tuning.md#josk-64-restarts-and-shutdown).
+Stops new dispatches. Plain `destroy()` returns `true` on first call (`false` thereafter) and aborts in-flight completion writes. `await destroy({ drain: true, schedulerTimeout?: number })` awaits JoSk `shutdown()` and then the SMTP pool; sends still waiting for a `concurrency` slot are dropped at once (rows stay unclaimed), so in-flight SMTP does not count against the timeout; returns `false` if a scheduler handler times out or JoSk shutdown throws (logged); never rejects. Default `schedulerTimeout` is 10000 ms; it does not bound JoSk's own storage scan, SMTP, or policy hooks. Invalid timeouts throw before shutdown. See [JoSk 6.4 recovery](https://github.com/veliovgroup/mail-time/blob/master/docs/tuning.md#josk-64-restarts-and-shutdown).
 
 ### `mailTime.drain()` → `Promise<void>`
 
@@ -221,7 +221,7 @@ Tests that call `mailTime.___send(task)` directly do **not** need `drain()` — 
 
 ### `mailTime.pause()` → `boolean`
 
-Pauses this **server** instance from competing for the queue-drain lease: it stops scanning/sending, in-flight SMTP sends finish, and peer `server` instances keep draining. Reversible — unlike `destroy()`. Returns `true` if newly paused; `false` if already paused, a `client` instance, or destroyed. To stop scanning *and* wait for in-flight sends: `mailTime.pause(); await mailTime.drain();`.
+Pauses this **server** instance from competing for the queue-drain lease: it stops scanning/sending, in-flight SMTP sends finish, sends still waiting for a `concurrency` slot are dropped back to the queue, and peer `server` instances keep draining. Reversible — unlike `destroy()`. Returns `true` if newly paused; `false` if already paused, a `client` instance, or destroyed. To stop scanning *and* wait for in-flight sends: `mailTime.pause(); await mailTime.drain();`.
 
 Use for backpressure: SMTP provider rate-limiting, rolling deploy / maintenance of a pod, or quota windows.
 

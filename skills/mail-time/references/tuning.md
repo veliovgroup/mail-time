@@ -53,7 +53,7 @@ One JoSk `setInterval` per `prefix` (`mailTimeQueue<prefix>` → `queue.iterate(
 | `retries` / `retryDelay` | 59 / 60s | 60 total attempts by default; tune per class. |
 | `concatEmails` | `false` | `true` marketing only |
 
-`destroy({ drain: true, schedulerTimeout: 30000 })` waits for JoSk's scan, then SMTP. Default handler timeout: 10s; a timeout or JoSk shutdown error returns `false` (never rejects). It does not bound JoSk's own storage scan or SMTP. [JoSk 6.4 recovery details](https://github.com/veliovgroup/mail-time/blob/master/docs/tuning.md#josk-64-restarts-and-shutdown).
+`destroy({ drain: true, schedulerTimeout: 30000 })` waits for JoSk's scan, then SMTP. Queued sends that have not started are dropped at once (rows stay unclaimed), so in-flight SMTP does not count against the timeout. Default handler timeout: 10s; a timeout or JoSk shutdown error returns `false` (never rejects). It does not bound JoSk's own storage scan or SMTP. [JoSk 6.4 recovery details](https://github.com/veliovgroup/mail-time/blob/master/docs/tuning.md#josk-64-restarts-and-shutdown).
 
 ## Per-row lifecycle (`isSending` lock)
 
