@@ -404,7 +404,7 @@ export class MailTime {
     /**
      * @memberOf MailTime
      * @name destroy
-     * @description Stop the scheduler and block future dispatches. Without `{ drain: true }`, in-flight SMTP attempts are neutralized and their claims recover after `sendingTimeout`. With `{ drain: true }`, await JoSk shutdown and in-flight SMTP; resolves false if a scheduler handler exceeds `schedulerTimeout` (default 10000ms) or JoSk shutdown throws (logged); never rejects. The timeout does not bound SMTP drain time.
+     * @description Stop the scheduler and block future dispatches. Sends still waiting for a `concurrency` slot are dropped at once; their rows stay unclaimed for the next scan. Without `{ drain: true }`, in-flight SMTP attempts are neutralized and their claims recover after `sendingTimeout`. With `{ drain: true }`, await JoSk shutdown and in-flight SMTP; resolves false if the queue scan exceeds `schedulerTimeout` (default 10000ms) or JoSk shutdown throws (logged); never rejects. In-flight SMTP does not count against the timeout, and the timeout does not bound SMTP drain time.
      * @param {{ drain?: boolean, schedulerTimeout?: number }} [opts] - schedulerTimeout must be finite and non-negative; used only with drain
      * @returns {boolean | Promise<boolean>}
      */
@@ -423,7 +423,7 @@ export class MailTime {
     /**
      * @memberOf MailTime
      * @name pause
-     * @description Pause this server instance from competing for the queue-drain lease. In-flight SMTP sends finish; peer server instances keep draining. Reversible (unlike `destroy()`). No-op on `client` instances or after `destroy()`. To stop scanning *and* wait for in-flight sends: `mailTime.pause(); await mailTime.drain();`.
+     * @description Pause this server instance from competing for the queue-drain lease. In-flight SMTP sends finish; sends still waiting for a `concurrency` slot are dropped and their rows stay unclaimed; peer server instances keep draining. Reversible (unlike `destroy()`). No-op on `client` instances or after `destroy()`. To stop scanning *and* wait for in-flight sends: `mailTime.pause(); await mailTime.drain();`.
      * @returns {boolean} `true` if newly paused; `false` if already paused, a client instance, or destroyed
      */
     pause(): boolean;
