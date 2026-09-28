@@ -1,8 +1,11 @@
 import { MailTime, MongoQueue } from '../index.js';
 import { runRecipientPolicyScenario } from './recipient-policy-scenarios.js';
-import { MongoClient } from 'mongodb';
+import mongodb from 'mongodb';
+import crypto from 'crypto';
 import { assert } from 'chai';
 import { it, describe, before, after } from 'mocha';
+
+const { MongoClient } = mongodb;
 
 if (!process.env.MONGO_URL) {
   throw new Error('MONGO_URL env.var is not defined! Please run test with MONGO_URL, like `MONGO_URL=mongodb://127.0.0.1:27017/dbname npm test`');
