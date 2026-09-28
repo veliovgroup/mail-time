@@ -959,9 +959,11 @@ class MailTime {
       compiledOpts = deepMerge(compiledOpts, transport.options.mailOptions);
     }
 
-    compiledOpts.html ??= '';
-    compiledOpts.text ??= '';
-    compiledOpts.subject ??= '';
+    for (const field of ['html', 'text', 'subject']) {
+      if (compiledOpts[field] === void 0 || compiledOpts[field] === null) {
+        compiledOpts[field] = '';
+      }
+    }
 
     const mailOptionsList = task.mailOptions || [];
     const isMulti = mailOptionsList.length > 1;

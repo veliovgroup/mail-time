@@ -524,7 +524,7 @@ class MongoQueue {
       }
 
       try {
-        while (await cursor.hasNext()) {
+        while (!this.mailTimeInstance.___isStopped && await cursor.hasNext()) {
           await this.mailTimeInstance.___dispatch(await cursor.next());
         }
       } finally {
@@ -1214,6 +1214,9 @@ class RedisQueue {
           return;
         }
         for (const value of candidates) {
+          if (this.mailTimeInstance.___isStopped) {
+            break;
+          }
           const candidate = normalizePolicyArrays(typeof value === 'string' ? JSON.parse(value) : value);
           if (isIterateCandidate(candidate, now, sendingTimeout, maxTries)) {
             await this.mailTimeInstance.___dispatch(candidate);
@@ -1234,6 +1237,9 @@ class RedisQueue {
       for await (const cursorValue of cursor) {
         const sendatKeys = Array.isArray(cursorValue) ? cursorValue : [cursorValue];
         for (const sendatKey of sendatKeys) {
+          if (this.mailTimeInstance.___isStopped) {
+            break outer;
+          }
           const raw = await this.client.get(sendatKey);
           if (raw === null || parseInt(raw, 10) > now) {
             continue;
@@ -1964,6 +1970,9 @@ class PostgresQueue {
         LIMIT $5`, [this.prefix, now, this.mailTimeInstance.maxTries, now - sendingTimeout, limit]);
 
       for (const row of res.rows || []) {
+        if (this.mailTimeInstance.___isStopped) {
+          break;
+        }
         await this.mailTimeInstance.___dispatch(normalizeRow(row));
       }
     } catch (iterateError) {
@@ -2305,12 +2314,12 @@ const PRESETS = Object.freeze({
   transactional: Object.freeze({
     concatEmails: false,
     retries: 30,
-    retryDelay: 10_000,
+    retryDelay: 10000,
     mode: 'batch',
     concurrency: 1,
     onError: defaultPresetOnError,
     josk: Object.freeze({
-      zombieTime: 120_000,
+      zombieTime: 120000,
     }),
   }),
   otp: Object.freeze({
@@ -2318,52 +2327,52 @@ const PRESETS = Object.freeze({
     retries: 5,
     retryDelay: 2000,
     revolvingInterval: 1024,
-    sendingTimeout: 120_000,
+    sendingTimeout: 120000,
     mode: 'batch',
     concurrency: 4,
     onError: defaultPresetOnError,
     josk: Object.freeze({
       minRevolvingDelay: 256,
       maxRevolvingDelay: 1024,
-      zombieTime: 60_000,
+      zombieTime: 60000,
     }),
   }),
   newsletter: Object.freeze({
     concatEmails: true,
-    concatDelay: 5 * 60_000,
+    concatDelay: 5 * 60000,
     concatSubject: 'Your updates',
     retries: 5,
-    retryDelay: 60_000,
-    sendingTimeout: 600_000,
+    retryDelay: 60000,
+    sendingTimeout: 600000,
     mode: 'batch',
     concurrency: 2,
     onError: defaultPresetOnError,
     josk: Object.freeze({
-      zombieTime: 300_000,
+      zombieTime: 300000,
     }),
   }),
   marketing: Object.freeze({
     concatEmails: false,
     retries: 10,
-    retryDelay: 30_000,
+    retryDelay: 30000,
     mode: 'batch',
     concurrency: 5,
     onError: defaultPresetOnError,
     josk: Object.freeze({
-      zombieTime: 180_000,
+      zombieTime: 180000,
     }),
   }),
   notifications: Object.freeze({
     concatEmails: true,
-    concatDelay: 60_000,
+    concatDelay: 60000,
     concatSubject: 'New activity',
     retries: 8,
-    retryDelay: 30_000,
+    retryDelay: 30000,
     mode: 'batch',
     concurrency: 3,
     onError: defaultPresetOnError,
     josk: Object.freeze({
-      zombieTime: 180_000,
+      zombieTime: 180000,
     }),
   }),
   alerts: Object.freeze({
@@ -2371,14 +2380,14 @@ const PRESETS = Object.freeze({
     retries: 20,
     retryDelay: 5000,
     revolvingInterval: 1024,
-    sendingTimeout: 120_000,
+    sendingTimeout: 120000,
     mode: 'batch',
     concurrency: 2,
     onError: defaultPresetOnError,
     josk: Object.freeze({
       minRevolvingDelay: 256,
       maxRevolvingDelay: 1024,
-      zombieTime: 60_000,
+      zombieTime: 60000,
     }),
   }),
 });
@@ -2813,11 +2822,19 @@ const createPool = (concurrency) => {
   let active = 0;
   let drainResolvers = [];
 
+  const settleDrain = () => {
+    if (active === 0 && queue.length === 0 && drainResolvers.length > 0) {
+      const resolvers = drainResolvers;
+      drainResolvers = [];
+      for (const r of resolvers) r();
+    }
+  };
+
   const tryStart = () => {
     while (active < limit && queue.length > 0) {
       const job = queue.shift();
       active++;
-      job.resolveSlot();
+      job.resolveSlot(true);
       Promise.resolve()
         .then(job.fn)
         .catch((poolError) => {
@@ -2825,11 +2842,7 @@ const createPool = (concurrency) => {
         })
         .finally(() => {
           active--;
-          if (active === 0 && queue.length === 0 && drainResolvers.length > 0) {
-            const resolvers = drainResolvers;
-            drainResolvers = [];
-            for (const r of resolvers) r();
-          }
+          settleDrain();
           tryStart();
         });
     }
@@ -2838,16 +2851,27 @@ const createPool = (concurrency) => {
   return {
     /**
      * Queue `fn` for execution under the concurrency limit.
-     * The returned Promise resolves as soon as a slot is acquired and `fn` has started.
+     * The returned Promise resolves `true` as soon as a slot is acquired and `fn` has started,
+     * or `false` if `cancelQueued()` dropped the job before it started (`fn` never runs).
      * It does NOT wait for `fn` to finish. Use `drain()` to wait for all running jobs to settle.
      * @param {() => Promise<void>} fn
-     * @returns {Promise<void>}
+     * @returns {Promise<boolean>}
      */
     dispatch(fn) {
       return new Promise((resolveSlot) => {
         queue.push({ fn, resolveSlot });
         tryStart();
       });
+    },
+    /**
+     * Drop every job still waiting for a slot. Running jobs are untouched.
+     * @returns {number} dropped jobs
+     */
+    cancelQueued() {
+      const dropped = queue.splice(0);
+      for (const job of dropped) job.resolveSlot(false);
+      settleDrain();
+      return dropped.length;
     },
     drain() {
       if (active === 0 && queue.length === 0) {
@@ -3277,7 +3301,7 @@ class MailTime {
   /**
    * @memberOf MailTime
    * @name destroy
-   * @description Stop the scheduler and block future dispatches. Without `{ drain: true }`, in-flight SMTP attempts are neutralized and their claims recover after `sendingTimeout`. With `{ drain: true }`, await JoSk shutdown and in-flight SMTP; resolves false if a scheduler handler exceeds `schedulerTimeout` (default 10000ms) or JoSk shutdown throws (logged); never rejects. The timeout does not bound SMTP drain time.
+   * @description Stop the scheduler and block future dispatches. Sends still waiting for a `concurrency` slot are dropped at once; their rows stay unclaimed for the next scan. Without `{ drain: true }`, in-flight SMTP attempts are neutralized and their claims recover after `sendingTimeout`. With `{ drain: true }`, await JoSk shutdown and in-flight SMTP; resolves false if the queue scan exceeds `schedulerTimeout` (default 10000ms) or JoSk shutdown throws (logged); never rejects. In-flight SMTP does not count against the timeout, and the timeout does not bound SMTP drain time.
    * @param {{ drain?: boolean, schedulerTimeout?: number }} [opts] - schedulerTimeout must be finite and non-negative; used only with drain
    * @returns {boolean | Promise<boolean>}
    */
@@ -3293,6 +3317,9 @@ class MailTime {
 
     this.__isDestroyed = true;
     this.__isPaused = false;
+    // Queued jobs never started SMTP; dropping them lets a scan blocked on a
+    // pool slot return, so JoSk shutdown does not wait for in-flight sends.
+    this.__pool.cancelQueued();
     if (opts?.drain === true) {
       return (async () => {
         let finished = true;
@@ -3338,7 +3365,7 @@ class MailTime {
   /**
    * @memberOf MailTime
    * @name pause
-   * @description Pause this server instance from competing for the queue-drain lease. In-flight SMTP sends finish; peer server instances keep draining. Reversible (unlike `destroy()`). No-op on `client` instances or after `destroy()`. To stop scanning *and* wait for in-flight sends: `mailTime.pause(); await mailTime.drain();`.
+   * @description Pause this server instance from competing for the queue-drain lease. In-flight SMTP sends finish; sends still waiting for a `concurrency` slot are dropped and their rows stay unclaimed; peer server instances keep draining. Reversible (unlike `destroy()`). No-op on `client` instances or after `destroy()`. To stop scanning *and* wait for in-flight sends: `mailTime.pause(); await mailTime.drain();`.
    * @returns {boolean} `true` if newly paused; `false` if already paused, a client instance, or destroyed
    */
   pause() {
@@ -3349,6 +3376,7 @@ class MailTime {
     const paused = this.scheduler.pause();
     if (paused) {
       this.__isPaused = true;
+      this.__pool.cancelQueued();
     }
     return paused;
   }
@@ -3674,9 +3702,11 @@ class MailTime {
       compiledOpts = deepMerge(compiledOpts, transport.options.mailOptions);
     }
 
-    compiledOpts.html ??= '';
-    compiledOpts.text ??= '';
-    compiledOpts.subject ??= '';
+    for (const field of ['html', 'text', 'subject']) {
+      if (compiledOpts[field] === void 0 || compiledOpts[field] === null) {
+        compiledOpts[field] = '';
+      }
+    }
 
     const mailOptionsList = task.mailOptions || [];
     const isMulti = mailOptionsList.length > 1;
@@ -4193,12 +4223,12 @@ class MailTime {
    * @internal
    * @memberOf MailTime
    * @name ___dispatch
-   * @description Queue full-lifecycle send for `task` under the bounded send pool. Resolves as soon as a pool slot is acquired and the send has started — the SMTP roundtrip continues in the background so the adapter's `iterate` can move on to the next due row and the JoSk lease can be released. Call `await mailTime.drain()` to await in-flight sends; use `destroy({ drain: true })` for graceful shutdown.
+   * @description Queue full-lifecycle send for `task` under the bounded send pool. No-op after `destroy()` or while paused; `destroy()` and `pause()` also drop jobs still waiting for a slot. Resolves as soon as a pool slot is acquired and the send has started — the SMTP roundtrip continues in the background so the adapter's `iterate` can move on to the next due row and the JoSk lease can be released. Call `await mailTime.drain()` to await in-flight sends; use `destroy({ drain: true })` for graceful shutdown.
    * @param {MailTimeTask} task - email's task object from Storage
    * @returns {Promise<void 0>}
    */
   async ___dispatch(task) {
-    if (this.__isDestroyed) {
+    if (this.___isStopped) {
       return;
     }
     if (!task || task.isSent === true || task.isFailed === true || task.isCancelled === true) {
@@ -4209,9 +4239,9 @@ class MailTime {
       return;
     }
     this.__inFlight.add(task.uuid);
-    await this.__pool.dispatch(async () => {
+    const started = await this.__pool.dispatch(async () => {
       try {
-        if (this.__isDestroyed) {
+        if (this.___isStopped) {
           return;
         }
         await this.___send(task);
@@ -4219,6 +4249,20 @@ class MailTime {
         this.__inFlight.delete(task.uuid);
       }
     });
+    if (!started) {
+      this.__inFlight.delete(task.uuid);
+    }
+  }
+
+  /**
+   * @internal
+   * @memberOf MailTime
+   * @name ___isStopped
+   * @description `true` after `destroy()` or while paused. Queue adapters check it to end an `iterate` scan early.
+   * @returns {boolean}
+   */
+  get ___isStopped() {
+    return this.__isDestroyed || this.__isPaused;
   }
 
   /**

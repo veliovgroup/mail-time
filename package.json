@@ -154,6 +154,7 @@
   "devDependencies": {
     "@jest/globals": "^30.4.1",
     "@types/node": "^25.9.0",
+    "acorn": "^8.18.0",
     "chai": "^6.2.2",
     "jest": "^30.4.2",
     "mocha": "^11.8.0",
