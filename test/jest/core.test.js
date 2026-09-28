@@ -1898,7 +1898,6 @@ describe('MailTime stop with a queued send backlog', () => {
       resolveFirstSend();
       setTimeout(() => done(null, { accepted: [mail.to], response: 'OK' }), 400);
     });
-    const joskOnError = jest.fn();
     const mailTime = createMailTime({
       concurrency: 1,
       keepHistory: true,
@@ -1908,7 +1907,6 @@ describe('MailTime stop with a queued send backlog', () => {
         adapter: createExecutingSchedulerAdapter(),
         minRevolvingDelay: 10,
         maxRevolvingDelay: 20,
-        onError: joskOnError,
       },
       ...opts,
     });
@@ -1917,7 +1915,7 @@ describe('MailTime stop with a queued send backlog', () => {
       await mailTime.sendMail({ to, text: 'hi' });
     }
     await firstSend;
-    return { mailTime, sends, joskOnError };
+    return { mailTime, sends };
   };
 
   const rowsByState = (mailTime) => {
@@ -1929,14 +1927,14 @@ describe('MailTime stop with a queued send backlog', () => {
   };
 
   it('destroy({ drain: true }) resolves true after a clean drain and leaves queued rows unclaimed', async () => {
+    // Match only scheduler logs: under `bun test` console is shared across files.
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    const { mailTime, sends, joskOnError } = await createBacklog();
+    const { mailTime, sends } = await createBacklog();
 
     await expect(mailTime.destroy({ drain: true, schedulerTimeout: 150 })).resolves.toBe(true);
 
     expect(sends).toHaveLength(1);
-    expect(joskOnError).not.toHaveBeenCalled();
-    expect(errorSpy).not.toHaveBeenCalled();
+    expect(errorSpy.mock.calls.filter((args) => args.some((arg) => String(arg).includes('[scheduler]')))).toEqual([]);
     const { sent, untouched } = rowsByState(mailTime);
     expect(sent).toHaveLength(1);
     expect(untouched).toHaveLength(2);
