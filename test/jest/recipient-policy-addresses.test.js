@@ -235,3 +235,36 @@ describe('address parse failures', () => {
     }
   });
 });
+
+describe('parity with Nodemailer address parsing', () => {
+  it('never accepts a mailbox whose address differs from the one Nodemailer puts in the header', async () => {
+    const { default: addressparser } = await import('nodemailer/lib/addressparser/index.js');
+    const tokens = ['"', '\\', '<', '>', ',', ';', ':', '(', ')', '@', ' ', 'a', 'x@y.com', '"Q"', '\t', '[', ']', '=?utf-8?B?YQ==?='];
+    let seed = 20260929;
+    const next = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+    let accepted = 0;
+    for (let i = 0; i < 40000; i++) {
+      let input = '';
+      for (let j = 1 + Math.floor(next() * 9); j > 0; j--) input += tokens[Math.floor(next() * tokens.length)];
+      if (next() < 0.5) input += ' <u@d.com>';
+      let address;
+      try { address = normalizePolicyAddress(input, 'to'); } catch { continue; }
+      accepted++;
+      const parsed = addressparser(input, { flatten: true });
+      expect({ input, count: parsed.length, address: parsed[0]?.address?.toLowerCase() }).toEqual({ input, count: 1, address });
+    }
+    expect(accepted).toBeGreaterThan(500);
+  });
+
+  it('keeps a display name that looks like an address out of the envelope', () => {
+    const { envelope } = preparePolicyEnvelope({ from: '"boss@corp.com" <real@example.com>', to: '"victim@corp.com, other@corp.com" <ok@example.com>' });
+    expect(envelope).toEqual({ from: 'real@example.com', to: ['ok@example.com'] });
+  });
+
+  it.each(['to', 'cc', 'bcc'])('rejects header injection in %s display names and reports that field', (field) => {
+    const mail = { to: 'ok@example.com', [field]: ['fine@example.com', '"x\r\nBcc: evil@example.com" <a@example.com>'] };
+    const caught = (() => { try { preparePolicyEnvelope(mail); } catch (error) { return error; } })();
+    expect(caught).toMatchObject({ code: 'MAIL_TIME_INVALID_ADDRESS', field: `${field}[1]` });
+    expect(caught.message).not.toContain('evil@example.com');
+  });
+});
