@@ -178,4 +178,52 @@ describe('HA — Mongo queue + Redis JoSk', function () {
       else worker.destroy();
     }
   });
+
+  it('graceful shutdown with a queued send backlog resolves true and leaves queued rows unclaimed', async () => {
+    const prefix = `${haPrefix}-backlog`;
+    const queue = new MongoQueue({ db, prefix });
+    const sends = [];
+    const schedulerErrors = [];
+    const worker = new MailTime({
+      queue, prefix, verifyTransports: false,
+      concurrency: 1,
+      retries: 0,
+      revolvingInterval: 32,
+      transports: [{
+        options: { from: `no-reply@${domain}` },
+        sendMail(mail, done) {
+          sends.push(mail.to);
+          setTimeout(() => done(null, { accepted: [mail.to], rejected: [], response: 'OK' }), 1500);
+        },
+      }],
+      josk: {
+        adapter: { type: 'redis', client: redisClient },
+        minRevolvingDelay: 16,
+        maxRevolvingDelay: 32,
+        onError: (title) => schedulerErrors.push(title),
+      },
+    });
+    let shutdown;
+    try {
+      await worker.ready();
+      for (const name of ['one', 'two', 'three']) {
+        await worker.sendMail({ to: `backlog-${name}@${domain}`, subject: 'backlog', text: 'backlog' });
+      }
+      assert.isTrue(await waitUntil(() => sends.length === 1, { timeout: 5000 }), 'first send started');
+      shutdown = worker.destroy({ drain: true, schedulerTimeout: 500 });
+      assert.isTrue(await shutdown);
+      assert.lengthOf(sends, 1);
+      assert.deepEqual(schedulerErrors, []);
+      const rows = await queue.collection.find({}).toArray();
+      assert.lengthOf(rows, 2, 'sent row removed');
+      for (const row of rows) {
+        assert.isFalse(row.isSending);
+        assert.equal(row.tries, 0);
+      }
+    } finally {
+      if (shutdown) await shutdown;
+      else worker.destroy();
+      await queue.collection.deleteMany({});
+    }
+  });
 });

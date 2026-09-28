@@ -146,6 +146,50 @@ export const createSchedulerAdapter = () => ({
   }
 });
 
+// In-memory JoSk adapter that executes due tasks, so tests go through JoSk's
+// real run tracking and shutdown().
+export const createExecutingSchedulerAdapter = () => {
+  const tasks = new Map();
+  return {
+    joskInstance: null,
+    tasks,
+    async ready() {},
+    async ping() {
+      return { status: 'OK', code: 200, statusCode: 200 };
+    },
+    async acquireLock() {
+      return true;
+    },
+    async releaseLock() {},
+    async remove(uid) {
+      return tasks.delete(uid);
+    },
+    async add(uid, isInterval, delay) {
+      if (!tasks.has(uid)) {
+        tasks.set(uid, { uid, isInterval, delay, executeAt: new Date(Date.now() + delay) });
+      }
+      return true;
+    },
+    async update(task, nextExecuteAt) {
+      const current = tasks.get(task.uid);
+      if (!current) {
+        return false;
+      }
+      current.executeAt = nextExecuteAt;
+      return true;
+    },
+    async iterate(nextExecuteAt) {
+      const now = Date.now();
+      for (const task of tasks.values()) {
+        if (+task.executeAt <= now) {
+          task.executeAt = nextExecuteAt;
+          this.joskInstance.__execute({ ...task });
+        }
+      }
+    }
+  };
+};
+
 export const createTransport = (handler = (mail, done) => done(null, {
   accepted: [mail.to],
   response: 'OK'

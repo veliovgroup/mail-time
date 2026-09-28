@@ -88,7 +88,7 @@ Same rules as [docs/tuning.md](./tuning.md#pitfalls): many `server` pods on one 
 
 ## Backpressure: pause a saturated server
 
-When one `server` pod hits SMTP rate limits or needs maintenance, pause its participation in queue draining without removing it from the cluster. Peers keep draining the shared `prefix`; the paused pod's in-flight sends finish.
+When one `server` pod hits SMTP rate limits or needs maintenance, pause its participation in queue draining without removing it from the cluster. Peers keep draining the shared `prefix`; the paused pod's in-flight sends finish, and sends still waiting for a `concurrency` slot are dropped back to the queue.
 
 ```js
 // On the saturated / draining-for-deploy pod:

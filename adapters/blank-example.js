@@ -149,6 +149,10 @@ class BlankQueue {
 
     let dispatched = 0;
     for await (const emailObj of cursorWithEmails) {
+      // Stop the scan once the instance is destroyed or paused.
+      if (this.mailTimeInstance.___isStopped) {
+        break;
+      }
       // ___dispatch returns once a pool slot is acquired and the send has started.
       // The SMTP roundtrip continues in the background, so this `for await` releases
       // the JoSk lease as soon as the scan completes.

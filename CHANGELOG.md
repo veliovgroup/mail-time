@@ -1,5 +1,10 @@
 # Changelog
 
+## 5.2.1
+
+- `destroy({ drain: true })` resolves `true` after a clean drain when the queue scan waited behind in-flight SMTP. `destroy()` and `pause()` drop sends still waiting for a `concurrency` slot; their rows stay unclaimed.
+- Shipped runtime files parse as ES2020: removed logical assignment (`??=`) and numeric separators.
+
 ## 5.2.0
 
 - Opt-in recipient policies, durable mixed outcomes, and grouped terminal callbacks.

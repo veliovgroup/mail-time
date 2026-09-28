@@ -79,6 +79,8 @@ For each matching row, call `await this.mailTimeInstance.___dispatch(email)`. `_
 
 If `opts.limit` is provided (MailTime sends `1` when `mode: 'one'`), stop the scan after that many dispatches.
 
+Optionally, end the scan early when `this.mailTimeInstance.___isStopped` is `true` (after `destroy()`, or after `pause()` during a scheduler-driven scan). `___dispatch` already skips rows in that state; the check only saves storage reads. `adapters/blank-example.js` shows the pattern.
+
 ## Task object
 
 In order to process and send emails, `Queue#iterate` must call `await this.mailTimeInstance.___dispatch(email)` for each due row. The passed email object is expected to have the following structure:

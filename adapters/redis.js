@@ -485,6 +485,9 @@ class RedisQueue {
           return;
         }
         for (const value of candidates) {
+          if (this.mailTimeInstance.___isStopped) {
+            break;
+          }
           const candidate = normalizePolicyArrays(typeof value === 'string' ? JSON.parse(value) : value);
           if (isIterateCandidate(candidate, now, sendingTimeout, maxTries)) {
             await this.mailTimeInstance.___dispatch(candidate);
@@ -505,6 +508,9 @@ class RedisQueue {
       for await (const cursorValue of cursor) {
         const sendatKeys = Array.isArray(cursorValue) ? cursorValue : [cursorValue];
         for (const sendatKey of sendatKeys) {
+          if (this.mailTimeInstance.___isStopped) {
+            break outer;
+          }
           const raw = await this.client.get(sendatKey);
           if (raw === null || parseInt(raw, 10) > now) {
             continue;

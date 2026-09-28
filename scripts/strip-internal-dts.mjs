@@ -6,7 +6,7 @@
  * so this script enforces the convention manually.
  *
  * Removes:
- *   - JSDoc blocks immediately preceding a `__name` or `___name` member
+ *   - JSDoc blocks immediately preceding a `__name` or `___name` member (accessors included)
  *   - The member declaration including any multi-line type signature
  */
 
@@ -65,7 +65,7 @@ const stripFile = (filePath) => {
     const line = lines[i];
     const trimmed = line.trimStart();
 
-    if (/^_{2,}[A-Za-z]/.test(trimmed)) {
+    if (/^(?:(?:get|set|static|readonly)\s+)*_{2,}[A-Za-z]/.test(trimmed)) {
       pruneDocBlock(out);
       i = skipMember(lines, i);
       continue;

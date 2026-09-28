@@ -273,6 +273,9 @@ class PostgresQueue {
         LIMIT $5`, [this.prefix, now, this.mailTimeInstance.maxTries, now - sendingTimeout, limit]);
 
       for (const row of res.rows || []) {
+        if (this.mailTimeInstance.___isStopped) {
+          break;
+        }
         await this.mailTimeInstance.___dispatch(normalizeRow(row));
       }
     } catch (iterateError) {

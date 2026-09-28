@@ -1,14 +1,13 @@
 # MailTime 3.x (legacy, Node 14.20+ / 16)
 
-Read this file instead of `api.md` / `recipes.md` / `tuning.md` when `package.json` pins `mail-time` below `4.0.0` or the runtime is Node < 20.9. The 3.x line is the last that runs on Node 14/16 (`engines.node >=14.20.0`); `4.0.0` and later require Node ≥ 20.9 / Bun ≥ 1.1. `3.1.0`, cut from the `v3` maintenance branch, adds graceful drain; `3.0.0` has no lifecycle methods at all. Check the installed version (`node_modules/mail-time/package.json`) before using a 3.1-only API. It pairs with `josk@^5` — read `legacy-v5.md` in the `josk` skill for the scheduler side.
+Read this file instead of `api.md` / `recipes.md` / `tuning.md` when `package.json` pins `mail-time` below `4.0.0` or the runtime is Node < 20.9. `3.0.0` is the last release that runs on Node 14/16 (`engines.node >=14.20.0`); `4.0.0` and later require Node ≥ 20.9 / Bun ≥ 1.1. It pairs with `josk@^5` — read `legacy-v5.md` in the `josk` skill for the scheduler side.
 
 ## Version ladder
 
 | mail-time | Node | josk | Notes |
 |---|---|---|---|
 | 1.x | ≥ 14.1 | ^3 | `new MailTime({ db })`, Date `sendAt`, no `uuid`, no `queue` option |
-| 3.0.0 | ≥ 14.20 | ^5 | explicit `queue:` adapter, `josk:` required for servers, numeric `sendAt`, `uuid` |
-| **3.1.0** | ≥ 14.20 | ^5 | 3.0.0 plus `destroy({ drain: true })`, `drain()`, `isStopping` (below); same schema and retry behaviour — **last Node 16 line** |
+| **3.0.0** | ≥ 14.20 | ^5 | explicit `queue:` adapter, `josk:` required for servers, numeric `sendAt`, `uuid` — **last Node 16 release** |
 | 4.0.0+ | ≥ 20.9 | ^6 | everything the rest of this skill describes |
 
 ## What 3.x does NOT have
@@ -16,7 +15,7 @@ Read this file instead of `api.md` / `recipes.md` / `tuning.md` when `package.js
 Do not write any of these against 3.x — they are `undefined` and throw at runtime:
 
 - Exports: `PostgresQueue`, `mailTimePreset`, `presets`, `presetNames`. Only `MailTime`, `MongoQueue`, `RedisQueue` exist.
-- Methods: `ready()`, `pause()`, `resume()`. 3.0.0 also lacks `drain()` and `destroy()`; 3.1.0 has them with the narrower semantics below, not the 5.x ones.
+- Methods: `ready()`, `drain()`, `destroy()`, `pause()`, `resume()`. Only `sendMail` / `send`, `cancelMail` / `cancel`, `ping`.
 - Options: `concurrency`, `mode`, `sendingTimeout`, `verifyTransports`, `strictPayload`, `transportFrom`, `josk.lockOwnerId`, `useHashTags`.
 - Storage: no `isSending` / `sendingAt` lock, no claim renewal, no per-recipient retries, no stale-lock recovery. Claim CAS is `isSent: true` + `tries`.
 - Templates: `{{key}}` strips tags instead of HTML-escaping; `raw` is not refused.
@@ -48,7 +47,7 @@ const { MailTime, MongoQueue, RedisQueue } = require('mail-time'); // CJS
 | `revolvingInterval` | `1536` ms | JoSk tick for the drain |
 | `debug` | `false` | |
 
-Instance methods: `sendMail(opts) → Promise<string>` (uuid; `opts.html` or `opts.text` and `opts.to` required; `opts.sendAt` Date or ms; per-letter `template`, `concatSubject`), `cancelMail(uuid) → Promise<boolean>`, `ping() → Promise<{status}>`. `send` / `cancel` are aliases. The JoSk instance is `mailTime.scheduler`. 3.1.0 adds `destroy(opts)`, `drain()` and the `isStopping` getter.
+Instance methods: `sendMail(opts) → Promise<string>` (uuid; `opts.html` or `opts.text` and `opts.to` required; `opts.sendAt` Date or ms; per-letter `template`, `concatSubject`), `cancelMail(uuid) → Promise<boolean>`, `ping() → Promise<{status}>`. `send` / `cancel` are aliases. The JoSk instance is `mailTime.scheduler`.
 
 ## Rules specific to 3.x
 
@@ -58,15 +57,9 @@ Instance methods: `sendMail(opts) → Promise<string>` (uuid; `opts.html` or `op
 
 **Serial drain.** `___iterate` claims each due row and awaits its send before the next one. `josk.zombieTime` must outlive a whole drain of the queue, not one SMTP roundtrip, or a second server re-claims mid-drain and double-sends.
 
-**A crash mid-send loses the letter.** The claim sets `isSent: true` before the SMTP call; on failure it is reset, on success the row is removed. If the process dies in between the row stays `isSent: true` forever — there is no `sendingTimeout` recovery in 3.x. Stop consumers by letting the current send finish (below), not with `SIGKILL`.
+**A crash mid-send loses the letter.** The claim sets `isSent: true` before the SMTP call; on failure it is reset, on success the row is removed. If the process dies in between the row stays `isSent: true` forever — there is no `sendingTimeout` recovery in 3.x. Stop consumers by letting the current drain finish (`scheduler.destroy()` then wait for in-flight `sendMail` callbacks), not with `SIGKILL`.
 
-**Nothing to await at startup.** The constructor calls `scheduler.ping()` on `nextTick` and throws if storage is unreachable. There is no `ready()`.
-
-**Shutdown on 3.0.0.** `mailTime.scheduler.destroy()` stops new ticks but cannot wait for a send already running: 3.0.0 tracks no in-flight work. A restart mid-send can strand the claimed row.
-
-**Shutdown on 3.1.0.** `destroy({ drain: true })` stops the scheduler, blocks new claims at once, and returns a Promise that settles when the startup ping, scheduler registration, running scans, SMTP sends, completion or retry writes, and `onSent`/`onError` hooks have finished. A running scan stops before its next row. Close storage only after awaiting it, and wrap it in a process deadline that leaves time to close storage (for example below systemd's `TimeoutStopSec`). `destroy()` without `drain` only stops scheduling; `drain()` alone waits without stopping new claims. The Promise rejects only for failures after `destroy()` was called; `error.errors` lists them, and earlier failures are logged only. It is not exactly-once: SMTP can accept a message just before a crash or a failed write.
-
-**3.1.0 behaviour changes.** `onSent` and `onError` are awaited, so a slow async hook delays the next row. A transport callback with neither an error nor an `info` object counts as a failed attempt and is retried (in 3.0.0 it caused an unhandled rejection). A failed queue write after SMTP accepted a message leaves the row claimed and logged, and it is not sent again. Custom queues must resolve `true` from `remove()` and `update()` on success, and their `iterate()` should stop once `this.mailTimeInstance.isStopping` is `true`.
+**No lifecycle methods.** Nothing to `await` at startup: the constructor calls `scheduler.ping()` on `nextTick` and throws if storage is unreachable. Shutdown is `mailTime.scheduler.destroy()`; there is no `drain()`.
 
 **Single retry owner.** Custom transports must report every failure upward once (callback `error`), never re-queue internally — two retry owners for one letter is the classic duplicate-delivery bug.
 
@@ -107,13 +100,7 @@ const mail = new MailTime({
   onError(error, task, info) { log('abandoned', task && task.uuid, error, info); },
 });
 
-// 3.1.0: stop claiming, wait for in-flight sends and their queue writes, then close storage.
-process.once('SIGTERM', async () => {
-  try { await mail.destroy({ drain: true }); } catch (error) { log('drain failed', error.errors); }
-  await mongoClient.close();
-  process.exit(0);
-});
-// 3.0.0 has no drain: mail.scheduler.destroy() only stops new ticks.
+process.on('SIGTERM', () => { mail.scheduler.destroy(); /* let in-flight sends finish, then exit */ });
 
 // In the producing app (any process, no transports, no josk):
 const producer = new MailTime({ type: 'client', prefix: 'alerts', queue: new MongoQueue({ db, prefix: 'alerts' }) });
