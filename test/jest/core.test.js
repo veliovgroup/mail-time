@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
 import { MailTime, PostgresQueue } from '../../index.js';
-import { createPostgresClient, createQueue, createSchedulerAdapter, createTransport } from './helpers.js';
+import { createExecutingSchedulerAdapter, createPostgresClient, createQueue, createSchedulerAdapter, createTransport } from './helpers.js';
 
 const instances = [];
 
@@ -1884,6 +1884,156 @@ describe('MailTime pause/resume', () => {
     mailTime.pause();
     await expect(mailTime.ping()).resolves.toMatchObject({ paused: true });
   });
+});
+
+describe('MailTime stop with a queued send backlog', () => {
+  // concurrency: 1, three due rows, and an SMTP roundtrip longer than the
+  // scheduler timeout: the scan waits on the pool while the first send runs.
+  const createBacklog = async (opts = {}) => {
+    const sends = [];
+    let resolveFirstSend;
+    const firstSend = new Promise((resolve) => { resolveFirstSend = resolve; });
+    const transport = createTransport((mail, done) => {
+      sends.push(mail.to);
+      resolveFirstSend();
+      setTimeout(() => done(null, { accepted: [mail.to], response: 'OK' }), 400);
+    });
+    const joskOnError = jest.fn();
+    const mailTime = createMailTime({
+      concurrency: 1,
+      keepHistory: true,
+      revolvingInterval: 20,
+      transports: [transport],
+      josk: {
+        adapter: createExecutingSchedulerAdapter(),
+        minRevolvingDelay: 10,
+        maxRevolvingDelay: 20,
+        onError: joskOnError,
+      },
+      ...opts,
+    });
+    await mailTime.ready();
+    for (const to of ['a@example.com', 'b@example.com', 'c@example.com']) {
+      await mailTime.sendMail({ to, text: 'hi' });
+    }
+    await firstSend;
+    return { mailTime, sends, joskOnError };
+  };
+
+  const rowsByState = (mailTime) => {
+    const rows = [...mailTime.queue.records.values()];
+    return {
+      sent: rows.filter((row) => row.isSent === true),
+      untouched: rows.filter((row) => row.isSent === false && row.isSending === false && row.tries === 0),
+    };
+  };
+
+  it('destroy({ drain: true }) resolves true after a clean drain and leaves queued rows unclaimed', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const { mailTime, sends, joskOnError } = await createBacklog();
+
+    await expect(mailTime.destroy({ drain: true, schedulerTimeout: 150 })).resolves.toBe(true);
+
+    expect(sends).toHaveLength(1);
+    expect(joskOnError).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    const { sent, untouched } = rowsByState(mailTime);
+    expect(sent).toHaveLength(1);
+    expect(untouched).toHaveLength(2);
+    expect(mailTime.__inFlight.size).toBe(0);
+    errorSpy.mockRestore();
+  });
+
+  it('destroy() releases queued pool jobs at once and never sends them', async () => {
+    const { mailTime, sends } = await createBacklog();
+    expect(mailTime.__pool.size).toBe(2);
+
+    expect(mailTime.destroy()).toBe(true);
+    expect(mailTime.__pool.size).toBe(1);
+
+    await mailTime.drain();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(sends).toHaveLength(1);
+    expect(rowsByState(mailTime).untouched).toHaveLength(2);
+    expect(mailTime.__inFlight.size).toBe(0);
+  });
+
+  it('pause() releases queued pool jobs; resume() sends them on a later scan', async () => {
+    const { mailTime, sends } = await createBacklog();
+
+    expect(mailTime.pause()).toBe(true);
+    expect(mailTime.__pool.size).toBe(1);
+    await mailTime.drain();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(sends).toHaveLength(1);
+    expect(rowsByState(mailTime).untouched).toHaveLength(2);
+    expect(mailTime.__inFlight.size).toBe(0);
+
+    expect(mailTime.resume()).toBe(true);
+    const deadline = Date.now() + 5000;
+    while (rowsByState(mailTime).sent.length < 3 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(rowsByState(mailTime).sent).toHaveLength(3);
+    expect(sends).toHaveLength(3);
+    await expect(mailTime.destroy({ drain: true })).resolves.toBe(true);
+  });
+
+  it('___dispatch skips rows while paused', async () => {
+    const mailTime = createMailTime();
+    const send = jest.spyOn(mailTime, '___send');
+    mailTime.pause();
+    await mailTime.___dispatch(inFlightTaskFor('paused-dispatch'));
+    expect(send).not.toHaveBeenCalled();
+    expect(mailTime.__inFlight.size).toBe(0);
+  });
+
+  it('send pool cancels queued jobs without running them', async () => {
+    const mailTime = createMailTime({ concurrency: 1 });
+    const pool = mailTime.__pool;
+    let release;
+    const ran = [];
+    const first = pool.dispatch(() => new Promise((resolve) => { release = resolve; }));
+    const second = pool.dispatch(async () => ran.push('second'));
+    const third = pool.dispatch(async () => ran.push('third'));
+    await expect(first).resolves.toBe(true);
+
+    expect(pool.cancelQueued()).toBe(2);
+    await expect(second).resolves.toBe(false);
+    await expect(third).resolves.toBe(false);
+    expect(pool.size).toBe(1);
+
+    const drained = pool.drain();
+    release();
+    await drained;
+    expect(ran).toEqual([]);
+    expect(pool.cancelQueued()).toBe(0);
+  });
+
+  it('___isStopped reflects destroy() and pause()', () => {
+    const mailTime = createMailTime();
+    expect(mailTime.___isStopped).toBe(false);
+    mailTime.pause();
+    expect(mailTime.___isStopped).toBe(true);
+    mailTime.resume();
+    mailTime.destroy();
+    expect(mailTime.___isStopped).toBe(true);
+  });
+});
+
+const inFlightTaskFor = (uuid) => ({
+  uuid,
+  tries: 0,
+  isSent: false,
+  isFailed: false,
+  isCancelled: false,
+  isSending: false,
+  sendingAt: 0,
+  sendAt: Date.now() - 1,
+  template: false,
+  transport: 0,
+  concatSubject: false,
+  mailOptions: [{ to: 'user@example.com', text: 'hi' }],
 });
 
 describe('MailTime branch coverage gaps', () => {
