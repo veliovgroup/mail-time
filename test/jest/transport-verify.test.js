@@ -326,10 +326,14 @@ describe('startup failure', () => {
 });
 
 describe('lazy re-probe', () => {
+  // No fake timers (Bun lacks them): a controllable Date.now drives backoff, real short timers drive verifyTimeout.
   const DOWN = { on: true };
+  let clock = 0;
   // Transport 0 fails at startup (DOWN.on), then obeys `behavior`.
   const setup = async (opts = {}, behavior) => {
     quiet();
+    clock = 1e12;
+    jest.spyOn(Date, 'now').mockImplementation(() => clock);
     DOWN.on = true;
     const calls = [];
     const sentBy = [];
@@ -343,10 +347,9 @@ describe('lazy re-probe', () => {
     const onError = jest.fn();
     const mt = make({ transports: [flaky, backup], onError, ...opts });
     await mt.ready();
-    jest.useFakeTimers();
     return { mt, calls, sentBy, onError };
   };
-  const tick = (ms) => jest.advanceTimersByTimeAsync(ms);
+  const tick = async (ms) => { clock += ms; await sleep(0); };
 
   it('does not probe before the first 60 s', async () => {
     const { mt, calls } = await setup();
@@ -385,35 +388,36 @@ describe('lazy re-probe', () => {
 
   it('backs off 60, 120, 240, 480, then caps at 900 s', async () => {
     const { mt, calls } = await setup();
-    const start = calls[0];
-    const seen = [];
+    const delays = [];
     for (let i = 0; i < 6; i++) {
-      const before = calls.length;
-      for (let s = 0; s < 1000 && calls.length === before; s++) {
-        await tick(1000);
-        mt.___isHealthyTransport(0);
-        await tick(0);
-      }
-      seen.push(calls.length - 1);
+      const st = mt.__reprobe.get(0);
+      const scheduledFor = st.nextProbeAt;
+      delays.push(Math.round((scheduledFor - (i === 0 ? calls[0] : calls[i])) / 1000));
+      clock = scheduledFor - 1;
+      mt.___isHealthyTransport(0);
+      await tick(0);
+      expect(calls.length).toBe(i + 1);
+      clock = scheduledFor;
+      mt.___isHealthyTransport(0);
+      await tick(0);
+      expect(calls.length).toBe(i + 2);
     }
-    const deltas = calls.slice(1).map((t, i) => Math.round((t - (i === 0 ? start : calls[i])) / 1000));
-    expect(deltas).toEqual([60, 120, 240, 480, 900, 900]);
-    expect(seen.length).toBe(6);
+    expect(delays).toEqual([60, 120, 240, 480, 900, 900]);
   });
 
   it('single-flight: five concurrent health checks start one verify', async () => {
-    const { mt, calls } = await setup({}, (cb) => { setTimeout(() => cb(null, true), 1000); });
+    const { mt, calls } = await setup({}, (cb) => { setTimeout(() => cb(null, true), 40); });
     DOWN.on = false;
     await tick(60000);
     for (let i = 0; i < 5; i++) mt.___isHealthyTransport(0);
     await tick(0);
     expect(calls.length).toBe(2);
-    await tick(1000);
+    await sleep(80);
     expect(mt.___isHealthyTransport(0)).toBe(true);
   });
 
   it('single-flight through five real sends', async () => {
-    const { mt, calls, sentBy } = await setup({}, (cb) => { setTimeout(() => cb(null, true), 1000); });
+    const { mt, calls, sentBy } = await setup({}, (cb) => { setTimeout(() => cb(null, true), 40); });
     DOWN.on = false;
     await tick(60000);
     const ids = [];
@@ -425,14 +429,14 @@ describe('lazy re-probe', () => {
   });
 
   it('a hung re-probe times out, clears the in-flight flag and reschedules', async () => {
-    const { mt, calls } = await setup({ verifyTimeout: 5000 }, () => {});
+    const { mt, calls } = await setup({ verifyTimeout: 30 }, () => {});
     DOWN.on = false;
     await tick(60000);
     mt.___isHealthyTransport(0);
     await tick(0);
     expect(calls.length).toBe(2);
     expect(mt.__reprobe.get(0).inFlight).toBe(true);
-    await tick(5000);
+    await sleep(60);
     const st = mt.__reprobe.get(0);
     expect(st.inFlight).toBe(false);
     expect(st.count).toBe(1);
@@ -445,14 +449,14 @@ describe('lazy re-probe', () => {
 
   it('generation guard: an older late failure never overrides a newer success', async () => {
     const lates = [];
-    const { mt, calls, onError } = await setup({ verifyTimeout: 5000 }, (cb, n) => {
+    const { mt, calls, onError } = await setup({ verifyTimeout: 30 }, (cb, n) => {
       if (n === 2) { lates.push(cb); return; }
       cb(null, true);
     });
     DOWN.on = false;
     await tick(60000);
     mt.___isHealthyTransport(0);
-    await tick(5000);
+    await sleep(60);
     expect(calls.length).toBe(2);
     await tick(120000);
     mt.___isHealthyTransport(0);
@@ -466,11 +470,11 @@ describe('lazy re-probe', () => {
 
   it('late success of a timed-out re-probe clears quarantine', async () => {
     const lates = [];
-    const { mt } = await setup({ verifyTimeout: 5000 }, (cb) => { lates.push(cb); });
+    const { mt } = await setup({ verifyTimeout: 30 }, (cb) => { lates.push(cb); });
     DOWN.on = false;
     await tick(60000);
     mt.___isHealthyTransport(0);
-    await tick(5000);
+    await sleep(60);
     lates[0](null, true);
     expect(mt.___isHealthyTransport(0)).toBe(true);
   });
@@ -513,19 +517,17 @@ describe('lazy re-probe', () => {
       (o) => ({ ...o, type: 'client' }),
       (o) => o
     ]) {
-      jest.useRealTimers();
       quiet();
       const verify = jest.fn((cb) => cb(null, true));
       const mt = make(mutate({ transports: [wrap(verify), wrap(async () => true)] }));
       await mt.ready().catch(() => {});
-      jest.useFakeTimers();
       const isDestroyCase = mutate({}).verifyTransports === void 0 && mutate({}).type === void 0;
       mt.__unhealthyTransports.add(0);
       mt.__reprobe.set(0, { count: 0, nextProbeAt: 0, inFlight: false });
       verify.mockClear();
       if (isDestroyCase) mt.destroy();
       mt.___isHealthyTransport(0);
-      await jest.advanceTimersByTimeAsync(10);
+      await sleep(10);
       expect(verify).not.toHaveBeenCalled();
     }
   });
