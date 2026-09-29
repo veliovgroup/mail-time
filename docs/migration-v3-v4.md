@@ -15,7 +15,7 @@
 - **New `concurrency` option** (default `1`). Up to N parallel SMTPs per instance, dispatched through an internal worker pool. Increase to scale throughput on a single host before resorting to more `prefix`es or more pods.
 - **New `sendingTimeout` option** (default `300000` ms / 5 min). Stale-lock recovery — a row stuck `isSending=true` because its worker died is reclaimable after this window.
 - **New `drain()` method.** Resolves once every in-flight send finishes. Pair with `destroy()` for graceful shutdown.
-- **New `ping()` method.** Runtime healthcheck for queue + scheduler (and transport probe state when `verifyTransports: true`).
+- **New `ping()` method.** Runtime healthcheck for the scheduler and the queue. It resolves `{ status, code, statusCode, paused, error? }` and does not report transport health. Startup `verifyTransports` failures surface through `onError(error, null, { transportIndex, phase: 'verify' })` instead.
 - **New `verifyTransports` option** (default `true`). `ready()` probes each transport's `verify()` once at startup; failures mark transports unhealthy but `ready()` still resolves unless every transport fails.
 - **New `keepHistory` option** (default `false`). When `true`, sent/failed rows stay in storage with terminal flags instead of being removed.
 - **JoSk lease released faster.** `___iterate` returns as soon as the scan + claim phase completes; SMTP work continues in the background pool. Other ticks (this node or others) can immediately pick up rows still `isSending=false`.
@@ -39,7 +39,7 @@
 - `MailTimeTask` gains optional `isSending?: boolean` and `sendingAt?: number` fields.
 - New `MailTimeIterateOptions` export (`{ limit?: number, sendingTimeout?: number }`).
 - `MailTimeOptions` gains `mode?: 'one' | 'batch'`, `concurrency?: number`, `sendingTimeout?: number`, `verifyTransports?: boolean`, `keepHistory?: boolean`.
-- `MailTime#drain(): Promise<void>` and `MailTime#ping()` added to the public surface.
+- `MailTime#drain()` (`Promise<void>` in 4.x; resolves `{ pending, failedWrites }` since 5.3.0) and `MailTime#ping()` added to the public surface.
 - `CustomQueue#iterate` signature widened to `(opts?: MailTimeIterateOptions) => Promise<void> | void`.
 - New `MailTimeRejectedRecipient` export. `MailTimeMailOptions` gains optional `accepted?: string[]` and `rejected?: MailTimeRejectedRecipient[]` fields documenting the in-flight delivery state.
 - New `mailTimePreset`, `presets`, and `presetNames` value exports plus `MailTimePresetConfig` and `MailTimePresetName` type exports (via the new `presets.js` module).
