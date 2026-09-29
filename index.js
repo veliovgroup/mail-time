@@ -1281,7 +1281,8 @@ class MailTime {
         logError('[private renewClaim] storage error during claim renewal', renewError);
         // Storage may have applied the write before the driver failed; remember the stamp
         // so the outcome write can retry with it (see ___outcomeWrite).
-        if (task.sendingAt > renewedAt - this.sendingTimeout) this.__uncertainRenewals.set(task, renewedAt);
+        // A stale claim is remembered as null: the lost outcome write is reported, never retried.
+        this.__uncertainRenewals.set(task, task.sendingAt > renewedAt - this.sendingTimeout ? renewedAt : null);
         halt();
         return;
       }
@@ -1317,7 +1318,7 @@ class MailTime {
    * @internal
    * @memberOf MailTime
    * @name ___outcomeWrite
-   * @description Run a lease-guarded outcome write. `write(t)` must derive its lease guard from `t`. When the write loses the lease and an earlier claim renewal threw (storage may have applied it), retry once with that renewal's stamp; a peer takeover bumps `tries` or stamps a later `sendingAt` while the lease is live, so the retry cannot match a taken-over row. The stamp is only remembered when the lease was still live at renewal time. If the retry also fails, count and report the lost write. Without an earlier renewal error a lost lease stays a debug-only skip.
+   * @description Run a lease-guarded outcome write. `write(t)` must derive its lease guard from `t`. When the write loses the lease and an earlier claim renewal threw (storage may have applied it), retry once with that renewal's stamp; a peer takeover bumps `tries` or stamps a later `sendingAt` while the lease is live, so the retry cannot match a taken-over row. The stamp is only remembered when the lease was still live at renewal time. If the retry also fails, count and report the lost write. A claim that was already stale when the renewal threw is reported without a retry. After `destroy()` the loss is counted without hook or log. Without an earlier renewal error a lost lease stays a debug-only skip.
    * @param {MailTimeTask} task
    * @param {(t: MailTimeTask) => Promise<boolean>} write
    * @returns {Promise<boolean>}
@@ -1331,13 +1332,15 @@ class MailTime {
       return false;
     }
     this.__uncertainRenewals.delete(task);
-    if (this.__abortInFlight) {
+    const lost = new Error('outcome write lost (renewal outcome uncertain or lease taken over)');
+    if (attempted === null || this.__abortInFlight) {
+      this.___reportWriteFailure(task, lost, 'complete');
       return false;
     }
     if (await write({ ...task, sendingAt: attempted })) {
       return true;
     }
-    this.___reportWriteFailure(task, new Error('outcome write lost (renewal outcome uncertain or lease taken over)'), 'complete');
+    this.___reportWriteFailure(task, lost, 'complete');
     return false;
   }
 

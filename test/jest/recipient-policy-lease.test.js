@@ -2,7 +2,7 @@ import { expect, it, jest } from '@jest/globals';
 import { RecipientPolicyLease } from '../../recipient-policy-lease.js';
 import { deferred } from './recipient-policy-helpers.js';
 
-const create = (overrides = {}) => new RecipientPolicyLease({ task: { uuid: 'u', tries: 1, isSending: true, sendingAt: 100 }, queue: { update: async () => true }, interval: 0, maxRenewals: 1, shouldAbort: () => false, report() {}, ...overrides });
+const create = (overrides = {}) => new RecipientPolicyLease({ task: { uuid: 'u', tries: 1, isSending: true, sendingAt: 100 }, queue: { update: async () => true }, interval: 0, maxRenewals: 1, sendingTimeout: 1e15, shouldAbort: () => false, report() {}, ...overrides });
 
 it('constructs checkpoint guards after an in-flight renewal settles', async () => {
   const entered = deferred();
@@ -127,7 +127,7 @@ it('an uncertain renewal whose retry also fails reports once', async () => {
   expect(await lease.finish({ isSettled: true }, false)).toBe(false);
   expect(reports.filter(([, p]) => p === 'complete')).toEqual([['outcome write lost (renewal outcome uncertain or lease taken over)', 'complete']]);
 });
-it('a renewal that threw on an already stale claim is not retried: finish reports and writes once', async () => {
+it('stale claim + renewal error: finish writes once without a retry and reports the loss once', async () => {
   const reports = [];
   const writes = [];
   const task = { uuid: 'u', tries: 1, isSending: true, sendingAt: 100 };
@@ -143,4 +143,27 @@ it('a renewal that threw on an already stale claim is not retried: finish report
   const before = writes.length;
   expect(await lease.finish({ isSettled: true }, false)).toBe(false);
   expect(writes.length - before).toBe(1);
+  expect(reports.filter(([, p]) => p !== 'renew')).toEqual([['outcome write lost (renewal outcome uncertain or lease taken over)', 'complete']]);
+});
+it('abort flipped inside the first finish write skips the retry but still reports the loss', async () => {
+  let aborted = false;
+  const reports = [];
+  const settles = [];
+  const task = { uuid: 'u', tries: 1, isSending: true, sendingAt: 100 };
+  const lease = create({ task, interval: 5, maxRenewals: 1, sendingTimeout: 1e15, shouldAbort: () => aborted, report: (e, phase) => reports.push(phase), queue: {
+    async update(_t, fields) {
+      if (fields.isSettled) { settles.push(fields.leaseSendingAt); aborted = true; return false; }
+      if (fields.sendingAt > 100) throw new Error('ack lost');
+      return true;
+    },
+  } });
+  await new Promise((r) => setTimeout(r, 30));
+  expect(lease.__renewUncertain).toBe(true);
+  expect(await lease.finish({ isSettled: true }, false)).toBe(false);
+  expect(settles).toEqual([100]);
+  expect(reports.filter((p) => p === 'complete')).toHaveLength(1);
+});
+it('requires a positive sendingTimeout', () => {
+  expect(() => create({ sendingTimeout: void 0 })).toThrow(/sendingTimeout/);
+  expect(() => create({ sendingTimeout: 0 })).toThrow(/sendingTimeout/);
 });

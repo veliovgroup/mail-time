@@ -1,6 +1,8 @@
 class RecipientPolicyLease {
-  constructor({ task, queue, interval, maxRenewals, sendingTimeout = 0, shouldAbort, report }) {
+  constructor({ task, queue, interval, maxRenewals, sendingTimeout, shouldAbort, report }) {
+    if (typeof sendingTimeout !== 'number' || !(sendingTimeout > 0)) throw new TypeError('RecipientPolicyLease requires a positive sendingTimeout');
     this.__sendingTimeout = sendingTimeout;
+    this.__renewStale = false;
     this.__liveAtAttempt = false;
     this.__task = task;
     this.__queue = queue;
@@ -57,9 +59,17 @@ class RecipientPolicyLease {
           // guard stale. Retry once with the attempted stamp: a peer takeover bumps tries or
           // stamps a later sendingAt while the lease is live, so the retry cannot match a
           // taken-over row. Report if it still fails.
-          if (this.__renewUncertain && phase !== 'renew') {
+          if (this.__renewStale && phase !== 'renew') {
+            // The claim was already stale when the renewal threw: no retry, report the loss.
+            this.__renewStale = false;
+            this.__report(new Error('outcome write lost (renewal outcome uncertain or lease taken over)'), phase);
+          } else if (this.__renewUncertain && phase !== 'renew') {
             this.__renewUncertain = false;
-            if (this.__shouldAbort()) { this.__halt(); return false; }
+            if (this.__shouldAbort()) {
+              this.__report(new Error('outcome write lost (renewal outcome uncertain or lease taken over)'), phase);
+              this.__halt();
+              return false;
+            }
             ok = await operation({ ...guard, leaseSendingAt: this.__attemptedAt });
             if (ok && phase === 'checkpoint') this.__task.sendingAt = this.__attemptedAt;
             if (!ok) this.__report(new Error('outcome write lost (renewal outcome uncertain or lease taken over)'), phase);
@@ -70,7 +80,7 @@ class RecipientPolicyLease {
       } catch (error) {
         // A thrown renewal write only stops further renewals. The lease stays open so
         // finish() still records the outcome; storage-side CAS protects row ownership.
-        if (phase === 'renew') { this.__clearTimer(); this.__renewUncertain = this.__liveAtAttempt; }
+        if (phase === 'renew') { this.__clearTimer(); this.__renewUncertain = this.__liveAtAttempt; this.__renewStale = !this.__liveAtAttempt; }
         else this.__halt();
         this.__report(error, phase);
         return false;

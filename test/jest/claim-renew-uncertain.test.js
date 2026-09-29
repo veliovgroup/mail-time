@@ -8,13 +8,13 @@ afterEach(() => { jest.restoreAllMocks(); for (const i of instances.splice(0)) {
 
 // createQueue().update mirrors persisted fields onto the task it receives, which would
 // heal a stale guard. The renewal write therefore gets a clone: storage applies it, the task stays stale.
-const run = async ({ takeover, destroyOnOutcome = false }) => {
+const run = async ({ takeover, destroyOnOutcome = false, sendingTimeout, renewClaim = 20, unapplied = false, peerCollide = false }) => {
   jest.spyOn(console, 'error').mockImplementation(() => {});
   const onError = jest.fn();
   const onSent = jest.fn();
   const queue = createQueue();
   const mt = new MailTime({
-    queue, onError, onSent, renewClaim: 20, maxRenewals: 100, keepHistory: true, verifyTransports: false,
+    queue, onError, onSent, renewClaim, maxRenewals: 100, keepHistory: true, verifyTransports: false, ...(sendingTimeout ? { sendingTimeout } : {}),
     josk: { adapter: createSchedulerAdapter(), minRevolvingDelay: 60000, maxRevolvingDelay: 60000 },
     transports: [{ options: {}, sendMail: (mail, done) => setTimeout(() => done(null, { accepted: [mail.to] }), 120) }],
     from: 'sender@example.com',
@@ -28,6 +28,11 @@ const run = async ({ takeover, destroyOnOutcome = false }) => {
     if (fields.isSent === true) { outcomeWrites++; if (destroyOnOutcome && outcomeWrites === 1) mt.destroy(); }
     const isRenew = fields.isSending === true && fields.tries === void 0 && typeof fields.leaseTries === 'number' && fields.sendingAt > 0;
     if (!isRenew) return realUpdate(task, fields);
+    if (unapplied && thrown === 0) {
+      thrown++;
+      if (peerCollide) queue.records.get(uuid).sendingAt = fields.sendingAt;
+      throw new Error('renewal failed, not applied');
+    }
     const result = await realUpdate({ ...task }, fields);
     if (thrown++ === 0) {
       if (takeover) queue.records.get(uuid).sendingAt += 100000;
@@ -59,10 +64,12 @@ it('non-policy: a lost renewal ack plus a peer takeover is reported once', async
   expect(row.isSending).toBe(true);
 });
 
-it('non-policy: destroy() inside the first outcome write skips the retry', async () => {
-  const { onSent, outcomeWrites } = await run({ takeover: false, destroyOnOutcome: true });
+it('non-policy: destroy() inside the first outcome write skips the retry and counts the loss', async () => {
+  const { onSent, outcomeWrites, failedWrites, onError } = await run({ takeover: false, destroyOnOutcome: true });
   expect(outcomeWrites).toBe(1);
   expect(onSent).not.toHaveBeenCalled();
+  expect(failedWrites).toBe(1);
+  expect(onError).not.toHaveBeenCalled();
 });
 
 it('non-policy: an unapplied renewal error on attempt 1 does not leak into attempt 2 on the same task object', async () => {
@@ -104,4 +111,23 @@ it('non-policy: an unapplied renewal error on attempt 1 does not leak into attem
   expect(calls).toBe(2);
   expect(failedWrites).toBe(0);
   expect(onError).not.toHaveBeenCalled();
+});
+
+it('non-policy gate: a stale-claim renewal error never retries into a peer row with a colliding stamp', async () => {
+  const { failedWrites, onError, onSent, row, outcomeWrites } = await run({ takeover: false, sendingTimeout: 30, renewClaim: 60, unapplied: true, peerCollide: true });
+  expect(outcomeWrites).toBe(1);
+  expect(onSent).not.toHaveBeenCalled();
+  expect(row.isSent).toBe(false);
+  expect(row.isSending).toBe(true);
+  expect(failedWrites).toBe(1);
+  expect(onError).toHaveBeenCalledTimes(1);
+});
+
+it('non-policy: stale claim, renewal applied then threw, no peer: reported once, no retry', async () => {
+  const { failedWrites, onError, onSent, outcomeWrites } = await run({ takeover: false, sendingTimeout: 30, renewClaim: 60 });
+  expect(outcomeWrites).toBe(1);
+  expect(failedWrites).toBe(1);
+  expect(onError).toHaveBeenCalledTimes(1);
+  expect(onError.mock.calls[0][0].message).toMatch(/outcome write lost/);
+  expect(onSent).not.toHaveBeenCalled();
 });
