@@ -49,8 +49,11 @@ class RecipientPolicyLease {
         if (!ok) this.__halt();
         return ok;
       } catch (error) {
-        this.__halt();
-        if (!this.__shouldAbort()) this.__report(error, phase);
+        // A thrown renewal write only stops further renewals. The lease stays open so
+        // finish() still records the outcome; storage-side CAS protects row ownership.
+        if (phase === 'renew') this.__clearTimer();
+        else this.__halt();
+        this.__report(error, phase);
         return false;
       }
     });
