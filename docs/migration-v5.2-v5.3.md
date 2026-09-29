@@ -12,7 +12,7 @@
 
 ## drain()
 
-`await mailTime.drain()` resolves `{ failedWrites }` (was `undefined`). Storage write failures while recording a send outcome also call `onError` with `details.phase` `'complete'` or `'checkpoint'`. An outcome write lost after a claim-renewal error is retried once and, if still lost, reported the same way.
+`await mailTime.drain()` resolves `{ failedWrites }` (was `undefined`). Storage write failures while recording a send outcome also call `onError` with `details.phase` `'complete'` or `'checkpoint'`. An outcome write lost after a claim-renewal error is retried once (no retry when the claim was already stale at renewal time) and, if still lost, reported the same way.
 
 ## Recipient policies: display names
 

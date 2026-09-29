@@ -77,3 +77,35 @@ it('a lost renewal ack followed by a peer takeover is reported once and does not
   expect(onSent).not.toHaveBeenCalled();
   expect(row.isSending).toBe(true);
 });
+
+it('stale claim + renewal applied then threw + no peer: reported once at checkpoint, no retry, row stays sending', async () => {
+  jest.spyOn(console, 'error').mockImplementation(() => {});
+  const onError = jest.fn();
+  const onSent = jest.fn();
+  const m = createPolicyMailTime({
+    sendingTimeout: 30, renewClaim: 60, maxRenewals: 100, onError, onSent,
+    transports: [{ sendMail(mail, done) { setTimeout(() => done(null, { accepted: mail.envelope.to }), 150); } }],
+  });
+  instances.push(m);
+  const realUpdate = m.queue.update.bind(m.queue);
+  let thrown = 0;
+  let checkpointWrites = 0;
+  m.queue.update = async (task, fields) => {
+    const isRenew = fields.isSending === true && fields.tries === void 0 && fields.recipientResults === void 0 && typeof fields.leaseTries === 'number';
+    if (!isRenew && thrown > 0 && typeof fields.leaseTries === 'number') checkpointWrites++;
+    const result = await realUpdate(task, fields);
+    if (isRenew && thrown++ === 0) throw new Error('ack lost');
+    return result;
+  };
+  const uuid = await m.sendMail({ to: 'a@example.com', text: 'hello' });
+  await m.___send(structuredClone(m.queue.records.get(uuid)));
+  const { failedWrites } = await m.drain();
+  expect(thrown).toBeGreaterThanOrEqual(1);
+  expect(failedWrites).toBe(1);
+  const lost = onError.mock.calls.filter((c) => /outcome write lost/.test(c[0].message));
+  expect(lost).toHaveLength(1);
+  expect(lost[0][2].phase).toBe('checkpoint');
+  expect(checkpointWrites).toBe(1);
+  expect(onSent).not.toHaveBeenCalled();
+  expect(m.queue.records.get(uuid).isSending).toBe(true);
+});

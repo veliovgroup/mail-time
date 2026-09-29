@@ -215,7 +215,7 @@ Stops new dispatches. Plain `destroy()` returns `true` on first call (`false` th
 
 Resolves once every in-flight SMTP send started by the internal pool has settled. The pool is bounded by `concurrency`.
 
-The result's `failedWrites` is the cumulative count (since instance creation) of storage writes that threw while recording a send outcome, plus outcome writes lost after a claim-renewal error (retried once with the renewal's stamp; message `outcome write lost (renewal outcome uncertain or lease taken over)`); each was also reported once through `onError` with `details.phase` `'complete'` or `'checkpoint'`, and its row may stay `sending` until `sendingTimeout` and then be re-sent (at-least-once). After `destroy({ drain: true })`, call `await mailTime.drain()` and compare `failedWrites` with an earlier reading to detect a dirty shutdown.
+The result's `failedWrites` is the cumulative count (since instance creation) of storage writes that threw while recording a send outcome, plus outcome writes lost after a claim-renewal error (retried once with the renewal's stamp (no retry when the claim was already stale at renewal time); message `outcome write lost (renewal outcome uncertain or lease taken over)`); each was also reported once through `onError` with `details.phase` `'complete'` or `'checkpoint'`, and its row may stay `sending` until `sendingTimeout` and then be re-sent (at-least-once). After `destroy({ drain: true })`, call `await mailTime.drain()` and compare `failedWrites` with an earlier reading to detect a dirty shutdown.
 
 Use cases:
 
