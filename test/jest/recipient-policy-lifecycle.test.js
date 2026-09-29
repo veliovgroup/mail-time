@@ -22,11 +22,14 @@ it.each([true, false])('fully suppresses without SMTP or false delivery flags (h
   expect(onSuppressed.mock.calls[0][0]).toMatchObject({ isSettled: true, isSent: false, isFailed: false, isSending: false, sendingAt: 0 });
   expect(m.queue.records.has(uuid)).toBe(keepHistory);
 });
-it.each(['a@example.com, b@example.com', '"Family, Given" <a@example.com>'])('reports terminal preparation failure with no invented recipients: %s', async (to) => {
+it.each(['a@example.com, b@example.com', 'Family, Given <a@example.com>'])('reports terminal preparation failure with no invented recipients: %s', async (to) => {
   const onError = jest.fn();
+  const log = jest.spyOn(console, 'error').mockImplementation(() => {});
   const m = make({ retries: 0, onError });
   const uuid = await m.sendMail({ to, text: 'hello' });
   await attempt(m, uuid);
+  expect(log.mock.calls.some((args) => args.join(' ').includes('`to`') && args.join(' ').includes(uuid))).toBe(true);
+  log.mockRestore();
   expect(onError).toHaveBeenCalledTimes(1);
   expect(onError.mock.calls[0][3]).toEqual([]);
   expect(m.queue.records.get(uuid)).toMatchObject({ tries: 1, isSettled: true, isFailed: true, isSent: false, recipientResults: [] });
@@ -39,10 +42,10 @@ it('consumes and rotates a failed policy attempt, preserves shouldFailOver veto,
   await attempt(m, uuid);
   expect(seen).toEqual(['offline', 'last']);
   expect(m.queue.records.get(uuid)).toMatchObject({ tries: 1, transport: 1, isSending: false, recipientResults: [{ status: 'error' }] });
-  const veto = make({ failsToNext: 1, transports: [{}, {}], shouldFailOver: () => false });
-  const id = await veto.sendMail({ to: 'ambiguous,list', text: 'hello' });
+  const veto = make({ failsToNext: 1, transports: [{}, {}], shouldFailOver: () => false, recipientPolicies: [{ name: 'offline', beforeSend() { throw new Error('offline'); } }] });
+  const id = await veto.sendMail({ to: 'a@example.com', text: 'hello' });
   await attempt(veto, id);
-  expect(veto.queue.records.get(id).transport).toBe(0);
+  expect(veto.queue.records.get(id)).toMatchObject({ tries: 1, transport: 0, isSettled: false });
 });
 it('explicit envelope wins and original headers survive mixed suppression', async () => {
   const sent = [];

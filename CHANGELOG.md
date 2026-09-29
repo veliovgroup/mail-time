@@ -5,6 +5,13 @@
 - `verifyTransports` passes a callback to `transport.verify(callback)`, so callback-only custom transports verify correctly. Nodemailer's contract (callback or returned Promise) is the supported contract. The first of callback, Promise or timeout settles the probe.
 - New `verifyTimeout` option (default `30000` ms). A `verify()` that never settles marks the transport unhealthy instead of blocking `ready()` forever.
 
+## 5.2.2
+
+- Recipient policies accept RFC 5322 display names: quoted names with commas, escaped quotes, or specials, such as `"ostr.io" <no-reply@ostr.io>` and `"Doe, John" <user@example.com>`. 5.2.1 rejected them before SMTP.
+- Address errors name the actual field (`from`, `to[1]`, `envelope.from`, …) through `error.field` and `error.code === 'MAIL_TIME_INVALID_ADDRESS'`. 5.2.1 blamed `envelope.to` for every field. Messages never include the address or display name.
+- An unparseable address fails the task on its current attempt with a logged diagnostic and `onError`, instead of silently retrying until `maxTries`.
+- Line breaks and NUL characters in `{ name }` objects are rejected like those in address strings.
+
 ## 5.2.1
 
 - `destroy({ drain: true })` resolves `true` after a clean drain when the queue scan waited behind in-flight SMTP. `destroy()` and `pause()` drop sends still waiting for a `concurrency` slot; their rows stay unclaimed.

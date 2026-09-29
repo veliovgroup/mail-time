@@ -1,6 +1,6 @@
 {
   "name": "mail-time",
-  "version": "5.2.1",
+  "version": "5.2.2",
   "description": "📮 Email queue extending nodemailer with multi-SMTP transports and horizontally scaled apps support",
   "main": "index.js",
   "types": "./index.d.ts",

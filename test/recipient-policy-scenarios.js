@@ -30,19 +30,20 @@ export const clearPolicyQueue = async (queue) => {
 
 export const runRecipientPolicyScenario = async ({ MailTime, queue, assert, keepHistory = true }) => {
   const envelopes = [];
+  const senders = [];
   const groups = [];
   const instances = [];
   let smtp = 0;
   const config = {
     prefix: queue.prefix, keepHistory, retries: 1, retryDelay: 0, verifyTransports: false,
-    from: 'sender@example.com', josk: { adapter: schedulerAdapter(), minRevolvingDelay: 60000, maxRevolvingDelay: 60000 },
+    from: '"Sender, Inc." <sender@example.com>', josk: { adapter: schedulerAdapter(), minRevolvingDelay: 60000, maxRevolvingDelay: 60000 },
     recipientPolicies: [{ name: 'policy', beforeSend({ recipients }) {
       return { decisions: recipients.filter((r) => r.address === 'd@example.com').map(({ address }) => ({ address, status: 'suppressed', reason: 'opt-out' })) };
     }, classifyRejections({ recipients }) {
       return { decisions: recipients.filter((r) => r.address === 'b@example.com').map(({ address }) => ({ address, status: 'rejected', reason: 'permanent' })) };
     } }],
     transports: [{ sendMail(mail, done) {
-      envelopes.push(mail.envelope.to); smtp++;
+      envelopes.push(mail.envelope.to); senders.push(mail.envelope.from); smtp++;
       done(null, smtp === 1 ? { accepted: ['a@example.com'], rejected: ['b@example.com', 'c@example.com'] } : { accepted: mail.envelope.to });
     } }],
     onSent(task, info, recipients) { groups.push(['sent', recipients.map((r) => r.address)]); },
@@ -56,7 +57,7 @@ export const runRecipientPolicyScenario = async ({ MailTime, queue, assert, keep
   };
   try {
     const first = await make(queue);
-    const uuid = await first.sendMail({ to: ['a@example.com', 'b@example.com', 'c@example.com', 'd@example.com'], cc: [], bcc: [], text: 'hello' });
+    const uuid = await first.sendMail({ to: ['"Doe, A" <a@example.com>', { name: 'B "b"', address: 'b@example.com' }, 'c@example.com', 'D <d@example.com>'], cc: [], bcc: [], text: 'hello' });
     await queue.iterate(); await first.drain();
     assert.deepEqual((await readPolicyTask(queue, uuid)).recipientResults.map((r) => r.status), ['sent', 'rejected', 'error', 'suppressed']);
     assert.lengthOf(groups, 0);
@@ -65,6 +66,7 @@ export const runRecipientPolicyScenario = async ({ MailTime, queue, assert, keep
     const second = await make(secondQueue);
     await secondQueue.iterate(); await second.drain();
     assert.deepEqual(envelopes, [['a@example.com', 'b@example.com', 'c@example.com'], ['c@example.com']]);
+    assert.deepEqual(senders, ['sender@example.com', 'sender@example.com']);
     assert.deepEqual(groups, [['sent', ['a@example.com', 'c@example.com']], ['suppressed', ['d@example.com']], ['rejected', ['b@example.com']]]);
     const stored = await readPolicyTask(secondQueue, uuid);
     if (keepHistory) {
