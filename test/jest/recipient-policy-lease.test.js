@@ -101,7 +101,7 @@ it('an uncertain renewal retries the outcome write once with the attempted stamp
   const guards = [];
   const reports = [];
   const task = { uuid: 'u', tries: 1, isSending: true, sendingAt: 100 };
-  const lease = create({ task, interval: 5, maxRenewals: 1, report: (e, phase) => reports.push([e.message, phase]), queue: {
+  const lease = create({ task, interval: 5, maxRenewals: 1, sendingTimeout: 1e15, report: (e, phase) => reports.push([e.message, phase]), queue: {
     async update(_t, fields) {
       guards.push(fields.leaseSendingAt);
       if (fields.sendingAt > 100 && guards.length === 1) throw new Error('ack lost');
@@ -120,10 +120,27 @@ it('an uncertain renewal retries the outcome write once with the attempted stamp
 it('an uncertain renewal whose retry also fails reports once', async () => {
   const reports = [];
   const task = { uuid: 'u', tries: 1, isSending: true, sendingAt: 100 };
-  const lease = create({ task, interval: 5, maxRenewals: 1, report: (e, phase) => reports.push([e.message, phase]), queue: {
+  const lease = create({ task, interval: 5, maxRenewals: 1, sendingTimeout: 1e15, report: (e, phase) => reports.push([e.message, phase]), queue: {
     async update(_t, fields) { if (fields.sendingAt > 100 && fields.isSending === true && !fields.recipientResults) throw new Error('ack lost'); return false; },
   } });
   await new Promise((r) => setTimeout(r, 30));
   expect(await lease.finish({ isSettled: true }, false)).toBe(false);
   expect(reports.filter(([, p]) => p === 'complete')).toEqual([['outcome write lost (renewal outcome uncertain or lease taken over)', 'complete']]);
+});
+it('a renewal that threw on an already stale claim is not retried: finish reports and writes once', async () => {
+  const reports = [];
+  const writes = [];
+  const task = { uuid: 'u', tries: 1, isSending: true, sendingAt: 100 };
+  const lease = create({ task, interval: 5, maxRenewals: 1, sendingTimeout: 50, report: (e, phase) => reports.push([e.message, phase]), queue: {
+    async update(_t, fields) {
+      writes.push(fields.leaseSendingAt);
+      if (fields.sendingAt > 100 && fields.isSending === true && !fields.isSettled) throw new Error('ack lost');
+      return false;
+    },
+  } });
+  await new Promise((r) => setTimeout(r, 30));
+  expect(lease.__renewUncertain).toBe(false);
+  const before = writes.length;
+  expect(await lease.finish({ isSettled: true }, false)).toBe(false);
+  expect(writes.length - before).toBe(1);
 });

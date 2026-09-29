@@ -2745,7 +2745,9 @@ const normalizeRejections = (error, info, transport) => {
 };
 
 class RecipientPolicyLease {
-  constructor({ task, queue, interval, maxRenewals, shouldAbort, report }) {
+  constructor({ task, queue, interval, maxRenewals, sendingTimeout = 0, shouldAbort, report }) {
+    this.__sendingTimeout = sendingTimeout;
+    this.__liveAtAttempt = false;
     this.__task = task;
     this.__queue = queue;
     this.__shouldAbort = shouldAbort;
@@ -2770,6 +2772,7 @@ class RecipientPolicyLease {
         this.__enqueue(async (guard) => {
           const fields = { isSending: true, sendingAt: Math.max(Date.now(), this.__task.sendingAt + 1) };
           this.__attemptedAt = fields.sendingAt;
+          this.__liveAtAttempt = this.__task.sendingAt > fields.sendingAt - this.__sendingTimeout;
           return await this.__write(fields, guard);
         }).finally(() => { pending = false; });
       }, interval);
@@ -2797,10 +2800,12 @@ class RecipientPolicyLease {
         let ok = await operation(guard);
         if (!ok) {
           // A renewal write that threw may have been applied by storage, which leaves the
-          // guard stale. Retry once with the attempted stamp: a peer takeover always stamps
-          // a later value, so this cannot steal a row. Report if it still fails.
+          // guard stale. Retry once with the attempted stamp: a peer takeover bumps tries or
+          // stamps a later sendingAt while the lease is live, so the retry cannot match a
+          // taken-over row. Report if it still fails.
           if (this.__renewUncertain && phase !== 'renew') {
             this.__renewUncertain = false;
+            if (this.__shouldAbort()) { this.__halt(); return false; }
             ok = await operation({ ...guard, leaseSendingAt: this.__attemptedAt });
             if (ok && phase === 'checkpoint') this.__task.sendingAt = this.__attemptedAt;
             if (!ok) this.__report(new Error('outcome write lost (renewal outcome uncertain or lease taken over)'), phase);
@@ -2811,7 +2816,7 @@ class RecipientPolicyLease {
       } catch (error) {
         // A thrown renewal write only stops further renewals. The lease stays open so
         // finish() still records the outcome; storage-side CAS protects row ownership.
-        if (phase === 'renew') { this.__clearTimer(); this.__renewUncertain = true; }
+        if (phase === 'renew') { this.__clearTimer(); this.__renewUncertain = this.__liveAtAttempt; }
         else this.__halt();
         this.__report(error, phase);
         return false;
@@ -4120,7 +4125,7 @@ class MailTime {
         logError('[private renewClaim] storage error during claim renewal', renewError);
         // Storage may have applied the write before the driver failed; remember the stamp
         // so the outcome write can retry with it (see ___outcomeWrite).
-        this.__uncertainRenewals.set(task, renewedAt);
+        if (task.sendingAt > renewedAt - this.sendingTimeout) this.__uncertainRenewals.set(task, renewedAt);
         halt();
         return;
       }
@@ -4156,7 +4161,7 @@ class MailTime {
    * @internal
    * @memberOf MailTime
    * @name ___outcomeWrite
-   * @description Run a lease-guarded outcome write. `write(t)` must derive its lease guard from `t`. When the write loses the lease and an earlier claim renewal threw (storage may have applied it), retry once with that renewal's stamp; a peer takeover always stamps a later value, so the retry cannot steal a row. If the retry also fails, count and report the lost write. Without an earlier renewal error a lost lease stays a debug-only skip.
+   * @description Run a lease-guarded outcome write. `write(t)` must derive its lease guard from `t`. When the write loses the lease and an earlier claim renewal threw (storage may have applied it), retry once with that renewal's stamp; a peer takeover bumps `tries` or stamps a later `sendingAt` while the lease is live, so the retry cannot match a taken-over row. The stamp is only remembered when the lease was still live at renewal time. If the retry also fails, count and report the lost write. Without an earlier renewal error a lost lease stays a debug-only skip.
    * @param {MailTimeTask} task
    * @param {(t: MailTimeTask) => Promise<boolean>} write
    * @returns {Promise<boolean>}
@@ -4170,6 +4175,9 @@ class MailTime {
       return false;
     }
     this.__uncertainRenewals.delete(task);
+    if (this.__abortInFlight) {
+      return false;
+    }
     if (await write({ ...task, sendingAt: attempted })) {
       return true;
     }
@@ -4191,7 +4199,7 @@ class MailTime {
     }
     Object.assign(task, fields);
     const lease = new RecipientPolicyLease({
-      task, queue: this.queue, interval: this.renewClaim, maxRenewals: this.maxRenewals,
+      task, queue: this.queue, interval: this.renewClaim, maxRenewals: this.maxRenewals, sendingTimeout: this.sendingTimeout,
       shouldAbort: () => this.__abortInFlight,
       report: (error, phase) => {
         if (phase === 'complete' || phase === 'checkpoint') this.___reportWriteFailure(task, error, phase);
@@ -4477,6 +4485,7 @@ class MailTime {
       task.tries = tries;
       task.isSending = true;
       task.sendingAt = sendingAt;
+      this.__uncertainRenewals.delete(task);
 
       let transportIndex = task.transport;
       if (!this.___isHealthyTransport(transportIndex)) {

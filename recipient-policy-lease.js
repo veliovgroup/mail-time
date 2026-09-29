@@ -1,5 +1,7 @@
 class RecipientPolicyLease {
-  constructor({ task, queue, interval, maxRenewals, shouldAbort, report }) {
+  constructor({ task, queue, interval, maxRenewals, sendingTimeout = 0, shouldAbort, report }) {
+    this.__sendingTimeout = sendingTimeout;
+    this.__liveAtAttempt = false;
     this.__task = task;
     this.__queue = queue;
     this.__shouldAbort = shouldAbort;
@@ -24,6 +26,7 @@ class RecipientPolicyLease {
         this.__enqueue(async (guard) => {
           const fields = { isSending: true, sendingAt: Math.max(Date.now(), this.__task.sendingAt + 1) };
           this.__attemptedAt = fields.sendingAt;
+          this.__liveAtAttempt = this.__task.sendingAt > fields.sendingAt - this.__sendingTimeout;
           return await this.__write(fields, guard);
         }).finally(() => { pending = false; });
       }, interval);
@@ -51,10 +54,12 @@ class RecipientPolicyLease {
         let ok = await operation(guard);
         if (!ok) {
           // A renewal write that threw may have been applied by storage, which leaves the
-          // guard stale. Retry once with the attempted stamp: a peer takeover always stamps
-          // a later value, so this cannot steal a row. Report if it still fails.
+          // guard stale. Retry once with the attempted stamp: a peer takeover bumps tries or
+          // stamps a later sendingAt while the lease is live, so the retry cannot match a
+          // taken-over row. Report if it still fails.
           if (this.__renewUncertain && phase !== 'renew') {
             this.__renewUncertain = false;
+            if (this.__shouldAbort()) { this.__halt(); return false; }
             ok = await operation({ ...guard, leaseSendingAt: this.__attemptedAt });
             if (ok && phase === 'checkpoint') this.__task.sendingAt = this.__attemptedAt;
             if (!ok) this.__report(new Error('outcome write lost (renewal outcome uncertain or lease taken over)'), phase);
@@ -65,7 +70,7 @@ class RecipientPolicyLease {
       } catch (error) {
         // A thrown renewal write only stops further renewals. The lease stays open so
         // finish() still records the outcome; storage-side CAS protects row ownership.
-        if (phase === 'renew') { this.__clearTimer(); this.__renewUncertain = true; }
+        if (phase === 'renew') { this.__clearTimer(); this.__renewUncertain = this.__liveAtAttempt; }
         else this.__halt();
         this.__report(error, phase);
         return false;
