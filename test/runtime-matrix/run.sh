@@ -9,7 +9,6 @@ NVM="$HOME/.nvm/versions/node"
 JOSK_VERSION="${JOSK_VERSION:-6.4.0}"
 # label|node|mongodb driver
 MATRIX=(
-  "node12.20.1|v12.20.1|3.7.4"
   "node14.19.3|v14.19.3|3.7.4"
   "node14.21.3|v14.21.3|3.7.4"
   "node16.20.2|v16.20.2|3.7.4"
@@ -19,6 +18,7 @@ MATRIX=(
   "node24.16.0|v24.16.0|7.2.0"
   "bun|bun|6.21.0"
 )
+# Node 12.20.1 was checked by hand: index.js, index.cjs and josk fail to parse (optional chaining), so it is not a row.
 # MT_ONLY="label label" limits the run to those rows.
 if [ -n "${MT_ONLY:-}" ]; then
   FILTERED=(); for row in "${MATRIX[@]}"; do for want in $MT_ONLY; do [ "${row%%|*}" = "$want" ] && FILTERED+=("$row"); done; done
