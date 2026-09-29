@@ -199,6 +199,10 @@ export type MailTimeFromDetails = {
     index: number;
     from: string | undefined;
 };
+export type MailTimeDrainResult = {
+    pending: number;
+    failedWrites: number;
+};
 export type MailTimeOptions = {
     queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue;
     type?: "server" | "client";
@@ -303,6 +307,9 @@ export type MailTimeOptions = {
  */
 /**
  * @typedef {{ index: number, from: string | undefined }} MailTimeFromDetails
+ */
+/**
+ * @typedef {{ pending: number, failedWrites: number }} MailTimeDrainResult
  */
 /**
  * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport, details: MailTimeFromDetails) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, shouldFailOver?: (error: unknown, info: object | undefined, email: MailTimeTask) => boolean, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, renewClaim?: boolean | number, maxRenewals?: number, strictPayload?: boolean, allowedMailFields?: string[], verifyTransports?: boolean, verifyTimeout?: number, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, recipientPolicies?: MailTimeRecipientPolicy[], onError?: (error: unknown, email: MailTimeTask | null, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>, onSent?: (email: MailTimeTask, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>, onSuppressed?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void>, onRejected?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void> }} MailTimeOptions
@@ -418,10 +425,10 @@ export class MailTime {
      * @async
      * @memberOf MailTime
      * @name drain
-     * @description Wait for all in-flight email send attempts to settle
-     * @returns {Promise<void>}
+     * @description Wait for all in-flight email send attempts to settle. Resolves with `{ pending, failedWrites }`: `pending` is the number of sends still running or queued when the wait ends, and `failedWrites` counts, cumulatively since this instance was created, the storage writes that threw while recording a send outcome (each also reported once through `onError` with `details.phase` of `'complete'` or `'checkpoint'`). A row whose write failed can stay `sending` and be re-sent after `sendingTimeout`. Compare `failedWrites` before and after to scope a shutdown.
+     * @returns {Promise<MailTimeDrainResult>}
      */
-    drain(): Promise<void>;
+    drain(): Promise<MailTimeDrainResult>;
     /**
      * @memberOf MailTime
      * @name pause

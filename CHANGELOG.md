@@ -4,6 +4,8 @@
 
 - `verifyTransports` passes a callback to `transport.verify(callback)`, so callback-only custom transports verify correctly. Nodemailer's contract (callback or returned Promise) is the supported contract. The first of callback, Promise or timeout settles the probe.
 - New `verifyTimeout` option (default `30000` ms). A `verify()` that never settles marks the transport unhealthy instead of blocking `ready()` forever.
+- `drain()` resolves `{ pending, failedWrites }` instead of `undefined`. `failedWrites` counts storage writes that threw while recording a send outcome.
+- `onError(error, task, details)` fires once for each such write failure with `details.phase` of `'complete'` (final or retry-release write) or `'checkpoint'` (recipient-policy results written after SMTP). Previously the failure was only logged, so a shutdown drain looked clean while the row stayed `sending` and was re-sent after `sendingTimeout`. Delivery stays at-least-once.
 
 ## 5.2.2
 

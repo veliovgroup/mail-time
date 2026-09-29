@@ -95,7 +95,7 @@ Constructor. The scheduler starts immediately when `opts.type === 'server'`.
 | `template` | `string` | `'{{{html}}}'` | Mustache-like default template wrapping every letter. |
 | `debug` | `boolean` | `false` | Verbose logs. |
 | `onSent` | `(task, info?) => void` | — | Without policies: called **once** after every recipient is accepted (full delivery). Policy mode uses terminal groups below. Not called per attempt or per partially-accepted recipient — see "Per-recipient delivery state" below. |
-| `onError` | `(error, email, details?) => void` | — | Without policies: called after the final retry attempt fails. Policy mode uses terminal groups below. Also fires once per transport that fails `verify()` at startup, with `email === null` and `details = { transportIndex, phase: 'verify' }`. |
+| `onError` | `(error, email, details?) => void` | — | Without policies: called after the final retry attempt fails. Policy mode uses terminal groups below. Also fires once per transport that fails `verify()` at startup, with `email === null` and `details = { transportIndex, phase: 'verify' }`. Also fires once when a storage write that records a send outcome throws, with `details.phase` of `'complete'` (final or retry-release write) or `'checkpoint'` (policy mode, recipient results after SMTP). |
 | `recipientPolicies` | `MailTimeRecipientPolicy[]` | — | Optional providers; full contract: [recipient policies](https://github.com/veliovgroup/mail-time/blob/master/docs/recipient-policies.md). |
 | `onSuppressed` / `onRejected` | `(task, recipients, summary) => void` | — | Terminal recipient groups with policies. |
 
@@ -211,9 +211,13 @@ make sure it is available and properly configured
 
 Stops new dispatches. Plain `destroy()` returns `true` on first call (`false` thereafter) and aborts in-flight completion writes. `await destroy({ drain: true, schedulerTimeout?: number })` awaits JoSk `shutdown()` and then the SMTP pool; sends still waiting for a `concurrency` slot are dropped at once (rows stay unclaimed), so in-flight SMTP does not count against the timeout; returns `false` if a scheduler handler times out or JoSk shutdown throws (logged); never rejects. Default `schedulerTimeout` is 10000 ms; it does not bound JoSk's own storage scan, SMTP, or policy hooks. Invalid timeouts throw before shutdown. See [JoSk 6.4 recovery](https://github.com/veliovgroup/mail-time/blob/master/docs/tuning.md#josk-64-restarts-and-shutdown).
 
-### `mailTime.drain()` → `Promise<void>`
+### `mailTime.drain()` → `Promise<{ pending: number, failedWrites: number }>`
 
-Resolves once every in-flight SMTP send started by the internal pool has settled. The pool is bounded by `concurrency`. Use cases:
+Resolves once every in-flight SMTP send started by the internal pool has settled. The pool is bounded by `concurrency`.
+
+The result's `failedWrites` is the cumulative count (since instance creation) of storage writes that threw while recording a send outcome; each was also reported once through `onError` with `details.phase` `'complete'` or `'checkpoint'`, and its row may stay `sending` until `sendingTimeout` and then be re-sent (at-least-once). After `destroy({ drain: true })`, call `await mailTime.drain()` and compare `failedWrites` with an earlier reading to detect a dirty shutdown. `pending` is the number of sends still running or queued when the wait ended.
+
+Use cases:
 
 - **Graceful shutdown.** `await mailTime.destroy({ drain: true })`. Plain `destroy()` aborts completion writes and leaves claims for stale recovery.
 - **Tests that drive iterate.** Calling `await mailTime.___iterate()` or `await mailTime.queue.iterate()` only awaits the scan + claim phase. SMTP work happens in the pool; `await mailTime.drain()` waits for it.

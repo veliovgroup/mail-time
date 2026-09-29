@@ -280,6 +280,10 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
  */
 
 /**
+ * @typedef {{ pending: number, failedWrites: number }} MailTimeDrainResult
+ */
+
+/**
  * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport, details: MailTimeFromDetails) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, shouldFailOver?: (error: unknown, info: object | undefined, email: MailTimeTask) => boolean, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, renewClaim?: boolean | number, maxRenewals?: number, strictPayload?: boolean, allowedMailFields?: string[], verifyTransports?: boolean, verifyTimeout?: number, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, recipientPolicies?: MailTimeRecipientPolicy[], onError?: (error: unknown, email: MailTimeTask | null, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>, onSent?: (email: MailTimeTask, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>, onSuppressed?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void>, onRejected?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void> }} MailTimeOptions
  */
 
@@ -385,6 +389,7 @@ class MailTime {
     this.__readyPromise = null;
     this.__schedulerTimer = null;
     this.__inFlight = new Set();
+    this.__failedWrites = 0;
     this.__pool = createPool(this.concurrency);
 
     this.failsToNext = (typeof opts.failsToNext === 'number' && opts.failsToNext > 0) ? opts.failsToNext : 4;
@@ -611,14 +616,34 @@ class MailTime {
    * @async
    * @memberOf MailTime
    * @name drain
-   * @description Wait for all in-flight email send attempts to settle
-   * @returns {Promise<void>}
+   * @description Wait for all in-flight email send attempts to settle. Resolves with `{ pending, failedWrites }`: `pending` is the number of sends still running or queued when the wait ends, and `failedWrites` counts, cumulatively since this instance was created, the storage writes that threw while recording a send outcome (each also reported once through `onError` with `details.phase` of `'complete'` or `'checkpoint'`). A row whose write failed can stay `sending` and be re-sent after `sendingTimeout`. Compare `failedWrites` before and after to scope a shutdown.
+   * @returns {Promise<MailTimeDrainResult>}
    */
   async drain() {
     this.__debug('[drain]');
     if (this.__pool) {
       await this.__pool.drain();
     }
+    return { pending: this.__pool ? this.__pool.size : 0, failedWrites: this.__failedWrites };
+  }
+
+  /**
+   * @internal
+   * @memberOf MailTime
+   * @name ___reportWriteFailure
+   * @description Count a failed outcome write and surface it once through `onError(error, task, { phase })`. Never throws. Silent after a non-draining `destroy()`, like every other callback.
+   * @param {MailTimeTask} task
+   * @param {unknown} error
+   * @param {'complete' | 'checkpoint'} [phase]
+   * @returns {void}
+   */
+  ___reportWriteFailure(task, error, phase = 'complete') {
+    this.__failedWrites++;
+    if (this.__abortInFlight) {
+      return;
+    }
+    logError(`[private send] ${phase} write failed; row ${task?.uuid} may stay claimed and be re-sent after sendingTimeout`, error);
+    callHook('onError', this.onError, error, task || null, { phase, attempt: task?.tries, transportIndex: task?.transport });
   }
 
   /**
@@ -1297,7 +1322,10 @@ class MailTime {
     const lease = new RecipientPolicyLease({
       task, queue: this.queue, interval: this.renewClaim, maxRenewals: this.maxRenewals,
       shouldAbort: () => this.__abortInFlight,
-      report: (error) => logError('[recipientPolicies] lease persistence failed', error),
+      report: (error, phase) => {
+        if (phase === 'complete' || phase === 'checkpoint') this.___reportWriteFailure(task, error, phase);
+        else logError('[recipientPolicies] lease persistence failed', error);
+      },
     });
     try {
       if (!lease.active) return;
@@ -1713,7 +1741,7 @@ class MailTime {
               }
               this.__debug(`[private send] Partial delivery, next attempt at ${new Date(nextSendAt)}: #${task.tries}/${this.maxTries} for remaining recipients`);
             } catch (completionError) {
-              logError('[private send] completion error after transport callback', completionError);
+              this.___reportWriteFailure(task, completionError);
             } finally {
               resolve();
             }
@@ -1729,7 +1757,11 @@ class MailTime {
         return;
       }
       logError('Exception during runtime:', e);
-      await this.___handleError(task, e, {});
+      try {
+        await this.___handleError(task, e, {});
+      } catch (completionError) {
+        this.___reportWriteFailure(task, completionError);
+      }
     }
   }
 

@@ -40,7 +40,7 @@ class RecipientPolicyLease {
     this.__closed = true;
   }
 
-  __enqueue(operation) {
+  __enqueue(operation, phase = 'renew') {
     const pending = this.__tail.then(async () => {
       if (!this.active) return false;
       const guard = { leaseTries: this.__task.tries, leaseSendingAt: this.__task.sendingAt };
@@ -50,7 +50,7 @@ class RecipientPolicyLease {
         return ok;
       } catch (error) {
         this.__halt();
-        if (!this.__shouldAbort()) this.__report(error);
+        if (!this.__shouldAbort()) this.__report(error, phase);
         return false;
       }
     });
@@ -66,7 +66,7 @@ class RecipientPolicyLease {
 
   update(fields) {
     if (this.__finishing) return Promise.resolve(false);
-    return this.__enqueue((guard) => this.__write(fields, guard));
+    return this.__enqueue((guard) => this.__write(fields, guard), 'checkpoint');
   }
 
   finish(fields, remove) {
@@ -78,7 +78,7 @@ class RecipientPolicyLease {
       if (ok) Object.assign(this.__task, fields);
       this.__halt();
       return ok;
-    });
+    }, 'complete');
   }
 
   async stop() {
