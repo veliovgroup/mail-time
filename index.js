@@ -280,7 +280,7 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
  */
 
 /**
- * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport, details: MailTimeFromDetails) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, shouldFailOver?: (error: unknown, info: object | undefined, email: MailTimeTask) => boolean, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, renewClaim?: boolean | number, maxRenewals?: number, strictPayload?: boolean, allowedMailFields?: string[], verifyTransports?: boolean, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, recipientPolicies?: MailTimeRecipientPolicy[], onError?: (error: unknown, email: MailTimeTask | null, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>, onSent?: (email: MailTimeTask, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>, onSuppressed?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void>, onRejected?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void> }} MailTimeOptions
+ * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport, details: MailTimeFromDetails) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, shouldFailOver?: (error: unknown, info: object | undefined, email: MailTimeTask) => boolean, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, renewClaim?: boolean | number, maxRenewals?: number, strictPayload?: boolean, allowedMailFields?: string[], verifyTransports?: boolean, verifyTimeout?: number, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, recipientPolicies?: MailTimeRecipientPolicy[], onError?: (error: unknown, email: MailTimeTask | null, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>, onSent?: (email: MailTimeTask, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>, onSuppressed?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void>, onRejected?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void> }} MailTimeOptions
  */
 
 /**
@@ -392,6 +392,7 @@ class MailTime {
     this.transports = Array.isArray(opts.transports) ? opts.transports : [];
     this.transport = 0;
     this.verifyTransports = opts.verifyTransports !== false;
+    this.verifyTimeout = (typeof opts.verifyTimeout === 'number' && opts.verifyTimeout > 0) ? opts.verifyTimeout : 30000;
     this.__unhealthyTransports = new Set();
 
     if (typeof opts.from === 'string') {
@@ -1792,7 +1793,7 @@ class MailTime {
         return { index, ok: true };
       }
       try {
-        await Promise.resolve(transport.verify());
+        await this.___verifyOne(transport, index);
         return { index, ok: true };
       } catch (error) {
         return { index, ok: false, error };
@@ -1815,6 +1816,47 @@ class MailTime {
     if (this.__unhealthyTransports.has(this.transport)) {
       this.transport = this.___nextHealthyTransport(this.transport);
     }
+  }
+
+  /**
+   * @internal
+   * @memberOf MailTime
+   * @name ___verifyOne
+   * @description Run one `transport.verify()` bounded by `verifyTimeout`. Follows the Nodemailer contract: `verify(callback)` takes a callback or returns a Promise. A callback is always passed, so callback-only implementations work; the first of callback, returned Promise or timeout settles the probe and later completions are ignored. A synchronous non-undefined, non-thenable return value (e.g. `false` from Nodemailer for a transport without `verify`) counts as success.
+   * @param {MailTimeTransport} transport
+   * @param {number} index
+   * @returns {Promise<void>}
+   */
+  ___verifyOne(transport, index) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        settle(new Error(`[mail-time] [verifyTransports] transport #${index} verify() timed out after ${this.verifyTimeout}ms`));
+      }, this.verifyTimeout);
+      const settle = (error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      };
+
+      try {
+        const returned = transport.verify((error) => settle(error || void 0));
+        if (returned && typeof returned.then === 'function') {
+          returned.then(() => settle(), (error) => settle(error || new Error('[mail-time] [verifyTransports] verify() rejected')));
+        } else if (returned !== void 0) {
+          settle();
+        }
+      } catch (error) {
+        settle(error);
+      }
+    });
   }
 
   /**
