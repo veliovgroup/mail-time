@@ -22,12 +22,14 @@ MATRIX=(
 # MT_ONLY="label label" limits the run to those rows.
 if [ -n "${MT_ONLY:-}" ]; then
   FILTERED=(); for row in "${MATRIX[@]}"; do for want in $MT_ONLY; do [ "${row%%|*}" = "$want" ] && FILTERED+=("$row"); done; done
-  MATRIX=("${FILTERED[@]}")
+  MATRIX=(${FILTERED[@]+"${FILTERED[@]}"})
+  [ "${#MATRIX[@]}" -gt 0 ] || { echo "MT_ONLY matched no rows" >&2; exit 2; }
 fi
 NPM="$NVM/v24.16.0/bin/npm"; export PATH="$NVM/v24.16.0/bin:$PATH"
 if [ -n "${MT_TARBALL:-}" ]; then cp "$MT_TARBALL" "$WORK/"; else ( cd "$REPO" && npm pack --pack-destination "$WORK" >/dev/null 2>&1 ) || exit 2; fi
 ( cd "$WORK" && npm pack "josk@$JOSK_VERSION" >/dev/null 2>&1 ) || exit 2
 MT_TGZ="$(ls "$WORK"/mail-time-*.tgz)"; JOSK_TGZ="$(ls "$WORK"/josk-*.tgz)"
+echo "source: $(cd "$REPO" && git rev-parse HEAD) (npm pack packs the working tree)"; ( cd "$REPO" && git status --short | sed 's/^/  dirty: /' )
 echo "mail-time tarball: $(basename "$MT_TGZ") sha1 $(shasum "$MT_TGZ" | cut -d' ' -f1)"
 echo "josk tarball: $(basename "$JOSK_TGZ")"
 FAIL=0
