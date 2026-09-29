@@ -3464,7 +3464,7 @@ class MailTime {
     if (this.__abortInFlight) {
       return;
     }
-    logError(`[private send] ${phase} write failed; row ${task?.uuid} may stay claimed and be re-sent after sendingTimeout`, error);
+    logError(`[private send] completion error, ${phase} write failed; row ${task?.uuid} may stay claimed and be re-sent after sendingTimeout`, error);
     callHook('onError', this.onError, error, task || null, { phase, attempt: task?.tries, transportIndex: task?.transport });
   }
 

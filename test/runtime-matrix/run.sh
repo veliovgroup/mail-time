@@ -9,6 +9,8 @@ NVM="$HOME/.nvm/versions/node"
 JOSK_VERSION="${JOSK_VERSION:-6.4.0}"
 # label|node|mongodb driver
 MATRIX=(
+  "node12.20.1|v12.20.1|3.7.4"
+  "node14.19.3|v14.19.3|3.7.4"
   "node14.21.3|v14.21.3|3.7.4"
   "node16.20.2|v16.20.2|3.7.4"
   "node18.19.1|v18.19.1|6.21.0"
@@ -17,6 +19,11 @@ MATRIX=(
   "node24.16.0|v24.16.0|7.2.0"
   "bun|bun|6.21.0"
 )
+# MT_ONLY="label label" limits the run to those rows.
+if [ -n "${MT_ONLY:-}" ]; then
+  FILTERED=(); for row in "${MATRIX[@]}"; do for want in $MT_ONLY; do [ "${row%%|*}" = "$want" ] && FILTERED+=("$row"); done; done
+  MATRIX=("${FILTERED[@]}")
+fi
 NPM="$NVM/v24.16.0/bin/npm"; export PATH="$NVM/v24.16.0/bin:$PATH"
 if [ -n "${MT_TARBALL:-}" ]; then cp "$MT_TARBALL" "$WORK/"; else ( cd "$REPO" && npm pack --pack-destination "$WORK" >/dev/null 2>&1 ) || exit 2; fi
 ( cd "$WORK" && npm pack "josk@$JOSK_VERSION" >/dev/null 2>&1 ) || exit 2
