@@ -7,6 +7,7 @@ class RecipientPolicyLease {
     this.__closed = false;
     this.__finishing = false;
     this.__tail = Promise.resolve();
+    this.__renewUncertain = false;
     this.__timer = null;
     let pending = false;
     let renewals = 0;
@@ -46,12 +47,17 @@ class RecipientPolicyLease {
       const guard = { leaseTries: this.__task.tries, leaseSendingAt: this.__task.sendingAt };
       try {
         const ok = await operation(guard);
-        if (!ok) this.__halt();
+        if (!ok) {
+          // A renewal write that threw may have been applied by storage, which leaves the
+          // guard stale. Surface the lost outcome write once instead of staying silent.
+          if (this.__renewUncertain && phase !== 'renew') this.__report(new Error('outcome write lost after a renewal error'), phase);
+          this.__halt();
+        }
         return ok;
       } catch (error) {
         // A thrown renewal write only stops further renewals. The lease stays open so
         // finish() still records the outcome; storage-side CAS protects row ownership.
-        if (phase === 'renew') this.__clearTimer();
+        if (phase === 'renew') { this.__clearTimer(); this.__renewUncertain = true; }
         else this.__halt();
         this.__report(error, phase);
         return false;

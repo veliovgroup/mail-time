@@ -5,10 +5,10 @@
 ## Transport verification
 
 - `ready()` waits at most `verifyTimeout` (default 30000 ms) per transport. A `verify()` that neither calls back nor returns a Promise now delays `ready()` by that time and stays usable, with one warning. Fix such a transport so it calls the callback or returns a Promise, or set `verifyTimeout` lower.
-- A sole SMTP host that accepts connections but never answers used to reject `ready()` after about 120 s. Now `ready()` resolves at `verifyTimeout` and the failure reaches `onError(error, null, { phase: 'verify' })` when Nodemailer reports it.
+- A sole SMTP host that accepts connections but never answers used to reject `ready()` after about 30 s (Nodemailer's default `greetingTimeout`). The 120 s figure applies only to a host that never completes the TCP connection. Now `ready()` resolves at `verifyTimeout` and the failure reaches `onError(error, null, { phase: 'verify' })` when Nodemailer reports it.
 - `onError(error, null, { transportIndex, phase: 'verify' })` still means the transport is quarantined. A timeout alone does not fire it.
 - A quarantined transport is re-probed in the background (60 s, doubling to 15 min) and returns to rotation after a successful `verify()`. Before, it stayed out until restart. Code that relied on restart-only recovery needs no change.
-- `verifyTimeout` accepts positive finite numbers up to `2147483647`. Other values use `30000`.
+- `verifyTimeout` accepts positive numbers; values above `2147483647`, including `Infinity`, are clamped to `2147483647`. Other values use `30000`.
 
 ## drain()
 

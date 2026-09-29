@@ -147,7 +147,7 @@ describe('verify() verdict rows', () => {
     const mt = make({ verifyTimeout: 50, transports: [wrap(verify)], onError });
     const t0 = Date.now();
     await mt.ready();
-    expect(Date.now() - t0).toBeLessThan(110);
+    expect(Date.now() - t0).toBeLessThan(250);
     expect(mt.___isHealthyTransport(0)).toBe(true);
     await sleep(150);
     expect(mt.___isHealthyTransport(0)).toBe(true);

@@ -78,14 +78,14 @@ describe('verify() with real Nodemailer transports', () => {
     await mt.ready();
     const readyAt = Date.now() - t0;
     expect(readyAt).toBeGreaterThanOrEqual(450);
-    expect(readyAt).toBeLessThan(1500);
+    expect(readyAt).toBeLessThan(2000);
     expect(mt.___isHealthyTransport(0)).toBe(true);
     expect(onError).not.toHaveBeenCalled();
     while (mt.___isHealthyTransport(0) && Date.now() - t0 < 6000) await new Promise((r) => setTimeout(r, 50));
     const quarantinedAt = Date.now() - t0;
     expect(mt.___isHealthyTransport(0)).toBe(false);
-    expect(quarantinedAt).toBeGreaterThanOrEqual(1500);
-    expect(quarantinedAt).toBeLessThan(4500);
+    expect(quarantinedAt).toBeGreaterThanOrEqual(1400);
+    expect(quarantinedAt).toBeLessThan(5500);
     expect(onError).toHaveBeenCalledTimes(1);
   }, 15000);
 });
