@@ -51,12 +51,12 @@ afterEach(() => {
 });
 
 describe('completion-write visibility', () => {
-  it('drain() reports zero failures and no pending when writes succeed', async () => {
+  it('drain() reports zero failures when writes succeed', async () => {
     const onError = jest.fn();
     const onSent = jest.fn();
     const mt = make({ onError, onSent });
     await run(mt);
-    await expect(mt.drain()).resolves.toEqual({ pending: 0, failedWrites: 0 });
+    await expect(mt.drain()).resolves.toEqual({ failedWrites: 0 });
     expect(onSent).toHaveBeenCalledTimes(1);
     expect(onError).not.toHaveBeenCalled();
   });
@@ -69,7 +69,7 @@ describe('completion-write visibility', () => {
     const error = breakCompletionWrites(mt.queue);
     const uuid = await run(mt);
     const result = await mt.drain();
-    expect(result).toEqual({ pending: 0, failedWrites: 1 });
+    expect(result).toEqual({ failedWrites: 1 });
     expect(onError).toHaveBeenCalledTimes(1);
     const [err, task, details] = onError.mock.calls[0];
     expect(err).toBe(error);
@@ -89,7 +89,7 @@ describe('completion-write visibility', () => {
     const mt = make({ transports: [failTransport()], onError });
     breakCompletionWrites(mt.queue);
     await run(mt);
-    expect(await mt.drain()).toEqual({ pending: 0, failedWrites: 1 });
+    expect(await mt.drain()).toEqual({ failedWrites: 1 });
     expect(onError).toHaveBeenCalledTimes(1);
     expect(onError.mock.calls[0][2].phase).toBe('complete');
   });
@@ -100,7 +100,7 @@ describe('completion-write visibility', () => {
     const mt = make({ transports: [{ options: { from: 'sender@example.com' }, sendMail() { throw new Error('sync'); } }], onError });
     breakCompletionWrites(mt.queue);
     await run(mt);
-    expect(await mt.drain()).toEqual({ pending: 0, failedWrites: 1 });
+    expect(await mt.drain()).toEqual({ failedWrites: 1 });
     expect(onError).toHaveBeenCalledTimes(1);
     await new Promise((r) => setImmediate(r));
     expect(unhandled).toEqual([]);
@@ -159,7 +159,7 @@ describe('completion-write visibility with recipient policies', () => {
     const error = failOn(mt.queue, (f) => f.isSettled === true);
     const uuid = await mt.sendMail({ to: 'a@example.com', text: 'hello' });
     await mt.___dispatch(structuredClone(mt.queue.records.get(uuid)));
-    expect(await mt.drain()).toEqual({ pending: 0, failedWrites: 1 });
+    expect(await mt.drain()).toEqual({ failedWrites: 1 });
     expect(onError).toHaveBeenCalledTimes(1);
     expect(onError.mock.calls[0][0]).toBe(error);
     expect(onError.mock.calls[0][2]).toMatchObject({ phase: 'complete' });
@@ -185,7 +185,7 @@ describe('completion-write visibility with recipient policies', () => {
     instances.push(mt);
     const uuid = await mt.sendMail({ to: 'a@example.com', text: 'hello' });
     await mt.___dispatch(structuredClone(mt.queue.records.get(uuid)));
-    expect(await mt.drain()).toEqual({ pending: 0, failedWrites: 0 });
+    expect(await mt.drain()).toEqual({ failedWrites: 0 });
     expect(onError).not.toHaveBeenCalled();
     expect(mt.queue.records.get(uuid)).toMatchObject({ isSettled: true, isSent: true });
   });
