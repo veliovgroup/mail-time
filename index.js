@@ -405,6 +405,7 @@ class MailTime {
     this.__verifyGen = [];
     this.__reprobe = new Map();
     this.__probeCancels = new Set();
+    this.__uncertainRenewals = new WeakMap();
 
     if (typeof opts.from === 'string') {
       const fromStr = opts.from;
@@ -624,7 +625,7 @@ class MailTime {
    * @async
    * @memberOf MailTime
    * @name drain
-   * @description Wait for all in-flight email send attempts to settle. Resolves with `{ failedWrites }`, the count since this instance was created of failures while recording a send outcome (a storage write that threw, or an exception in the completion path). Each is also reported once through `onError` with `details.phase` of `'complete'` or `'checkpoint'`, except after a plain `destroy()`, which still counts but suppresses the hook and the log. A row whose write failed can stay `sending` and be re-sent after `sendingTimeout`. Compare `failedWrites` before and after to scope a shutdown.
+   * @description Wait for all in-flight email send attempts to settle. Resolves with `{ failedWrites }`, the count since this instance was created of failures while recording a send outcome: a storage write that threw, an exception in the completion path, or an outcome write lost after a claim-renewal error (message `outcome write lost (renewal outcome uncertain or lease taken over)`, after one retry with the renewal's stamp). Each is also reported once through `onError` with `details.phase` of `'complete'` or `'checkpoint'`, except after a plain `destroy()`, which still counts but suppresses the hook and the log. A row whose write failed can stay `sending` and be re-sent after `sendingTimeout`. Compare `failedWrites` before and after to scope a shutdown.
    * @returns {Promise<MailTimeDrainResult>}
    */
   async drain() {
@@ -837,21 +838,15 @@ class MailTime {
     if (task.tries >= this.maxTries) {
       this.___finalizeRejected(task, info);
 
-      const leaseRemove = __leaseRemoveOpts(task);
-      const leaseUpdate = __withLease(task, {
-        isSent: false,
-        isFailed: true,
-        isSending: false,
-        sendingAt: 0,
-        mailOptions: task.mailOptions,
-      });
-
-      let finalized = false;
-      if (!this.keepHistory) {
-        finalized = await this.queue.remove(task, leaseRemove);
-      } else {
-        finalized = await this.queue.update(task, leaseUpdate);
-      }
+      const finalized = await this.___outcomeWrite(task, (t) => (!this.keepHistory
+        ? this.queue.remove(t, __leaseRemoveOpts(t))
+        : this.queue.update(t, __withLease(t, {
+          isSent: false,
+          isFailed: true,
+          isSending: false,
+          sendingAt: 0,
+          mailOptions: task.mailOptions,
+        }))));
 
       if (!finalized) {
         this.__debug('[private handleError] lease lost before final failure update, skipping onError', task.uuid);
@@ -877,12 +872,12 @@ class MailTime {
       transportIndex = this.___nextHealthyTransport(transportIndex);
     }
 
-    const released = await this.queue.update(task, __withLease(task, {
+    const released = await this.___outcomeWrite(task, (t) => this.queue.update(t, __withLease(t, {
       isSending: false,
       sendingAt: 0,
       sendAt: Date.now() + this.retryDelay,
       transport: transportIndex,
-    }));
+    })));
 
     if (!released) {
       this.__debug('[private handleError] lease lost before retry release, skipping', task.uuid);
@@ -1284,6 +1279,9 @@ class MailTime {
         }));
       } catch (renewError) {
         logError('[private renewClaim] storage error during claim renewal', renewError);
+        // Storage may have applied the write before the driver failed; remember the stamp
+        // so the outcome write can retry with it (see ___outcomeWrite).
+        this.__uncertainRenewals.set(task, renewedAt);
         halt();
         return;
       }
@@ -1312,6 +1310,32 @@ class MailTime {
     }
 
     return { stop };
+  }
+
+  /**
+   * @async
+   * @internal
+   * @memberOf MailTime
+   * @name ___outcomeWrite
+   * @description Run a lease-guarded outcome write. `write(t)` must derive its lease guard from `t`. When the write loses the lease and an earlier claim renewal threw (storage may have applied it), retry once with that renewal's stamp; a peer takeover always stamps a later value, so the retry cannot steal a row. If the retry also fails, count and report the lost write. Without an earlier renewal error a lost lease stays a debug-only skip.
+   * @param {MailTimeTask} task
+   * @param {(t: MailTimeTask) => Promise<boolean>} write
+   * @returns {Promise<boolean>}
+   */
+  async ___outcomeWrite(task, write) {
+    if (await write(task)) {
+      return true;
+    }
+    const attempted = this.__uncertainRenewals.get(task);
+    if (attempted === void 0) {
+      return false;
+    }
+    this.__uncertainRenewals.delete(task);
+    if (await write({ ...task, sendingAt: attempted })) {
+      return true;
+    }
+    this.___reportWriteFailure(task, new Error('outcome write lost (renewal outcome uncertain or lease taken over)'), 'complete');
+    return false;
   }
 
   /** @internal Serialize every policy checkpoint with this attempt's claim renewal. */
@@ -1667,20 +1691,14 @@ class MailTime {
               if (isFullyDelivered) {
                 this.__debug(`email successfully sent, attempts: #${task.tries}, transport #${transportIndex} to: `, compiledOpts.to);
 
-                const leaseRemove = __leaseRemoveOpts(task);
-                const leaseUpdate = __withLease(task, {
-                  isSent: true,
-                  isSending: false,
-                  sendingAt: 0,
-                  mailOptions: task.mailOptions,
-                });
-
-                let completed = false;
-                if (!this.keepHistory) {
-                  completed = await this.queue.remove(task, leaseRemove);
-                } else {
-                  completed = await this.queue.update(task, leaseUpdate);
-                }
+                const completed = await this.___outcomeWrite(task, (t) => (!this.keepHistory
+                  ? this.queue.remove(t, __leaseRemoveOpts(t))
+                  : this.queue.update(t, __withLease(t, {
+                    isSent: true,
+                    isSending: false,
+                    sendingAt: 0,
+                    mailOptions: task.mailOptions,
+                  }))));
 
                 if (!completed) {
                   this.__debug('[private send] lease lost before success completion, skipping onSent', task.uuid);
@@ -1698,21 +1716,15 @@ class MailTime {
               if (task.tries >= this.maxTries) {
                 this.___finalizeRejected(task, info);
 
-                const leaseRemove = __leaseRemoveOpts(task);
-                const leaseUpdate = __withLease(task, {
-                  isSent: false,
-                  isFailed: true,
-                  isSending: false,
-                  sendingAt: 0,
-                  mailOptions: task.mailOptions,
-                });
-
-                let finalized = false;
-                if (!this.keepHistory) {
-                  finalized = await this.queue.remove(task, leaseRemove);
-                } else {
-                  finalized = await this.queue.update(task, leaseUpdate);
-                }
+                const finalized = await this.___outcomeWrite(task, (t) => (!this.keepHistory
+                  ? this.queue.remove(t, __leaseRemoveOpts(t))
+                  : this.queue.update(t, __withLease(t, {
+                    isSent: false,
+                    isFailed: true,
+                    isSending: false,
+                    sendingAt: 0,
+                    mailOptions: task.mailOptions,
+                  }))));
 
                 if (!finalized) {
                   this.__debug('[private send] lease lost before partial-failure completion, skipping onError', task.uuid);
@@ -1737,12 +1749,12 @@ class MailTime {
               }
 
               const nextSendAt = Date.now() + this.retryDelay;
-              const released = await this.queue.update(task, __withLease(task, {
+              const released = await this.___outcomeWrite(task, (t) => this.queue.update(t, __withLease(t, {
                 isSending: false,
                 sendingAt: 0,
                 sendAt: nextSendAt,
                 mailOptions: task.mailOptions,
-              }));
+              })));
               if (!released) {
                 this.__debug('[private send] lease lost before partial retry release', task.uuid);
                 return;

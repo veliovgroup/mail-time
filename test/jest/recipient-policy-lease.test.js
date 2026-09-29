@@ -97,3 +97,33 @@ it('disables the timer with a zero budget', async () => {
   expect(update).not.toHaveBeenCalled();
   await lease.stop();
 });
+it('an uncertain renewal retries the outcome write once with the attempted stamp', async () => {
+  const guards = [];
+  const reports = [];
+  const task = { uuid: 'u', tries: 1, isSending: true, sendingAt: 100 };
+  const lease = create({ task, interval: 5, maxRenewals: 1, report: (e, phase) => reports.push([e.message, phase]), queue: {
+    async update(_t, fields) {
+      guards.push(fields.leaseSendingAt);
+      if (fields.sendingAt > 100 && guards.length === 1) throw new Error('ack lost');
+      return fields.leaseSendingAt !== 100;
+    },
+    async remove() { return false; },
+  } });
+  await new Promise((r) => setTimeout(r, 30));
+  expect(lease.__renewUncertain).toBe(true);
+  expect(await lease.update({ recipientResults: [] })).toBe(true);
+  expect(guards[1]).toBe(100);
+  expect(guards[2]).toBeGreaterThan(100);
+  expect(reports.filter(([, p]) => p !== 'renew')).toEqual([]);
+  await lease.stop();
+});
+it('an uncertain renewal whose retry also fails reports once', async () => {
+  const reports = [];
+  const task = { uuid: 'u', tries: 1, isSending: true, sendingAt: 100 };
+  const lease = create({ task, interval: 5, maxRenewals: 1, report: (e, phase) => reports.push([e.message, phase]), queue: {
+    async update(_t, fields) { if (fields.sendingAt > 100 && fields.isSending === true && !fields.recipientResults) throw new Error('ack lost'); return false; },
+  } });
+  await new Promise((r) => setTimeout(r, 30));
+  expect(await lease.finish({ isSettled: true }, false)).toBe(false);
+  expect(reports.filter(([, p]) => p === 'complete')).toEqual([['outcome write lost (renewal outcome uncertain or lease taken over)', 'complete']]);
+});

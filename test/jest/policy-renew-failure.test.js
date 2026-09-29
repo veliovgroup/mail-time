@@ -33,28 +33,47 @@ it('a throwing claim-renewal write does not leave the policy outcome silent', as
   expect(onSent).toHaveBeenCalledTimes(1);
 });
 
-it('a lost renewal ack (storage applied, driver threw) is surfaced once instead of staying silent', async () => {
+const lostAck = async ({ takeover }) => {
   jest.spyOn(console, 'error').mockImplementation(() => {});
   const onError = jest.fn();
+  const onSent = jest.fn();
   const m = createPolicyMailTime({
-    renewClaim: 20, maxRenewals: 100, onError,
+    renewClaim: 20, maxRenewals: 100, onError, onSent,
     transports: [{ sendMail(mail, done) { setTimeout(() => done(null, { accepted: mail.envelope.to }), 120); } }],
   });
   instances.push(m);
   const realUpdate = m.queue.update.bind(m.queue);
   let thrown = 0;
+  const uuid = await m.sendMail({ to: 'a@example.com', text: 'hello' });
   m.queue.update = async (task, fields) => {
     const isRenew = fields.isSending === true && fields.tries === void 0 && fields.recipientResults === void 0 && typeof fields.leaseTries === 'number';
     const result = await realUpdate(task, fields);
-    if (isRenew && thrown++ === 0) throw new Error('ack lost');
+    if (isRenew && thrown++ === 0) {
+      if (takeover) m.queue.records.get(uuid).sendingAt += 100000;
+      throw new Error('ack lost');
+    }
     return result;
   };
-  const uuid = await m.sendMail({ to: 'a@example.com', text: 'hello' });
   await m.___send(structuredClone(m.queue.records.get(uuid)));
   const { failedWrites } = await m.drain();
   expect(thrown).toBeGreaterThanOrEqual(1);
+  return { failedWrites, onError, onSent, row: m.queue.records.get(uuid) };
+};
+
+it('a lost renewal ack (storage applied, driver threw) recovers with one retry and completes cleanly', async () => {
+  const { failedWrites, onError, onSent, row } = await lostAck({ takeover: false });
+  expect(failedWrites).toBe(0);
+  expect(onError).not.toHaveBeenCalled();
+  expect(onSent).toHaveBeenCalledTimes(1);
+  expect(row.isSent === true || row.isSettled === true).toBe(true);
+});
+
+it('a lost renewal ack followed by a peer takeover is reported once and does not steal the row', async () => {
+  const { failedWrites, onError, onSent, row } = await lostAck({ takeover: true });
   expect(failedWrites).toBe(1);
   const lost = onError.mock.calls.filter((c) => /outcome write lost/.test(c[0].message));
   expect(lost).toHaveLength(1);
   expect(['checkpoint', 'complete']).toContain(lost[0][2].phase);
+  expect(onSent).not.toHaveBeenCalled();
+  expect(row.isSending).toBe(true);
 });

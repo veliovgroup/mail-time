@@ -8,6 +8,7 @@ class RecipientPolicyLease {
     this.__finishing = false;
     this.__tail = Promise.resolve();
     this.__renewUncertain = false;
+    this.__attemptedAt = 0;
     this.__timer = null;
     let pending = false;
     let renewals = 0;
@@ -22,6 +23,7 @@ class RecipientPolicyLease {
         renewals++;
         this.__enqueue(async (guard) => {
           const fields = { isSending: true, sendingAt: Math.max(Date.now(), this.__task.sendingAt + 1) };
+          this.__attemptedAt = fields.sendingAt;
           return await this.__write(fields, guard);
         }).finally(() => { pending = false; });
       }, interval);
@@ -46,12 +48,18 @@ class RecipientPolicyLease {
       if (!this.active) return false;
       const guard = { leaseTries: this.__task.tries, leaseSendingAt: this.__task.sendingAt };
       try {
-        const ok = await operation(guard);
+        let ok = await operation(guard);
         if (!ok) {
           // A renewal write that threw may have been applied by storage, which leaves the
-          // guard stale. Surface the lost outcome write once instead of staying silent.
-          if (this.__renewUncertain && phase !== 'renew') this.__report(new Error('outcome write lost after a renewal error'), phase);
-          this.__halt();
+          // guard stale. Retry once with the attempted stamp: a peer takeover always stamps
+          // a later value, so this cannot steal a row. Report if it still fails.
+          if (this.__renewUncertain && phase !== 'renew') {
+            this.__renewUncertain = false;
+            ok = await operation({ ...guard, leaseSendingAt: this.__attemptedAt });
+            if (ok && phase === 'checkpoint') this.__task.sendingAt = this.__attemptedAt;
+            if (!ok) this.__report(new Error('outcome write lost (renewal outcome uncertain or lease taken over)'), phase);
+          }
+          if (!ok) this.__halt();
         }
         return ok;
       } catch (error) {

@@ -13,9 +13,10 @@ Transport verification
 
 Completion writes and drain
 
-- `drain()` resolves `{ failedWrites }` instead of `undefined`. `failedWrites` counts failures while recording a send outcome, cumulatively since the instance was created, and still counts after a plain `destroy()`.
+- `drain()` resolves `{ failedWrites }` instead of `undefined`. `failedWrites` counts failures while recording a send outcome (a storage write that threw, or an outcome write lost after a claim-renewal error), cumulatively since the instance was created, and still counts after a plain `destroy()`.
 - `onError(error, task, details)` fires once for each such write failure with `details.phase` of `'complete'` (final or retry-release write) or `'checkpoint'` (recipient-policy results written after SMTP). Previously the failure was only logged, so a shutdown drain looked clean while the row stayed `sending` and was re-sent after `sendingTimeout`. Delivery stays at-least-once.
 - Recipient-policy mode: a claim-renewal write that throws stops further renewals only. The outcome write still runs. Before, the lease closed, no outcome was written, and the row stayed `sending` with no `onError` and `failedWrites` at 0, which produced a silent duplicate send later.
+- Both modes: a claim-renewal write that throws may have been applied by storage, which made the outcome write fail its lease guard silently. MailTime now retries the outcome write once with the attempted renewal stamp (a peer takeover always stamps a later value, so a taken-over row is never overwritten). A clean recovery reports nothing. If the retry fails too, `onError` receives `outcome write lost (renewal outcome uncertain or lease taken over)` with `details.phase` `'complete'` or `'checkpoint'` and `failedWrites` increments.
 
 Runtimes
 
