@@ -1,6 +1,6 @@
 Package.describe({
   name: 'ostrio:mailer',
-  version: '5.2.2',
+  version: '5.3.0',
   summary: '📮 Email queue extending nodemailer with multi-SMTP transports and horizontally scaled apps support',
   git: 'https://github.com/veliovgroup/mail-time',
   documentation: 'README.md'
