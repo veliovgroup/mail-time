@@ -35,7 +35,7 @@ Many clients + one or more servers coexist behind the same `prefix` in the same 
 - 📮 **Email concatenation** — fold same-`to` emails arriving inside a window into one letter.
 - 🎛️ **One-line setup** — built-in [presets](#settings-presets) for `transactional`, `otp`, `newsletter`, `marketing`, `notifications`, `alerts`.
 - 🛢️ **Three first-party storages** — MongoDB, Redis, PostgreSQL. Plus a [custom-adapter contract](https://github.com/veliovgroup/mail-time/blob/master/docs/queue-api.md).
-- 📦 **Bun ≥ 1.1.0 & Node ≥ 20.9.0** — same code, both runtimes.
+- 📦 **Bun ≥ 1.1.0 & Node ≥ 14.19.3** — same code, both runtimes. See [supported runtimes](#supported-runtimes).
 - 🤖 **Ships with AI agent skills** — see [AI agent skills](#ai-agent-skills) below.
 - 📐 **Hand-tuned ESM + CJS + TypeScript declarations**.
 - 🧪 **99%+ Jest line coverage** (85% threshold enforced) + Mocha integration tests for every adapter.
@@ -623,9 +623,18 @@ bun test ./test/jest
 
 `npm test` runs Jest unit tests, then Mocha integration tests, then TypeScript declaration tests. Jest coverage threshold is **85%** across statements, branches, functions, and lines. GitHub Actions runs the matrix against `redis@^4` and `redis@^5`.
 
+## Supported runtimes
+
+`engines.node` is `>=14.19.3`. The published package (ESM `index.js` and CJS `index.cjs`) is tested from a packed tarball with `test/runtime-matrix/run.sh` on Node 14.19.3, 14.21.3, 16.20.2, 18.19.1, 20.11.1, 22.21.1, 24.16.0 and Bun. Each run sends through a stub transport with `MongoQueue`, and checks load, shutdown, `pause()`/`resume()` and drain behavior (12 checks, all passing).
+
+- Node 12 fails to parse the package (optional chaining). Node 14.0 to 14.16 lack `crypto.randomUUID`; 14.17 to 14.18 are untested.
+- The dependency `josk` declares `engines.node >=20.9.0`, but its code runs on Node 14 with `josk@6.4.0`. Package managers that enforce `engines` (`npm --engine-strict`, Yarn 1) reject the install on Node below 20.9 until JoSk relaxes its field.
+- Store drivers set their own floor. `mongodb` 7 needs Node 20.19+, `mongodb` 6 needs 16.20.1+, `mongodb` 5 needs 14.20.1+; `redis` 5 needs 18.19+; `pg` 8 needs 16+. The Node 14 and 16 runs used `mongodb@3.7.4`. Only `MongoQueue` is tested below Node 18. `RedisQueue` and `PostgresQueue` load on those versions but are untested there.
+- The repository's own test suite (Jest 30, Mocha 11, TypeScript 6) runs on Node 18.19 and later. CI runs it on Node 20.9, 22 and LTS, and runs the packed-artifact matrix on Node 14.19.3, 16.20.2 and 18.19.1.
+
 ## Bun
 
-MailTime ships pure ESM with a generated CJS bundle. Both runtimes (Bun ≥ 1.1.0, Node ≥ 20.9.0) load it directly:
+MailTime ships pure ESM with a generated CJS bundle. Both runtimes (Bun ≥ 1.1.0, Node ≥ 14.19.3) load it directly:
 
 ```js
 import { MailTime } from 'mail-time'; // works in both

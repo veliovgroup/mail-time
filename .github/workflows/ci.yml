@@ -256,6 +256,57 @@ jobs:
       - name: Redis Cluster integration
         run: npm run test:mocha:redis-cluster
 
+  node-floor:
+    name: node ${{ matrix.node }} · packed artifact · mongodb ${{ matrix.mongodb }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node: '14.19.3'
+            mongodb: '3.7.4'
+          - node: '16.20.2'
+            mongodb: '3.7.4'
+          - node: '18.19.1'
+            mongodb: '6.21.0'
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+    steps:
+      - uses: actions/checkout@v4
+
+      # Build and install with a current Node; only the probe runs on the floor version.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Pack mail-time and josk, install into a scratch project
+        run: |
+          mkdir -p "$RUNNER_TEMP/floor"
+          npm pack --pack-destination "$RUNNER_TEMP/floor" >/dev/null
+          JOSK_VERSION="$(node -p "require('./node_modules/josk/package.json').version")"
+          (cd "$RUNNER_TEMP/floor" && npm pack "josk@${JOSK_VERSION}" >/dev/null)
+          cd "$RUNNER_TEMP/floor"
+          cat > package.json <<JSON
+          {"name":"floor","private":true,"type":"module","dependencies":{"mail-time":"file:$(ls mail-time-*.tgz)","josk":"file:$(ls josk-*.tgz)","mongodb":"${{ matrix.mongodb }}"},"overrides":{"josk":"file:$(ls josk-*.tgz)"}}
+          JSON
+          npm install --no-audit --no-fund --ignore-scripts --engine-strict=false
+          cp "$GITHUB_WORKSPACE/test/runtime-matrix/probe.mjs" .
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Probe on Node ${{ matrix.node }}
+        working-directory: ${{ runner.temp }}/floor
+        run: node probe.mjs mongodb://127.0.0.1:27017/mtfloor
+
   meteor-mongo:
     name: meteor ${{ matrix.meteor-release }} · mongo (built-in)
     runs-on: ubuntu-latest

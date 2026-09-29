@@ -124,7 +124,7 @@ const sayName = (name) => {
 
 ## Standards
 - Terse. No obvious comments. Exact adapter API compliance.
-- ESM primary; JSDoc on public API; CJS generated. Node ≥ 20.9.0, Bun ≥ 1.1.0.
+- ESM primary; JSDoc on public API; CJS generated. Node ≥ 14.19.3 (runtime; dev toolchain needs Node 20+), Bun ≥ 1.1.0.
 - JSDoc on source drives `.d.ts`. Mark internal methods with the `___`/`__` prefix; they get stripped.
 - Strict validation in constructors. Throw with `[mail-time] [<scope>]` prefix.
 - One runtime dep: `josk`. **Don't add deps** without strong reason — the package's selling points are "tiny, no fluff".

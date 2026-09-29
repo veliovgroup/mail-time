@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `engines.node` is `>=14.19.3` (was `>=20.9.0`). The package loads and passes 12 send, shutdown and drain checks from a packed tarball on Node 14.19.3, 14.21.3, 16.20.2, 18.19.1, 20.11.1, 22.21.1, 24.16.0 and Bun. Node 12 cannot parse it. `josk` still declares `>=20.9.0`, so engine-strict installs need Node 20.9+. See "Supported runtimes" in the README.
 - `verifyTransports` passes a callback to `transport.verify(callback)`, so callback-only custom transports verify correctly. Nodemailer's contract (callback or returned Promise) is the supported contract. The first of callback, Promise or timeout settles the probe.
 - New `verifyTimeout` option (default `30000` ms). A `verify()` that never settles marks the transport unhealthy instead of blocking `ready()` forever.
 - `drain()` resolves `{ pending, failedWrites }` instead of `undefined`. `failedWrites` counts storage writes that threw while recording a send outcome.

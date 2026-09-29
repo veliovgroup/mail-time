@@ -1,6 +1,6 @@
 # MailTime 3.x (legacy, Node 14.20+ / 16)
 
-Read this file instead of `api.md` / `recipes.md` / `tuning.md` when `package.json` pins `mail-time` below `4.0.0` or the runtime is Node < 20.9. `3.0.0` is the last release that runs on Node 14/16 (`engines.node >=14.20.0`); `4.0.0` and later require Node ≥ 20.9 / Bun ≥ 1.1. It pairs with `josk@^5` — read `legacy-v5.md` in the `josk` skill for the scheduler side.
+Read this file instead of `api.md` / `recipes.md` / `tuning.md` when `package.json` pins `mail-time` below `4.0.0`. `3.0.0` is the last release that runs on Node 14/16 (`engines.node >=14.20.0`); `4.0.0` through `5.2.x` declare Node ≥ 20.9 / Bun ≥ 1.1; `5.3.0` and later declare Node ≥ 14.19.3. It pairs with `josk@^5` — read `legacy-v5.md` in the `josk` skill for the scheduler side.
 
 ## Version ladder
 
@@ -8,7 +8,7 @@ Read this file instead of `api.md` / `recipes.md` / `tuning.md` when `package.js
 |---|---|---|---|
 | 1.x | ≥ 14.1 | ^3 | `new MailTime({ db })`, Date `sendAt`, no `uuid`, no `queue` option |
 | **3.0.0** | ≥ 14.20 | ^5 | explicit `queue:` adapter, `josk:` required for servers, numeric `sendAt`, `uuid` — **last Node 16 release** |
-| 4.0.0+ | ≥ 20.9 | ^6 | everything the rest of this skill describes |
+| 4.0.0+ | ≥ 20.9 declared (5.3.0+: ≥ 14.19.3) | ^6 | everything the rest of this skill describes |
 
 ## What 3.x does NOT have
 

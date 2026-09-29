@@ -5,7 +5,7 @@ Every public surface of the `mail-time` NPM package. Pair with `adapters.md` for
 ## Imports
 
 ```js
-// ESM (Node ≥ 20.9.0 / Bun ≥ 1.1.0)
+// ESM (Node ≥ 14.19.3 / Bun ≥ 1.1.0)
 import {
   MailTime,
   MongoQueue,
@@ -37,7 +37,7 @@ import type {
   CustomQueue,
 } from 'mail-time';
 
-// ESM subpath imports (Node ≥ 20.9.0 / Bun ≥ 1.1.0)
+// ESM subpath imports (Node ≥ 14.19.3 / Bun ≥ 1.1.0)
 import { mailTimePreset } from 'mail-time/presets';
 import { MongoQueue } from 'mail-time/adapters/mongo';
 import { RedisQueue } from 'mail-time/adapters/redis';

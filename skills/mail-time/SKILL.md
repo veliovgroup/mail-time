@@ -9,7 +9,7 @@ Storage-backed email queue built on JoSk. `server` drains and sends; `client` on
 
 ## Version gate — check first
 
-If `package.json` pins `mail-time` below `4.0.0`, or the runtime is Node < 20.9 (Node 14/16 hosts), stop here and read `references/legacy-v3.md`. Everything else in this skill describes 4.x/5.x and names exports, methods, and options that do not exist in 3.x (`mailTimePreset`, `PostgresQueue`, `ready()`, `destroy({ drain })`, `concurrency`, `sendingTimeout`, `lockOwnerId`).
+If `package.json` pins `mail-time` below `4.0.0`, stop here and read `references/legacy-v3.md`. Everything else in this skill describes 4.x/5.x and names exports, methods, and options that do not exist in 3.x (`mailTimePreset`, `PostgresQueue`, `ready()`, `destroy({ drain })`, `concurrency`, `sendingTimeout`, `lockOwnerId`).
 
 ## Reference map
 
@@ -56,4 +56,4 @@ Core rules:
 
 ## Runtime
 
-Node ≥20.9, Bun ≥1.1, Meteor 2.14/3.2. ESM + CJS. Runtime dependency: JoSk. Install nodemailer plus chosen store driver.
+Node ≥14.19.3 (5.3.0+; older 4.x/5.x declared ≥20.9), Bun ≥1.1, Meteor 2.14/3.2. Node 14/16 hosts need a `mongodb` driver their Node supports (3.x-5.x for Node 14, ≤6 for Node 16); tested with MongoQueue only. ESM + CJS. Runtime dependency: JoSk. Install nodemailer plus chosen store driver.
