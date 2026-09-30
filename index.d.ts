@@ -202,6 +202,15 @@ export type MailTimeFromDetails = {
 export type MailTimeDrainResult = {
     failedWrites: number;
 };
+/**
+ * `details` passed to `onError`. `phase` is `'verify'` (transport verification, `email === null`), `'complete'` (a storage write recording a send outcome), or `'checkpoint'` (recipient-policy results written after SMTP). Without `phase` it is the SMTP `info` of the failed attempt.
+ */
+export type MailTimeErrorDetails = {
+    phase?: "verify" | "complete" | "checkpoint";
+    transportIndex?: number;
+    attempt?: number;
+    [key: string]: unknown;
+};
 export type MailTimeOptions = {
     queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue;
     type?: "server" | "client";
@@ -235,7 +244,7 @@ export type MailTimeOptions = {
     debug?: boolean;
     josk?: MailTimeJoSkOptions;
     recipientPolicies?: MailTimeRecipientPolicy[];
-    onError?: (error: unknown, email: MailTimeTask | null, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>;
+    onError?: (error: unknown, email: MailTimeTask | null, details?: MailTimeErrorDetails, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>;
     onSent?: (email: MailTimeTask, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>;
     onSuppressed?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void>;
     onRejected?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void>;
@@ -277,7 +286,7 @@ export class MailTime {
     template: string;
     keepHistory: boolean;
     onSent: (email: MailTimeTask, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>;
-    onError: (error: unknown, email: MailTimeTask | null, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>;
+    onError: (error: unknown, email: MailTimeTask | null, details?: MailTimeErrorDetails, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>;
     onSuppressed: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void>;
     onRejected: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void>;
     revolvingInterval: number;

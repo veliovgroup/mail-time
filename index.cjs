@@ -2607,6 +2607,26 @@ const rewritePolicyHeaders = (compiled) => {
   return result;
 };
 
+/**
+ * Validate every address field present in a letter with the policy parser, so an unparseable
+ * address is rejected at `sendMail()` instead of after a queue round trip. Absent fields are
+ * skipped. Throws the same `MAIL_TIME_INVALID_ADDRESS` error the send path would.
+ * @param {object} mailOptions
+ * @returns {void}
+ */
+const validatePolicyMailOptions = (mailOptions) => {
+  const check = (value, label) => {
+    if (value === void 0) return;
+    if (Array.isArray(value)) value.forEach((entry, i) => normalizePolicyAddress(entry, `${label}[${i}]`));
+    else normalizePolicyAddress(value, label);
+  };
+  for (const key of ['from', 'sender', 'replyTo', 'to', 'cc', 'bcc']) check(mailOptions[key], key);
+  if (isPlainObject(mailOptions.envelope)) {
+    check(mailOptions.envelope.to, 'envelope.to');
+    if (mailOptions.envelope.from !== '') check(mailOptions.envelope.from, 'envelope.from');
+  }
+};
+
 const validateRecipientPolicies = (value, queue) => {
   if (value === void 0) return null;
   if (!Array.isArray(value) || !value.length) throw policyError('recipientPolicies must be a nonempty array');
@@ -2778,7 +2798,7 @@ const normalizeRejections = (error, info, transport) => {
 
 class RecipientPolicyLease {
   constructor({ task, queue, interval, maxRenewals, sendingTimeout, shouldAbort, report }) {
-    if (typeof sendingTimeout !== 'number' || !(sendingTimeout > 0)) throw new TypeError('RecipientPolicyLease requires a positive sendingTimeout');
+    if (typeof sendingTimeout !== 'number' || !(sendingTimeout > 0)) throw new TypeError('[mail-time] [recipientPolicies] RecipientPolicyLease requires a positive sendingTimeout');
     this.__sendingTimeout = sendingTimeout;
     this.__renewStale = false;
     this.__liveAtAttempt = false;
@@ -3170,7 +3190,12 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
  */
 
 /**
- * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport, details: MailTimeFromDetails) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, shouldFailOver?: (error: unknown, info: object | undefined, email: MailTimeTask) => boolean, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, renewClaim?: boolean | number, maxRenewals?: number, strictPayload?: boolean, allowedMailFields?: string[], verifyTransports?: boolean, verifyTimeout?: number, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, recipientPolicies?: MailTimeRecipientPolicy[], onError?: (error: unknown, email: MailTimeTask | null, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>, onSent?: (email: MailTimeTask, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>, onSuppressed?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void>, onRejected?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void> }} MailTimeOptions
+ * `details` passed to `onError`. `phase` is `'verify'` (transport verification, `email === null`), `'complete'` (a storage write recording a send outcome), or `'checkpoint'` (recipient-policy results written after SMTP). Without `phase` it is the SMTP `info` of the failed attempt.
+ * @typedef {{ phase?: 'verify' | 'complete' | 'checkpoint', transportIndex?: number, attempt?: number, [key: string]: unknown }} MailTimeErrorDetails
+ */
+
+/**
+ * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport, details: MailTimeFromDetails) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, shouldFailOver?: (error: unknown, info: object | undefined, email: MailTimeTask) => boolean, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, renewClaim?: boolean | number, maxRenewals?: number, strictPayload?: boolean, allowedMailFields?: string[], verifyTransports?: boolean, verifyTimeout?: number, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, recipientPolicies?: MailTimeRecipientPolicy[], onError?: (error: unknown, email: MailTimeTask | null, details?: MailTimeErrorDetails, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>, onSent?: (email: MailTimeTask, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>, onSuppressed?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void>, onRejected?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void> }} MailTimeOptions
  */
 
 const REPROBE_BASE_MS = 60000;
@@ -3300,6 +3325,16 @@ class MailTime {
       this.from = opts.from;
     } else {
       this.from = false;
+    }
+
+    if (this.__recipientPolicies && this.type === 'server') {
+      // A transport `from` that the policy parser rejects would settle every rotated letter as
+      // failed; surface it here instead. A `from` callback is a runtime value and is not checked.
+      if (typeof opts.from === 'string') normalizePolicyAddress(opts.from, 'from');
+      this.transports.forEach((transport, i) => {
+        const from = MailTime.transportFrom(transport);
+        if (from !== void 0) normalizePolicyAddress(from, `transports[${i}].from`);
+      });
     }
 
     this.queue.mailTimeInstance = this;
@@ -3641,6 +3676,10 @@ class MailTime {
     const isMailbox = isPlainObject(mailOptions.to) && typeof mailOptions.to.address === 'string' && mailOptions.to.address.trim().length > 0;
     if (!isMailbox && typeof mailOptions.to !== 'string' && (!Array.isArray(mailOptions.to) || !mailOptions.to.length)) {
       throw new Error('[mail-time] [sendMail] `mailOptions.to` is required and must be a string or non-empty Array');
+    }
+
+    if (this.__recipientPolicies) {
+      validatePolicyMailOptions(mailOptions);
     }
 
     if (this.concatEmails) {
@@ -4755,10 +4794,6 @@ class MailTime {
     if (this.__unhealthyTransports.size === this.transports.length) {
       throw new Error(`[mail-time] [MailTime#ready] all ${this.transports.length} transport(s) failed verification — nothing can be delivered`);
     }
-
-    if (this.__unhealthyTransports.has(this.transport)) {
-      this.transport = this.___nextHealthyTransport(this.transport);
-    }
   }
 
   /**
@@ -4818,7 +4853,7 @@ class MailTime {
    * @internal
    * @memberOf MailTime
    * @name ___applyVerdict
-   * @description Apply a probe verdict to the health state. Ignored after `destroy()` and when a newer probe of the same transport has started (generation guard). Success removes the transport from quarantine. Failure quarantines it and fires `onError` once per quarantine episode; a failure for an already quarantined transport changes nothing here (`___maybeReprobe` owns the backoff).
+   * @description Apply a probe verdict to the health state. Ignored after `destroy()` and when a newer probe of the same transport has started (generation guard). Success removes the transport from quarantine. Failure quarantines it and fires `onError` once per quarantine episode; a failure for an already quarantined transport releases its re-probe slot and doubles the backoff.
    * @param {number} index
    * @param {number} gen
    * @param {unknown} [error]
@@ -4842,6 +4877,13 @@ class MailTime {
       return;
     }
     if (quarantined) {
+      const st = this.__reprobe.get(index);
+      if (st) {
+        st.inFlight = false;
+        st.count++;
+        st.nextProbeAt = Date.now() + Math.min(REPROBE_BASE_MS * Math.pow(2, st.count), REPROBE_MAX_MS);
+        this.__debug(`[private reprobe] transport #${index} failed, next probe at ${new Date(st.nextProbeAt)}`);
+      }
       return;
     }
     this.__unhealthyTransports.add(index);
@@ -4857,7 +4899,7 @@ class MailTime {
    * @internal
    * @memberOf MailTime
    * @name ___maybeReprobe
-   * @description Start one background `verify()` probe for a quarantined transport when its backoff has elapsed and no probe is in flight. Never awaited by the send path. Backoff starts at 60 s, doubles per failed or timed-out probe and caps at 15 min. Failures only reach `__debug`. No probes for `type: 'client'`, `verifyTransports: false`, or after `destroy()`.
+   * @description Start one background `verify()` probe for a quarantined transport when its backoff has elapsed and no probe is in flight. Never awaited by the send path. Backoff starts at 60 s, doubles per failed probe and caps at 15 min. A probe that times out stays in flight until its verdict arrives, so at most one `verify()` is outstanding per transport. Failures only reach `__debug`. No probes for `type: 'client'`, `verifyTransports: false`, or after `destroy()`.
    * @param {number} index
    * @returns {void}
    */
@@ -4872,15 +4914,9 @@ class MailTime {
     }
     st.inFlight = true;
     this.__debug(`[private reprobe] transport #${index}, attempt after ${st.count} failure(s)`);
-    this.___verifyOne(transport, index).then((outcome) => {
-      st.inFlight = false;
-      if (outcome === 'ok' || this.__isDestroyed || this.__reprobe.get(index) !== st) {
-        return;
-      }
-      st.count++;
-      st.nextProbeAt = Date.now() + Math.min(REPROBE_BASE_MS * Math.pow(2, st.count), REPROBE_MAX_MS);
-      this.__debug(`[private reprobe] transport #${index} ${outcome}, next probe at ${new Date(st.nextProbeAt)}`);
-    });
+    // The verdict, not the timeout, releases `inFlight` (see ___applyVerdict), so a hung
+    // verify() never overlaps with a new probe on the same transport.
+    this.___verifyOne(transport, index);
   }
 
   /**
