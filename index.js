@@ -1869,10 +1869,6 @@ class MailTime {
     if (this.__unhealthyTransports.size === this.transports.length) {
       throw new Error(`[mail-time] [MailTime#ready] all ${this.transports.length} transport(s) failed verification — nothing can be delivered`);
     }
-
-    if (this.__unhealthyTransports.has(this.transport)) {
-      this.transport = this.___nextHealthyTransport(this.transport);
-    }
   }
 
   /**
@@ -1932,7 +1928,7 @@ class MailTime {
    * @internal
    * @memberOf MailTime
    * @name ___applyVerdict
-   * @description Apply a probe verdict to the health state. Ignored after `destroy()` and when a newer probe of the same transport has started (generation guard). Success removes the transport from quarantine. Failure quarantines it and fires `onError` once per quarantine episode; a failure for an already quarantined transport changes nothing here (`___maybeReprobe` owns the backoff).
+   * @description Apply a probe verdict to the health state. Ignored after `destroy()` and when a newer probe of the same transport has started (generation guard). Success removes the transport from quarantine. Failure quarantines it and fires `onError` once per quarantine episode; a failure for an already quarantined transport releases its re-probe slot and doubles the backoff.
    * @param {number} index
    * @param {number} gen
    * @param {unknown} [error]
@@ -1956,6 +1952,13 @@ class MailTime {
       return;
     }
     if (quarantined) {
+      const st = this.__reprobe.get(index);
+      if (st) {
+        st.inFlight = false;
+        st.count++;
+        st.nextProbeAt = Date.now() + Math.min(REPROBE_BASE_MS * Math.pow(2, st.count), REPROBE_MAX_MS);
+        this.__debug(`[private reprobe] transport #${index} failed, next probe at ${new Date(st.nextProbeAt)}`);
+      }
       return;
     }
     this.__unhealthyTransports.add(index);
@@ -1971,7 +1974,7 @@ class MailTime {
    * @internal
    * @memberOf MailTime
    * @name ___maybeReprobe
-   * @description Start one background `verify()` probe for a quarantined transport when its backoff has elapsed and no probe is in flight. Never awaited by the send path. Backoff starts at 60 s, doubles per failed or timed-out probe and caps at 15 min. Failures only reach `__debug`. No probes for `type: 'client'`, `verifyTransports: false`, or after `destroy()`.
+   * @description Start one background `verify()` probe for a quarantined transport when its backoff has elapsed and no probe is in flight. Never awaited by the send path. Backoff starts at 60 s, doubles per failed probe and caps at 15 min. A probe that times out stays in flight until its verdict arrives, so at most one `verify()` is outstanding per transport. Failures only reach `__debug`. No probes for `type: 'client'`, `verifyTransports: false`, or after `destroy()`.
    * @param {number} index
    * @returns {void}
    */
@@ -1986,15 +1989,9 @@ class MailTime {
     }
     st.inFlight = true;
     this.__debug(`[private reprobe] transport #${index}, attempt after ${st.count} failure(s)`);
-    this.___verifyOne(transport, index).then((outcome) => {
-      st.inFlight = false;
-      if (outcome === 'ok' || this.__isDestroyed || this.__reprobe.get(index) !== st) {
-        return;
-      }
-      st.count++;
-      st.nextProbeAt = Date.now() + Math.min(REPROBE_BASE_MS * Math.pow(2, st.count), REPROBE_MAX_MS);
-      this.__debug(`[private reprobe] transport #${index} ${outcome}, next probe at ${new Date(st.nextProbeAt)}`);
-    });
+    // The verdict, not the timeout, releases `inFlight` (see ___applyVerdict), so a hung
+    // verify() never overlaps with a new probe on the same transport.
+    this.___verifyOne(transport, index);
   }
 
   /**

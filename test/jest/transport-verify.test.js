@@ -428,43 +428,46 @@ describe('lazy re-probe', () => {
     expect(sentBy).toEqual(['backup', 'backup', 'backup', 'backup', 'backup']);
   });
 
-  it('a hung re-probe times out, clears the in-flight flag and reschedules', async () => {
-    const { mt, calls } = await setup({ verifyTimeout: 30 }, () => {});
+  it('a hung re-probe stays in flight: no second verify() until its verdict arrives', async () => {
+    const lates = [];
+    const { mt, calls, onError } = await setup({ verifyTimeout: 30 }, (cb) => { lates.push(cb); });
     DOWN.on = false;
     await tick(60000);
     mt.___isHealthyTransport(0);
     await tick(0);
     expect(calls.length).toBe(2);
-    expect(mt.__reprobe.get(0).inFlight).toBe(true);
     await sleep(60);
     const st = mt.__reprobe.get(0);
+    expect(st.inFlight).toBe(true);
+    expect(st.count).toBe(0);
+    await tick(900000);
+    expect(mt.___isHealthyTransport(0)).toBe(false);
+    await tick(0);
+    expect(calls.length).toBe(2);
+    lates[0](new Error('late failure'));
     expect(st.inFlight).toBe(false);
     expect(st.count).toBe(1);
-    expect(mt.___isHealthyTransport(0)).toBe(false);
+    expect(onError).toHaveBeenCalledTimes(1);
     await tick(120000);
     mt.___isHealthyTransport(0);
     await tick(0);
     expect(calls.length).toBe(3);
   });
 
-  it('generation guard: an older late failure never overrides a newer success', async () => {
+  it('generation guard: a verdict from a superseded probe changes nothing', async () => {
     const lates = [];
-    const { mt, calls, onError } = await setup({ verifyTimeout: 30 }, (cb, n) => {
-      if (n === 2) { lates.push(cb); return; }
-      cb(null, true);
-    });
+    const { mt, calls, onError } = await setup({ verifyTimeout: 30 }, (cb) => { lates.push(cb); });
     DOWN.on = false;
     await tick(60000);
     mt.___isHealthyTransport(0);
     await sleep(60);
     expect(calls.length).toBe(2);
-    await tick(120000);
-    mt.___isHealthyTransport(0);
-    await tick(0);
-    expect(calls.length).toBe(3);
-    expect(mt.___isHealthyTransport(0)).toBe(true);
+    mt.__verifyGen[0]++;
+    const st = mt.__reprobe.get(0);
     lates[0](new Error('stale failure'));
-    expect(mt.___isHealthyTransport(0)).toBe(true);
+    expect(st.inFlight).toBe(true);
+    expect(st.count).toBe(0);
+    expect(mt.___isHealthyTransport(0)).toBe(false);
     expect(onError).toHaveBeenCalledTimes(1);
   });
 
