@@ -2,29 +2,107 @@ import { hasOwnProp, isPlainObject } from './helpers.js';
 
 const policyError = (message) => new Error(`[mail-time] [recipientPolicies] ${message}`);
 const SIMPLE_MAILBOX = /^[^\s<>,;:"()\\\[\]@]+@[^\s<>,;:"()\\\[\]@]+$/u;
+// RFC 5322 specials that are unambiguous only inside a quoted display name.
+const PHRASE_SPECIALS = '<>()[]:;@\\,';
+const UNSAFE_CHARS = /[\r\n\u0000]/u;
 
-const normalizePolicyAddress = (value) => {
-  const input = typeof value === 'string' ? value : (!Array.isArray(value) && value?.address);
-  if (typeof input !== 'string' || /[\r\n]/u.test(input)) {
-    throw policyError('recipient requires a simple address without line breaks');
+/**
+ * Error for an address that cannot be parsed into exactly one mailbox. The message names
+ * the field and the rule that failed, never the address or display name itself.
+ */
+const addressError = (field, reason) => {
+  const error = policyError(`\`${field}\` ${reason}`);
+  error.code = 'MAIL_TIME_INVALID_ADDRESS';
+  error.field = field;
+  return error;
+};
+
+const isAddressError = (error) => error?.code === 'MAIL_TIME_INVALID_ADDRESS';
+
+const toMailbox = (address, field) => {
+  const trimmed = address.trim();
+  if (!SIMPLE_MAILBOX.test(trimmed)) throw addressError(field, 'must contain one address such as user@example.com; quoted local parts are not supported');
+  return trimmed.toLowerCase();
+};
+
+/**
+ * Parse one Nodemailer mailbox string: `addr`, `<addr>`, or `display name <addr>`, where the
+ * display name is any mix of atoms and quoted strings with backslash escapes. Groups,
+ * comments, and comma-separated lists are rejected rather than guessed at.
+ */
+const parseMailboxString = (input, field) => {
+  let display = '';
+  let angle = null;
+  let quoted = false;
+  for (let i = 0; i < input.length; i++) {
+    const char = input[i];
+    if (quoted) {
+      if (char === '\\') {
+        if (++i >= input.length) break;
+      } else if (char === '"') {
+        quoted = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      quoted = true;
+    } else if (char === '<') {
+      const close = input.indexOf('>', i + 1);
+      if (close === -1) throw addressError(field, 'has an unclosed angle bracket');
+      angle = input.slice(i + 1, close);
+      if (input.slice(close + 1).trim()) throw addressError(field, 'must end after the angle-bracket address; use an array for multiple recipients');
+      break;
+    } else if (char === ',') {
+      throw addressError(field, 'must contain one mailbox; use an array for multiple recipients or quote a display name that contains a comma');
+    } else if (char === ';' || char === ':') {
+      throw addressError(field, 'must not use group syntax');
+    } else if (char === '(' || char === ')') {
+      throw addressError(field, 'must not contain comments; quote a display name that contains parentheses');
+    } else {
+      display += char;
+    }
   }
-  let address = input.trim();
-  if (address.includes('<') || address.includes('>')) {
-    const match = address.match(/^[^<>,;:"\r\n]*<([^<>]+)>$/u);
-    if (!match) throw policyError('use a simple explicit envelope.to');
-    address = match[1].trim();
+  if (quoted) throw addressError(field, 'has an unterminated quoted display name');
+  if (angle === null) {
+    if (display !== input) throw addressError(field, 'must contain one address such as user@example.com; quoted local parts are not supported');
+    return toMailbox(input, field);
   }
-  if (!SIMPLE_MAILBOX.test(address)) throw policyError('use a simple explicit envelope.to');
-  return address.toLowerCase();
+  for (const char of display) {
+    if (PHRASE_SPECIALS.includes(char)) throw addressError(field, 'has an unquoted special character in its display name; wrap the name in double quotes');
+  }
+  return toMailbox(angle, field);
+};
+
+/**
+ * Normalize exactly one mailbox (string or `{ name?, address }`) to its lowercase address.
+ * @param {unknown} value
+ * @param {string} [field] - Field label used in errors, e.g. `to[1]` or `envelope.from`.
+ * @returns {string}
+ */
+const normalizePolicyAddress = (value, field = 'address') => {
+  if (typeof value === 'string') {
+    if (UNSAFE_CHARS.test(value)) throw addressError(field, 'must not contain line breaks or NUL characters');
+    if (!value.trim()) throw addressError(field, 'must not be empty');
+    return parseMailboxString(value.trim(), field);
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw addressError(field, 'must be an address string or a { name, address } object');
+  if (typeof value.address !== 'string') throw addressError(field, 'object requires a string `address`');
+  if (value.name !== void 0 && typeof value.name !== 'string') throw addressError(field, 'object `name` must be a string');
+  if (UNSAFE_CHARS.test(value.address) || (value.name && UNSAFE_CHARS.test(value.name))) {
+    throw addressError(field, 'must not contain line breaks or NUL characters');
+  }
+  return toMailbox(value.address, field);
 };
 
 const preparePolicyEnvelope = (compiled, previousResults = []) => {
   const recipients = new Map();
   const explicit = compiled.envelope && hasOwnProp(compiled.envelope, 'to');
-  const add = (value, source, authoritative) => {
-    for (const entry of Array.isArray(value) ? value : [value]) {
+  const add = (value, source, authoritative, label = source) => {
+    const list = Array.isArray(value);
+    const entries = list ? value : [value];
+    for (let i = 0; i < entries.length; i++) {
       let address;
-      try { address = normalizePolicyAddress(entry); }
+      try { address = normalizePolicyAddress(entries[i], list ? `${label}[${i}]` : label); }
       catch (error) { if (authoritative) throw error; else continue; }
       if (!recipients.has(address)) {
         if (!authoritative) continue;
@@ -34,7 +112,7 @@ const preparePolicyEnvelope = (compiled, previousResults = []) => {
       if (!sources.includes(source)) sources.push(source);
     }
   };
-  if (explicit) add(compiled.envelope.to, 'envelope', true);
+  if (explicit) add(compiled.envelope.to, 'envelope', true, 'envelope.to');
   for (const source of ['to', 'cc', 'bcc']) {
     if (hasOwnProp(compiled, source) && compiled[source] !== void 0) add(compiled[source], source, !explicit);
   }
@@ -44,10 +122,11 @@ const preparePolicyEnvelope = (compiled, previousResults = []) => {
   }
   const envelope = { to: [...recipients.keys()] };
   if (compiled.envelope && hasOwnProp(compiled.envelope, 'from')) {
-    envelope.from = compiled.envelope.from === '' ? '' : normalizePolicyAddress(compiled.envelope.from);
+    envelope.from = compiled.envelope.from === '' ? '' : normalizePolicyAddress(compiled.envelope.from, 'envelope.from');
   } else {
-    const from = compiled.from || compiled.sender || compiled.replyTo;
-    if (from) envelope.from = normalizePolicyAddress(from);
+    // Same precedence as Nodemailer's getEnvelope(): From, then Sender, then Reply-To.
+    const field = ['from', 'sender', 'replyTo'].find((key) => compiled[key]);
+    if (field) envelope.from = normalizePolicyAddress(compiled[field], field);
   }
   return { envelope, recipients: [...recipients.values()] };
 };
@@ -88,7 +167,7 @@ const validatePolicyResult = (raw, hook, context) => {
   const decisions = new Map();
   for (const item of raw.decisions) {
     if (!isPlainObject(item)) throw policyError('decision must be an object');
-    const address = normalizePolicyAddress(item.address);
+    const address = normalizePolicyAddress(item.address, 'decision.address');
     if (!batch.has(address)) throw policyError('decision address is outside the input batch');
     const allowed = hook === 'beforeSend' ? item.status === 'suppressed' : (item.status === 'retry' || item.status === 'rejected');
     if (!allowed) throw policyError('invalid decision status for this phase');
@@ -163,4 +242,4 @@ const summarizePolicyTask = (task, isSettled) => {
   return { uuid: task.uuid, tries: task.tries, isSettled, recipients };
 };
 
-export { policyError, normalizePolicyAddress, preparePolicyEnvelope, validateRecipientPolicies, evaluatePolicyPhase, mergePolicyResults, summarizePolicyTask };
+export { policyError, isAddressError, normalizePolicyAddress, preparePolicyEnvelope, validateRecipientPolicies, evaluatePolicyPhase, mergePolicyResults, summarizePolicyTask };

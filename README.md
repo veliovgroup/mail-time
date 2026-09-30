@@ -425,7 +425,7 @@ new MailTime({
 });
 ```
 
-Only the SMTP envelope is filtered. Headers remain unchanged; some transports retain BCC in generated MIME. If suppressed addresses must not appear in message content, remove them from headers before enqueueing. See [recipient policy hooks, outcomes, recovery, and rollout](https://github.com/veliovgroup/mail-time/blob/master/docs/recipient-policies.md).
+Each `to`, `cc`, `bcc`, and `from` entry must hold one mailbox, for example `"Doe, John" <user@example.com>` or `{ name, address }`; use arrays for several recipients. An address MailTime cannot parse fails the task without SMTP or further retries, with `error.code === 'MAIL_TIME_INVALID_ADDRESS'` and `error.field` naming the field. Only the SMTP envelope is filtered. Headers remain unchanged; some transports retain BCC in generated MIME. If suppressed addresses must not appear in message content, remove them from headers before enqueueing. See [recipient policy hooks, outcomes, recovery, and rollout](https://github.com/veliovgroup/mail-time/blob/master/docs/recipient-policies.md).
 
 ## Queue payload trust
 
