@@ -163,6 +163,26 @@ const rewritePolicyHeaders = (compiled) => {
   return result;
 };
 
+/**
+ * Validate every address field present in a letter with the policy parser, so an unparseable
+ * address is rejected at `sendMail()` instead of after a queue round trip. Absent fields are
+ * skipped. Throws the same `MAIL_TIME_INVALID_ADDRESS` error the send path would.
+ * @param {object} mailOptions
+ * @returns {void}
+ */
+const validatePolicyMailOptions = (mailOptions) => {
+  const check = (value, label) => {
+    if (value === void 0) return;
+    if (Array.isArray(value)) value.forEach((entry, i) => normalizePolicyAddress(entry, `${label}[${i}]`));
+    else normalizePolicyAddress(value, label);
+  };
+  for (const key of ['from', 'sender', 'replyTo', 'to', 'cc', 'bcc']) check(mailOptions[key], key);
+  if (isPlainObject(mailOptions.envelope)) {
+    check(mailOptions.envelope.to, 'envelope.to');
+    if (mailOptions.envelope.from !== '') check(mailOptions.envelope.from, 'envelope.from');
+  }
+};
+
 const validateRecipientPolicies = (value, queue) => {
   if (value === void 0) return null;
   if (!Array.isArray(value) || !value.length) throw policyError('recipientPolicies must be a nonempty array');
@@ -274,4 +294,4 @@ const summarizePolicyTask = (task, isSettled) => {
   return { uuid: task.uuid, tries: task.tries, isSettled, recipients };
 };
 
-export { policyError, isAddressError, normalizePolicyAddress, rewritePolicyHeaders, preparePolicyEnvelope, validateRecipientPolicies, evaluatePolicyPhase, mergePolicyResults, summarizePolicyTask };
+export { policyError, isAddressError, normalizePolicyAddress, rewritePolicyHeaders, preparePolicyEnvelope, validatePolicyMailOptions, validateRecipientPolicies, evaluatePolicyPhase, mergePolicyResults, summarizePolicyTask };

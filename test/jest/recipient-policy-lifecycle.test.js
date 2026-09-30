@@ -1,5 +1,5 @@
 import { afterEach, expect, it, jest } from '@jest/globals';
-import { createPolicyMailTime, deferred } from './recipient-policy-helpers.js';
+import { createPolicyMailTime, deferred, enqueueRaw } from './recipient-policy-helpers.js';
 
 const instances = [];
 const make = (opts = {}) => { const m = createPolicyMailTime(opts); instances.push(m); return m; };
@@ -26,7 +26,7 @@ it.each(['a@example.com, b@example.com', 'Family, Given <a@example.com>'])('repo
   const onError = jest.fn();
   const log = jest.spyOn(console, 'error').mockImplementation(() => {});
   const m = make({ retries: 0, onError });
-  const uuid = await m.sendMail({ to, text: 'hello' });
+  const uuid = await enqueueRaw(m, { to, text: 'hello' });
   await attempt(m, uuid);
   expect(log.mock.calls.some((args) => args.join(' ').includes('`to`') && args.join(' ').includes(uuid))).toBe(true);
   log.mockRestore();
@@ -60,7 +60,7 @@ it('explicit envelope wins and original headers survive mixed suppression', asyn
 it('strictPayload discards queued envelope while permitting trusted transport defaults', async () => {
   const envelopes = [];
   const m = make({ strictPayload: true, transports: [{ options: { mailOptions: { envelope: { to: ['trusted@example.com'] } } }, sendMail(mail, done) { envelopes.push(mail.envelope); done(null, { accepted: mail.envelope.to }); } }] });
-  const uuid = await m.sendMail({ to: 'Complex: a@example.com;', envelope: { to: ['untrusted@example.com'] }, text: 'hello' });
+  const uuid = await enqueueRaw(m, { to: 'Complex: a@example.com;', envelope: { to: ['untrusted@example.com'] }, text: 'hello' });
   await attempt(m, uuid);
   expect(envelopes[0].to).toEqual(['trusted@example.com']);
 });

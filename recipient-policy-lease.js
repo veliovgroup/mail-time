@@ -1,6 +1,6 @@
 class RecipientPolicyLease {
   constructor({ task, queue, interval, maxRenewals, sendingTimeout, shouldAbort, report }) {
-    if (typeof sendingTimeout !== 'number' || !(sendingTimeout > 0)) throw new TypeError('RecipientPolicyLease requires a positive sendingTimeout');
+    if (typeof sendingTimeout !== 'number' || !(sendingTimeout > 0)) throw new TypeError('[mail-time] [recipientPolicies] RecipientPolicyLease requires a positive sendingTimeout');
     this.__sendingTimeout = sendingTimeout;
     this.__renewStale = false;
     this.__liveAtAttempt = false;

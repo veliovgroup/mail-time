@@ -7,7 +7,7 @@ import { PostgresQueue } from './adapters/postgres.js';
 import { mailTimePreset, presets, presetNames } from './presets.js';
 import { debug, escapeHtml, logError, hasOwnProp, deepMerge, equals, isPlainObject, extractEmail, toAddressList, filterAddressField } from './helpers.js';
 
-import { validateRecipientPolicies, policyError, isAddressError, normalizePolicyAddress, rewritePolicyHeaders, preparePolicyEnvelope, evaluatePolicyPhase, mergePolicyResults, summarizePolicyTask } from './recipient-policy.js';
+import { validateRecipientPolicies, validatePolicyMailOptions, policyError, isAddressError, normalizePolicyAddress, rewritePolicyHeaders, preparePolicyEnvelope, evaluatePolicyPhase, mergePolicyResults, summarizePolicyTask } from './recipient-policy.js';
 import { normalizeRejections } from './recipient-rejections.js';
 import { RecipientPolicyLease } from './recipient-policy-lease.js';
 
@@ -416,6 +416,16 @@ class MailTime {
       this.from = false;
     }
 
+    if (this.__recipientPolicies && this.type === 'server') {
+      // A transport `from` that the policy parser rejects would settle every rotated letter as
+      // failed; surface it here instead. A `from` callback is a runtime value and is not checked.
+      if (typeof opts.from === 'string') normalizePolicyAddress(opts.from, 'from');
+      this.transports.forEach((transport, i) => {
+        const from = MailTime.transportFrom(transport);
+        if (from !== void 0) normalizePolicyAddress(from, `transports[${i}].from`);
+      });
+    }
+
     this.queue.mailTimeInstance = this;
 
     /** @type {string} */
@@ -755,6 +765,10 @@ class MailTime {
     const isMailbox = isPlainObject(mailOptions.to) && typeof mailOptions.to.address === 'string' && mailOptions.to.address.trim().length > 0;
     if (!isMailbox && typeof mailOptions.to !== 'string' && (!Array.isArray(mailOptions.to) || !mailOptions.to.length)) {
       throw new Error('[mail-time] [sendMail] `mailOptions.to` is required and must be a string or non-empty Array');
+    }
+
+    if (this.__recipientPolicies) {
+      validatePolicyMailOptions(mailOptions);
     }
 
     if (this.concatEmails) {

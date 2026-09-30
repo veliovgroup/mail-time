@@ -1,6 +1,6 @@
 import { afterEach, expect, it, jest } from '@jest/globals';
 import { MailTime } from '../../index.js';
-import { createPolicyMailTime, deferred } from './recipient-policy-helpers.js';
+import { createPolicyMailTime, deferred, enqueueRaw } from './recipient-policy-helpers.js';
 
 const instances = [];
 const make = (opts = {}) => { const m = createPolicyMailTime(opts); instances.push(m); return m; };
@@ -11,7 +11,7 @@ it.each(['mixed', 'empty', 'terminal', 'ambiguous'])('settles stale final-attemp
   const sendMail = jest.fn((mail, done) => done(null, { accepted: mail.envelope.to }));
   const beforeSend = jest.fn();
   const m = make({ retries: 0, transports: [{ sendMail }], recipientPolicies: [{ name: 'p', beforeSend }] });
-  const uuid = await m.sendMail({ to: kind === 'ambiguous' ? 'a@example.com,b@example.com' : ['a@example.com', 'b@example.com'], text: 'hello' });
+  const uuid = await enqueueRaw(m, { to: kind === 'ambiguous' ? 'a@example.com,b@example.com' : ['a@example.com', 'b@example.com'], text: 'hello' });
   const row = m.queue.records.get(uuid);
   Object.assign(row, { tries: 1, isSending: true, sendingAt: Date.now() - m.sendingTimeout - 1, recipientResults: kind === 'empty' || kind === 'ambiguous' ? [] : [
     { address: 'a@example.com', status: 'sent', reasons: [], attempt: 1 },

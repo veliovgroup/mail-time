@@ -69,6 +69,9 @@ export const createPolicyQueue = () => {
   return queue;
 };
 
+// Enqueue past sendMail() validation, as a client without recipientPolicies would.
+export const enqueueRaw = (m, mailOptions) => m.___addToQueue({ sendAt: Date.now(), template: false, concatSubject: false, mailOptions });
+
 export const createPolicyMailTime = (opts = {}) => new MailTime({
   queue: createPolicyQueue(),
   josk: { adapter: createSchedulerAdapter(), minRevolvingDelay: 60000, maxRevolvingDelay: 60000 },

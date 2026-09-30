@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import nodemailer from 'nodemailer';
 import { normalizePolicyAddress, preparePolicyEnvelope, rewritePolicyHeaders } from '../../recipient-policy.js';
-import { createPolicyMailTime } from './recipient-policy-helpers.js';
+import { createPolicyMailTime, enqueueRaw } from './recipient-policy-helpers.js';
 
 const instances = [];
 const make = (opts = {}) => { const m = createPolicyMailTime(opts); instances.push(m); return m; };
@@ -216,7 +216,57 @@ describe('Nodemailer delivery with display names', () => {
   });
 });
 
+describe('configuration validation', () => {
+  it('rejects an unparseable transport from at construction', () => {
+    expectAddressError(() => make({ transports: [{ options: { from: 'Sales, Inc <sales@example.com>' }, sendMail() {} }] }), 'transports[0].from', ['sales@example.com']);
+  });
+
+  it('rejects an unparseable string from at construction', () => {
+    expectAddressError(() => make({ from: 'a@example.com (comment)' }), 'from');
+  });
+
+  it('accepts transports without a from and a from callback', () => {
+    expect(() => make({ transports: [{ sendMail() {} }], from: () => 'anything goes' })).not.toThrow();
+  });
+
+  it('skips transport validation without recipientPolicies', () => {
+    expect(() => make({ recipientPolicies: void 0, transports: [{ options: { from: 'Sales, Inc <sales@example.com>' }, sendMail() {} }] })).not.toThrow();
+  });
+});
+
+describe('sendMail() validation', () => {
+  it.each([
+    [{ to: ['ok@example.com', 'Doe, John <secret@example.com>'] }, 'to[1]'],
+    [{ to: 'ok@example.com', envelope: { to: ['secret@example.com\r\nBcc: evil@example.com'] } }, 'envelope.to[0]'],
+    [{ to: 'ok@example.com', envelope: { from: 'Team: a@example.com;' } }, 'envelope.from'],
+    [{ to: 'ok@example.com', cc: { address: 'Name <secret@example.com>' } }, 'cc'],
+    [{ to: 'ok@example.com', bcc: ['a@example.com, b@example.com'] }, 'bcc[0]'],
+    [{ to: 'ok@example.com', from: 'a@example.com (comment)' }, 'from'],
+    [{ to: 'ok@example.com', sender: 'x <a@example.com> y' }, 'sender'],
+    [{ to: 'ok@example.com', replyTo: '<unterminated@example.com' }, 'replyTo'],
+  ])('rejects %j before enqueue', async (mail, field) => {
+    const m = make();
+    let caught;
+    try { await m.sendMail({ ...mail, text: 'hello' }); } catch (error) { caught = error; }
+    expect(caught).toMatchObject({ code: 'MAIL_TIME_INVALID_ADDRESS', field });
+    expect(caught.message).not.toContain('secret@example.com');
+    expect(m.queue.records.size).toBe(0);
+  });
+
+  it('accepts every supported mailbox form and skips absent fields', async () => {
+    const m = make();
+    const uuid = await m.sendMail({ to: ['"Doe, John" <a@example.com>', { name: 'B', address: 'b@example.com' }], cc: 'John (Sales) <c@example.com>', text: 'hello' });
+    expect(m.queue.records.get(uuid).mailOptions[0].cc).toBe('John (Sales) <c@example.com>');
+  });
+
+  it('does not validate on an instance without recipientPolicies', async () => {
+    const m = make({ recipientPolicies: void 0 });
+    await expect(m.sendMail({ to: 'a@example.com, b@example.com', text: 'hello' })).resolves.toEqual(expect.any(String));
+  });
+});
+
 describe('address parse failures', () => {
+  // Rows that reached the queue past sendMail() validation (a client without recipientPolicies).
   it.each([
     [{ from: () => '"ostr.io" <no-reply@ostr.io> trailing' }, { to: 'user@example.com' }, 'from'],
     [{}, { to: ['ok@example.com', 'Doe, John <secret@example.com>'] }, 'to[1]'],
@@ -227,7 +277,7 @@ describe('address parse failures', () => {
     const logged = [];
     jest.spyOn(console, 'error').mockImplementation((...args) => { logged.push(args.map((a) => (a instanceof Error ? a.message : String(a))).join(' ')); });
     const m = make({ retries: 5, transports: [{ sendMail }], onError, ...opts });
-    const uuid = await m.sendMail({ ...mail, text: 'hello' });
+    const uuid = await enqueueRaw(m, { ...mail, text: 'hello' });
     await attempt(m, uuid);
     expect(sendMail).not.toHaveBeenCalled();
     expect(m.queue.records.get(uuid)).toMatchObject({ tries: 1, isSettled: true, isFailed: true, isSent: false, isSending: false, recipientResults: [] });
