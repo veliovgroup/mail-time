@@ -6,6 +6,7 @@ import type {
   MailTimeJoSkOptions,
   MailTimeMailOptions,
   MailTimeFromDetails,
+  MailTimeErrorDetails,
   MailTimeOptions,
   MailTimePingResult,
   MailTimeScheduler,
@@ -112,10 +113,14 @@ const opts: MailTimeOptions = {
     void email;
     return false;
   },
-  onError(error: unknown, email: MailTimeTask | null, details?: object) {
+  onError(error: unknown, email: MailTimeTask | null, details?: MailTimeErrorDetails) {
     error;
     email;
-    details;
+    const phase: 'verify' | 'complete' | 'checkpoint' | undefined = details?.phase;
+    const transportIndex: number | undefined = details?.transportIndex;
+    const attempt: number | undefined = details?.attempt;
+    const smtp: unknown = details?.response;
+    void phase; void transportIndex; void attempt; void smtp;
   },
   onSent(email: MailTimeTask, details?: object) {
     email;
