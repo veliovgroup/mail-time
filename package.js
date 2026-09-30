@@ -9,9 +9,8 @@ Package.describe({
 /**
  * Single source of truth for the `josk` runtime dependency version.
  * Declared in both `onUse` and `onTest`.
- * josk declares `engines.node >=20.9`, but its source avoids Node 20-only
- * syntax, so Meteor 2.14-2.16 (Node 14) install and run it; the Meteor 2.x
- * CI jobs verify this on every change.
+ * josk 6.5.0 declares `engines.node >=14.21.3`, so Meteor 2.14-2.16 (Node 14)
+ * install and run it; the Meteor 2.x CI jobs verify this on every change.
  */
 const JOSK_VERSION = '6.5.0';
 

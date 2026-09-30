@@ -158,6 +158,7 @@ REDIS_URL=redis://127.0.0.1:6379 MONGO_URL=mongodb://127.0.0.1:27017/test PG_URL
 - Jest threshold: 85% statements/branches/functions/lines. Don't drop it.
 - Add tests for any change. Cover both happy path and at least one failure path.
 - Bun: `bun test ./test/jest` runs the same `*.test.js` files and test count as `npm run test:jest` under Bun's runner.
+- Runtime floor: `test/runtime-matrix/run.sh [mongo-host:port]` probes the packed tarball on Node 14.19.3 through 24 and Bun (needs nvm-installed versions and `bun` on PATH; `MT_ONLY="node14.19.3 bun"` filters rows). CI job `node-floor` runs the same `probe.mjs` on 14.19.3, 16.20.2 and 18.19.1.
 - Live-SMTP recipient for integration tests: use `{random}@md5hashing.net` (the domain accepts every inbound recipient). For a guaranteed reject use `${randomUUID()}@${randomUUID()}.invalid`.
 
 ### Testing traps
