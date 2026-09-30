@@ -1,6 +1,6 @@
 {
   "name": "mail-time",
-  "version": "5.2.2",
+  "version": "5.3.0",
   "description": "📮 Email queue extending nodemailer with multi-SMTP transports and horizontally scaled apps support",
   "main": "index.js",
   "types": "./index.d.ts",
@@ -134,7 +134,7 @@
   "author": "dr.dimitru (https://veliovgroup.com)",
   "license": "BSD-3-Clause",
   "engines": {
-    "node": ">=20.9.0",
+    "node": ">=14.19.3",
     "bun": ">=1.1.0"
   },
   "meteor": {
@@ -149,7 +149,7 @@
     }
   },
   "dependencies": {
-    "josk": "^6.4.0"
+    "josk": "^6.5.0"
   },
   "devDependencies": {
     "@jest/globals": "^30.4.1",

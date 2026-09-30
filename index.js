@@ -7,7 +7,7 @@ import { PostgresQueue } from './adapters/postgres.js';
 import { mailTimePreset, presets, presetNames } from './presets.js';
 import { debug, escapeHtml, logError, hasOwnProp, deepMerge, equals, isPlainObject, extractEmail, toAddressList, filterAddressField } from './helpers.js';
 
-import { validateRecipientPolicies, policyError, isAddressError, normalizePolicyAddress, preparePolicyEnvelope, evaluatePolicyPhase, mergePolicyResults, summarizePolicyTask } from './recipient-policy.js';
+import { validateRecipientPolicies, policyError, isAddressError, normalizePolicyAddress, rewritePolicyHeaders, preparePolicyEnvelope, evaluatePolicyPhase, mergePolicyResults, summarizePolicyTask } from './recipient-policy.js';
 import { normalizeRejections } from './recipient-rejections.js';
 import { RecipientPolicyLease } from './recipient-policy-lease.js';
 
@@ -280,8 +280,15 @@ let DEFAULT_TEMPLATE = '<!DOCTYPE html><html xmlns=http://www.w3.org/1999/xhtml>
  */
 
 /**
- * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport, details: MailTimeFromDetails) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, shouldFailOver?: (error: unknown, info: object | undefined, email: MailTimeTask) => boolean, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, renewClaim?: boolean | number, maxRenewals?: number, strictPayload?: boolean, allowedMailFields?: string[], verifyTransports?: boolean, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, recipientPolicies?: MailTimeRecipientPolicy[], onError?: (error: unknown, email: MailTimeTask | null, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>, onSent?: (email: MailTimeTask, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>, onSuppressed?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void>, onRejected?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void> }} MailTimeOptions
+ * @typedef {{ failedWrites: number }} MailTimeDrainResult
  */
+
+/**
+ * @typedef {{ queue: RedisQueue | MongoQueue | PostgresQueue | CustomQueue, type?: 'server' | 'client', from?: string | ((transport: MailTimeTransport, details: MailTimeFromDetails) => string), transports?: MailTimeTransport[], strategy?: 'backup' | 'balancer', failsToNext?: number, shouldFailOver?: (error: unknown, info: object | undefined, email: MailTimeTask) => boolean, retries?: number, maxTries?: number, retryDelay?: number, interval?: number, keepHistory?: boolean, concatEmails?: boolean | MailTimeConcatEmailsOptions, concatSubject?: string, concatDelimiter?: string, concatDelay?: number, concatThrottling?: number, revolvingInterval?: number, mode?: 'one' | 'batch', concurrency?: number, sendingTimeout?: number, renewClaim?: boolean | number, maxRenewals?: number, strictPayload?: boolean, allowedMailFields?: string[], verifyTransports?: boolean, verifyTimeout?: number, template?: string, prefix?: string, debug?: boolean, josk?: MailTimeJoSkOptions, recipientPolicies?: MailTimeRecipientPolicy[], onError?: (error: unknown, email: MailTimeTask | null, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>, onSent?: (email: MailTimeTask, details?: object, recipients?: MailTimeRecipientResult[], summary?: MailTimeRecipientSummary) => void | Promise<void>, onSuppressed?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void>, onRejected?: (email: MailTimeTask, recipients: MailTimeRecipientResult[], summary: MailTimeRecipientSummary) => void | Promise<void> }} MailTimeOptions
+ */
+
+const REPROBE_BASE_MS = 60000;
+const REPROBE_MAX_MS = 900000;
 
 /**
  * Class of MailTime.
@@ -385,6 +392,7 @@ class MailTime {
     this.__readyPromise = null;
     this.__schedulerTimer = null;
     this.__inFlight = new Set();
+    this.__failedWrites = 0;
     this.__pool = createPool(this.concurrency);
 
     this.failsToNext = (typeof opts.failsToNext === 'number' && opts.failsToNext > 0) ? opts.failsToNext : 4;
@@ -392,7 +400,12 @@ class MailTime {
     this.transports = Array.isArray(opts.transports) ? opts.transports : [];
     this.transport = 0;
     this.verifyTransports = opts.verifyTransports !== false;
+    this.verifyTimeout = (typeof opts.verifyTimeout === 'number' && opts.verifyTimeout > 0) ? Math.min(opts.verifyTimeout, 2147483647) : 30000;
     this.__unhealthyTransports = new Set();
+    this.__verifyGen = [];
+    this.__reprobe = new Map();
+    this.__probeCancels = new Set();
+    this.__uncertainRenewals = new WeakMap();
 
     if (typeof opts.from === 'string') {
       const fromStr = opts.from;
@@ -575,6 +588,8 @@ class MailTime {
 
     this.__isDestroyed = true;
     this.__isPaused = false;
+    for (const cancel of [...this.__probeCancels]) cancel();
+    this.__reprobe.clear();
     // Queued jobs never started SMTP; dropping them lets a scan blocked on a
     // pool slot return, so JoSk shutdown does not wait for in-flight sends.
     this.__pool.cancelQueued();
@@ -610,14 +625,34 @@ class MailTime {
    * @async
    * @memberOf MailTime
    * @name drain
-   * @description Wait for all in-flight email send attempts to settle
-   * @returns {Promise<void>}
+   * @description Wait for all in-flight email send attempts to settle. Resolves with `{ failedWrites }`, the count since this instance was created of failures while recording a send outcome: a storage write that threw, an exception in the completion path, or an outcome write lost after a claim-renewal error (message `outcome write lost (renewal outcome uncertain or lease taken over)`, after one retry with the renewal's stamp (no retry when the claim was already stale at renewal time)). Each is also reported once through `onError` with `details.phase` of `'complete'` or `'checkpoint'`, except after a plain `destroy()`, which still counts but suppresses the hook and the log. A row whose write failed can stay `sending` and be re-sent after `sendingTimeout`. Compare `failedWrites` before and after to scope a shutdown.
+   * @returns {Promise<MailTimeDrainResult>}
    */
   async drain() {
     this.__debug('[drain]');
     if (this.__pool) {
       await this.__pool.drain();
     }
+    return { failedWrites: this.__failedWrites };
+  }
+
+  /**
+   * @internal
+   * @memberOf MailTime
+   * @name ___reportWriteFailure
+   * @description Count a failed completion step (a storage write that threw, an exception raised inside the completion path, or an outcome write lost after a claim-renewal error) and surface it once through `onError(error, task, { phase })`. Never throws. After a non-draining `destroy()` it still counts but skips the log and the hook.
+   * @param {MailTimeTask} task
+   * @param {unknown} error
+   * @param {'complete' | 'checkpoint'} [phase]
+   * @returns {void}
+   */
+  ___reportWriteFailure(task, error, phase = 'complete') {
+    this.__failedWrites++;
+    if (this.__abortInFlight) {
+      return;
+    }
+    logError(`[private send] completion error, ${phase} write failed; row ${task?.uuid} may stay claimed and be re-sent after sendingTimeout`, error);
+    callHook('onError', this.onError, error, task || null, { phase, attempt: task?.tries, transportIndex: task?.transport });
   }
 
   /**
@@ -803,21 +838,15 @@ class MailTime {
     if (task.tries >= this.maxTries) {
       this.___finalizeRejected(task, info);
 
-      const leaseRemove = __leaseRemoveOpts(task);
-      const leaseUpdate = __withLease(task, {
-        isSent: false,
-        isFailed: true,
-        isSending: false,
-        sendingAt: 0,
-        mailOptions: task.mailOptions,
-      });
-
-      let finalized = false;
-      if (!this.keepHistory) {
-        finalized = await this.queue.remove(task, leaseRemove);
-      } else {
-        finalized = await this.queue.update(task, leaseUpdate);
-      }
+      const finalized = await this.___outcomeWrite(task, (t) => (!this.keepHistory
+        ? this.queue.remove(t, __leaseRemoveOpts(t))
+        : this.queue.update(t, __withLease(t, {
+          isSent: false,
+          isFailed: true,
+          isSending: false,
+          sendingAt: 0,
+          mailOptions: task.mailOptions,
+        }))));
 
       if (!finalized) {
         this.__debug('[private handleError] lease lost before final failure update, skipping onError', task.uuid);
@@ -843,12 +872,12 @@ class MailTime {
       transportIndex = this.___nextHealthyTransport(transportIndex);
     }
 
-    const released = await this.queue.update(task, __withLease(task, {
+    const released = await this.___outcomeWrite(task, (t) => this.queue.update(t, __withLease(t, {
       isSending: false,
       sendingAt: 0,
       sendAt: Date.now() + this.retryDelay,
       transport: transportIndex,
-    }));
+    })));
 
     if (!released) {
       this.__debug('[private handleError] lease lost before retry release, skipping', task.uuid);
@@ -1250,6 +1279,10 @@ class MailTime {
         }));
       } catch (renewError) {
         logError('[private renewClaim] storage error during claim renewal', renewError);
+        // Storage may have applied the write before the driver failed; remember the stamp
+        // so the outcome write can retry with it (see ___outcomeWrite).
+        // A stale claim is remembered as null: the lost outcome write is reported, never retried.
+        this.__uncertainRenewals.set(task, task.sendingAt > renewedAt - this.sendingTimeout ? renewedAt : null);
         halt();
         return;
       }
@@ -1280,6 +1313,38 @@ class MailTime {
     return { stop };
   }
 
+  /**
+   * @async
+   * @internal
+   * @memberOf MailTime
+   * @name ___outcomeWrite
+   * @description Run a lease-guarded outcome write. `write(t)` must derive its lease guard from `t`. When the write loses the lease and an earlier claim renewal threw (storage may have applied it), retry once with that renewal's stamp; a peer takeover bumps `tries` or stamps a later `sendingAt` while the lease is live, so the retry cannot match a taken-over row. The stamp is only remembered when the lease was still live at renewal time. If the retry also fails, count and report the lost write. A claim that was already stale when the renewal threw is reported without a retry. After `destroy()` the loss is counted without hook or log. Without an earlier renewal error a lost lease stays a debug-only skip.
+   * @param {MailTimeTask} task
+   * @param {(t: MailTimeTask) => Promise<boolean>} write
+   * @returns {Promise<boolean>}
+   */
+  async ___outcomeWrite(task, write) {
+    if (await write(task)) {
+      this.__uncertainRenewals.delete(task);
+      return true;
+    }
+    const attempted = this.__uncertainRenewals.get(task);
+    if (attempted === void 0) {
+      return false;
+    }
+    this.__uncertainRenewals.delete(task);
+    const lost = new Error('outcome write lost (renewal outcome uncertain or lease taken over)');
+    if (attempted === null || this.__abortInFlight) {
+      this.___reportWriteFailure(task, lost, 'complete');
+      return false;
+    }
+    if (await write({ ...task, sendingAt: attempted })) {
+      return true;
+    }
+    this.___reportWriteFailure(task, lost, 'complete');
+    return false;
+  }
+
   /** @internal Serialize every policy checkpoint with this attempt's claim renewal. */
   async ___sendWithRecipientPolicies(task) {
     if (!task || task.isSent || task.isFailed || task.isCancelled || task.isSettled || this.__abortInFlight) return;
@@ -1294,9 +1359,12 @@ class MailTime {
     }
     Object.assign(task, fields);
     const lease = new RecipientPolicyLease({
-      task, queue: this.queue, interval: this.renewClaim, maxRenewals: this.maxRenewals,
+      task, queue: this.queue, interval: this.renewClaim, maxRenewals: this.maxRenewals, sendingTimeout: this.sendingTimeout,
       shouldAbort: () => this.__abortInFlight,
-      report: (error) => logError('[recipientPolicies] lease persistence failed', error),
+      report: (error, phase) => {
+        if (phase === 'complete' || phase === 'checkpoint') this.___reportWriteFailure(task, error, phase);
+        else if (!this.__abortInFlight) logError('[recipientPolicies] claim renewal write failed; renewals stop, the outcome write still runs', error);
+      },
     });
     try {
       if (!lease.active) return;
@@ -1369,7 +1437,7 @@ class MailTime {
   /** @internal Persist SMTP acceptance before awaiting rejection classification or observation. */
   async ___attemptPolicyTransport(task, lease, compiled, context) {
     const transport = this.transports[context.transport.index];
-    const outgoing = { ...compiled, envelope: context.envelope };
+    const outgoing = { ...rewritePolicyHeaders(compiled), envelope: context.envelope };
     const { error, info } = await new Promise((resolve) => {
       let called = false;
       const done = (error, info) => {
@@ -1577,6 +1645,7 @@ class MailTime {
       task.tries = tries;
       task.isSending = true;
       task.sendingAt = sendingAt;
+      this.__uncertainRenewals.delete(task);
 
       let transportIndex = task.transport;
       if (!this.___isHealthyTransport(transportIndex)) {
@@ -1630,20 +1699,14 @@ class MailTime {
               if (isFullyDelivered) {
                 this.__debug(`email successfully sent, attempts: #${task.tries}, transport #${transportIndex} to: `, compiledOpts.to);
 
-                const leaseRemove = __leaseRemoveOpts(task);
-                const leaseUpdate = __withLease(task, {
-                  isSent: true,
-                  isSending: false,
-                  sendingAt: 0,
-                  mailOptions: task.mailOptions,
-                });
-
-                let completed = false;
-                if (!this.keepHistory) {
-                  completed = await this.queue.remove(task, leaseRemove);
-                } else {
-                  completed = await this.queue.update(task, leaseUpdate);
-                }
+                const completed = await this.___outcomeWrite(task, (t) => (!this.keepHistory
+                  ? this.queue.remove(t, __leaseRemoveOpts(t))
+                  : this.queue.update(t, __withLease(t, {
+                    isSent: true,
+                    isSending: false,
+                    sendingAt: 0,
+                    mailOptions: task.mailOptions,
+                  }))));
 
                 if (!completed) {
                   this.__debug('[private send] lease lost before success completion, skipping onSent', task.uuid);
@@ -1661,21 +1724,15 @@ class MailTime {
               if (task.tries >= this.maxTries) {
                 this.___finalizeRejected(task, info);
 
-                const leaseRemove = __leaseRemoveOpts(task);
-                const leaseUpdate = __withLease(task, {
-                  isSent: false,
-                  isFailed: true,
-                  isSending: false,
-                  sendingAt: 0,
-                  mailOptions: task.mailOptions,
-                });
-
-                let finalized = false;
-                if (!this.keepHistory) {
-                  finalized = await this.queue.remove(task, leaseRemove);
-                } else {
-                  finalized = await this.queue.update(task, leaseUpdate);
-                }
+                const finalized = await this.___outcomeWrite(task, (t) => (!this.keepHistory
+                  ? this.queue.remove(t, __leaseRemoveOpts(t))
+                  : this.queue.update(t, __withLease(t, {
+                    isSent: false,
+                    isFailed: true,
+                    isSending: false,
+                    sendingAt: 0,
+                    mailOptions: task.mailOptions,
+                  }))));
 
                 if (!finalized) {
                   this.__debug('[private send] lease lost before partial-failure completion, skipping onError', task.uuid);
@@ -1700,19 +1757,19 @@ class MailTime {
               }
 
               const nextSendAt = Date.now() + this.retryDelay;
-              const released = await this.queue.update(task, __withLease(task, {
+              const released = await this.___outcomeWrite(task, (t) => this.queue.update(t, __withLease(t, {
                 isSending: false,
                 sendingAt: 0,
                 sendAt: nextSendAt,
                 mailOptions: task.mailOptions,
-              }));
+              })));
               if (!released) {
                 this.__debug('[private send] lease lost before partial retry release', task.uuid);
                 return;
               }
               this.__debug(`[private send] Partial delivery, next attempt at ${new Date(nextSendAt)}: #${task.tries}/${this.maxTries} for remaining recipients`);
             } catch (completionError) {
-              logError('[private send] completion error after transport callback', completionError);
+              this.___reportWriteFailure(task, completionError);
             } finally {
               resolve();
             }
@@ -1728,7 +1785,11 @@ class MailTime {
         return;
       }
       logError('Exception during runtime:', e);
-      await this.___handleError(task, e, {});
+      try {
+        await this.___handleError(task, e, {});
+      } catch (completionError) {
+        this.___reportWriteFailure(task, completionError);
+      }
     }
   }
 
@@ -1790,31 +1851,20 @@ class MailTime {
    * @internal
    * @memberOf MailTime
    * @name ___verifyTransports
-   * @description Probe each transport's `verify()` once at startup. Failing transports are marked unusable and skipped during rotation; the failure is surfaced through `onError(error, null, { transportIndex, phase: 'verify' })`. Throws if every transport fails — there is nothing left that could deliver.
+   * @description Probe each transport's `verify()` once at startup, in parallel. A transport whose probe fails is quarantined (skipped during rotation) and reported through `onError(error, null, { transportIndex, phase: 'verify' })`. A probe that neither settles nor fails within `verifyTimeout` stops delaying `ready()` and leaves the transport usable; a verdict that arrives later still applies. Throws if every transport is quarantined.
    * @returns {Promise<void>}
    */
   async ___verifyTransports() {
     this.__debug('[private verifyTransports]');
-    const results = await Promise.all(this.transports.map(async (transport, index) => {
+    await Promise.all(this.transports.map(async (transport, index) => {
       if (!transport || typeof transport.verify !== 'function') {
-        return { index, ok: true };
+        return;
       }
-      try {
-        await Promise.resolve(transport.verify());
-        return { index, ok: true };
-      } catch (error) {
-        return { index, ok: false, error };
+      const outcome = await this.___verifyOne(transport, index);
+      if (outcome === 'timeout' && !this.__isDestroyed) {
+        console.warn(`[WARN] [mail-time] [verifyTransports] transport #${index} verify() gave no verdict within ${this.verifyTimeout}ms; keeping it usable, a late verdict still applies`);
       }
     }));
-
-    for (const r of results) {
-      if (r.ok) {
-        continue;
-      }
-      this.__unhealthyTransports.add(r.index);
-      logError(`[mail-time] [verifyTransports] transport #${r.index} failed verification`, r.error);
-      callHook('onError', this.onError, r.error, null, { transportIndex: r.index, phase: 'verify' });
-    }
 
     if (this.__unhealthyTransports.size === this.transports.length) {
       throw new Error(`[mail-time] [MailTime#ready] all ${this.transports.length} transport(s) failed verification — nothing can be delivered`);
@@ -1828,13 +1878,139 @@ class MailTime {
   /**
    * @internal
    * @memberOf MailTime
+   * @name ___verifyOne
+   * @description Start one `transport.verify(callback)` probe bounded by `verifyTimeout`. A callback is always passed. The first of the callback, a returned thenable, a synchronous throw, or a synchronous `true`/`false` decides the verdict. `false` is what Nodemailer's `Mailer#verify` returns, without calling back, when the underlying transport has no `verify` method. Any other synchronous non-thenable return value (for example the timer handle an expression-bodied arrow returns) is ignored, so a callback that reports an error later still counts, and a verify that never calls back waits for the timeout. The verdict is applied through `___applyVerdict` even when it arrives after the timeout, guarded by a per-transport generation. Resolves `'ok'`, `'fail'`, or `'timeout'` (the wait ended without a verdict or the instance was destroyed).
+   * @param {MailTimeTransport} transport
+   * @param {number} index
+   * @returns {Promise<'ok' | 'fail' | 'timeout'>}
+   */
+  ___verifyOne(transport, index) {
+    const gen = (this.__verifyGen[index] || 0) + 1;
+    this.__verifyGen[index] = gen;
+    return new Promise((resolve) => {
+      let decided = false;
+      let waiting = true;
+      const stopWaiting = (outcome) => {
+        if (!waiting) {
+          return;
+        }
+        waiting = false;
+        clearTimeout(timer);
+        this.__probeCancels.delete(cancel);
+        resolve(outcome);
+      };
+      const cancel = () => stopWaiting('timeout');
+      const timer = setTimeout(cancel, this.verifyTimeout);
+      if (typeof timer.unref === 'function') {
+        timer.unref();
+      }
+      this.__probeCancels.add(cancel);
+
+      const decide = (error) => {
+        if (decided) {
+          return;
+        }
+        decided = true;
+        this.___applyVerdict(index, gen, error);
+        stopWaiting(error ? 'fail' : 'ok');
+      };
+
+      try {
+        const returned = transport.verify((error) => decide(error || void 0));
+        if (returned && typeof returned.then === 'function') {
+          returned.then(() => decide(), (error) => decide(error || new Error('[mail-time] [verifyTransports] verify() rejected')));
+        } else if (returned === true || returned === false) {
+          decide();
+        }
+      } catch (error) {
+        decide(error || new Error('[mail-time] [verifyTransports] verify() threw'));
+      }
+    });
+  }
+
+  /**
+   * @internal
+   * @memberOf MailTime
+   * @name ___applyVerdict
+   * @description Apply a probe verdict to the health state. Ignored after `destroy()` and when a newer probe of the same transport has started (generation guard). Success removes the transport from quarantine. Failure quarantines it and fires `onError` once per quarantine episode; a failure for an already quarantined transport changes nothing here (`___maybeReprobe` owns the backoff).
+   * @param {number} index
+   * @param {number} gen
+   * @param {unknown} [error]
+   * @returns {void}
+   */
+  ___applyVerdict(index, gen, error) {
+    if (this.__isDestroyed || this.__verifyGen[index] !== gen) {
+      return;
+    }
+    const quarantined = this.__unhealthyTransports.has(index);
+    if (!error) {
+      if (!quarantined) {
+        return;
+      }
+      this.__unhealthyTransports.delete(index);
+      this.__reprobe.delete(index);
+      if (this.strategy === 'backup' && index < this.transport) {
+        this.transport = index;
+      }
+      console.log(`[mail-time] [verifyTransports] transport #${index} recovered; back in rotation`);
+      return;
+    }
+    if (quarantined) {
+      return;
+    }
+    this.__unhealthyTransports.add(index);
+    this.__reprobe.set(index, { count: 0, nextProbeAt: Date.now() + REPROBE_BASE_MS, inFlight: false });
+    if (this.transport === index && this.__unhealthyTransports.size < this.transports.length) {
+      this.transport = this.___nextHealthyTransport(index);
+    }
+    logError(`[mail-time] [verifyTransports] transport #${index} failed verification`, error);
+    callHook('onError', this.onError, error, null, { transportIndex: index, phase: 'verify' });
+  }
+
+  /**
+   * @internal
+   * @memberOf MailTime
+   * @name ___maybeReprobe
+   * @description Start one background `verify()` probe for a quarantined transport when its backoff has elapsed and no probe is in flight. Never awaited by the send path. Backoff starts at 60 s, doubles per failed or timed-out probe and caps at 15 min. Failures only reach `__debug`. No probes for `type: 'client'`, `verifyTransports: false`, or after `destroy()`.
+   * @param {number} index
+   * @returns {void}
+   */
+  ___maybeReprobe(index) {
+    if (this.__isDestroyed || this.type !== 'server' || !this.verifyTransports) {
+      return;
+    }
+    const st = this.__reprobe.get(index);
+    const transport = this.transports[index];
+    if (!st || st.inFlight || st.nextProbeAt > Date.now() || !transport || typeof transport.verify !== 'function') {
+      return;
+    }
+    st.inFlight = true;
+    this.__debug(`[private reprobe] transport #${index}, attempt after ${st.count} failure(s)`);
+    this.___verifyOne(transport, index).then((outcome) => {
+      st.inFlight = false;
+      if (outcome === 'ok' || this.__isDestroyed || this.__reprobe.get(index) !== st) {
+        return;
+      }
+      st.count++;
+      st.nextProbeAt = Date.now() + Math.min(REPROBE_BASE_MS * Math.pow(2, st.count), REPROBE_MAX_MS);
+      this.__debug(`[private reprobe] transport #${index} ${outcome}, next probe at ${new Date(st.nextProbeAt)}`);
+    });
+  }
+
+  /**
+   * @internal
+   * @memberOf MailTime
    * @name ___isHealthyTransport
-   * @description Return true when the transport at `index` has not been marked unusable by verification.
+   * @description Return true when the transport at `index` is not quarantined. A quarantined transport whose backoff has elapsed triggers a background re-probe; this call still returns false.
    * @param {number} index
    * @returns {boolean}
    */
   ___isHealthyTransport(index) {
-    return !this.__unhealthyTransports.has(index);
+    if (!this.__unhealthyTransports.has(index)) {
+      return true;
+    }
+    this.___maybeReprobe(index);
+    return false;
   }
 
   /**

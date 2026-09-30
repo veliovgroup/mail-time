@@ -8,15 +8,15 @@
 - Default `josk.zombieTime` raised to **60000 ms** (was `32786`) to match JoSk best-practice minimum.
 - New `josk.onError` hook routed to MailTime's logger by default.
 - Removed the `deepmerge` runtime dependency — replaced by a tiny inline `deepMerge` tailored to nodemailer mail option shapes. Single runtime dep now: `josk`.
-- Node engine bumped to `>=20.9.0`. Bun ≥ 1.1.0 supported.
+- Node engine bumped to `>=20.9.0` (relaxed to `>=14.19.3` in 5.3.0). Bun ≥ 1.1.0 supported.
 - **New `mailTimePreset(name, overrides)` helper + `presets` / `presetNames` exports.** One-line setup for the common email shapes: `transactional`, `otp`, `newsletter`, `marketing`, `notifications`, `alerts`. The function deep-clones the named preset and deep-merges your overrides (scalars win, nested `josk` composes), returning a ready-to-pass `MailTime` constructor config — you supply `queue` / `transports` / `josk.adapter` / `prefix` on top. Built-in presets live in `presets.js` (frozen); the helper is re-exported from `mail-time`. See README §"Settings presets" for the full table. No behavioral change for hand-coded configs — purely additive.
 - **New `isSending` per-row lock + bounded parallel sends inside a single MailTime instance.** Each row now carries `isSending` (the lock) and `sendingAt` (when the lock was taken). Claim updates set `{ isSending: true, sendingAt: now, tries: tries+1 }` atomically, guarded by `isSent=false AND isFailed=false AND isCancelled=false AND tries=task.tries AND (isSending=false OR sendingAt <= now - sendingTimeout)`. The storage CAS makes it impossible for two workers — in the same instance or across the cluster — to flip the same row at the same `tries`, so duplicate delivery is prevented even when sends run in parallel.
 - **New `mode` option** (`'one' | 'batch'`, default `'batch'`). Mirrors JoSk's `execute`: `'batch'` claims every due row per tick; `'one'` claims a single row per tick (fairness across cluster nodes).
 - **New `concurrency` option** (default `1`). Up to N parallel SMTPs per instance, dispatched through an internal worker pool. Increase to scale throughput on a single host before resorting to more `prefix`es or more pods.
 - **New `sendingTimeout` option** (default `300000` ms / 5 min). Stale-lock recovery — a row stuck `isSending=true` because its worker died is reclaimable after this window.
 - **New `drain()` method.** Resolves once every in-flight send finishes. Pair with `destroy()` for graceful shutdown.
-- **New `ping()` method.** Runtime healthcheck for queue + scheduler (and transport probe state when `verifyTransports: true`).
-- **New `verifyTransports` option** (default `true`). `ready()` probes each transport's `verify()` once at startup; failures mark transports unhealthy but `ready()` still resolves unless every transport fails.
+- **New `ping()` method.** Runtime healthcheck for the scheduler and the queue. It resolves `{ status, code, statusCode, paused, error? }` and does not report transport health. Startup `verifyTransports` failures surface through `onError(error, null, { transportIndex, phase: 'verify' })` instead.
+- **New `verifyTransports` option** (default `true`). `ready()` probes each transport's `verify()` at startup (5.3 also re-probes quarantined transports lazily; see `migration-v5.2-v5.3.md`); failures mark transports unhealthy but `ready()` still resolves unless every transport fails.
 - **New `keepHistory` option** (default `false`). When `true`, sent/failed rows stay in storage with terminal flags instead of being removed.
 - **JoSk lease released faster.** `___iterate` returns as soon as the scan + claim phase completes; SMTP work continues in the background pool. Other ticks (this node or others) can immediately pick up rows still `isSending=false`.
 - **Per-recipient retries.** When a multi-`to` / `cc` / `bcc` send is partially rejected by the SMTP server, MailTime now retries **only** the un-accepted addresses on the next attempt — delivered recipients never receive a duplicate copy.
@@ -39,7 +39,7 @@
 - `MailTimeTask` gains optional `isSending?: boolean` and `sendingAt?: number` fields.
 - New `MailTimeIterateOptions` export (`{ limit?: number, sendingTimeout?: number }`).
 - `MailTimeOptions` gains `mode?: 'one' | 'batch'`, `concurrency?: number`, `sendingTimeout?: number`, `verifyTransports?: boolean`, `keepHistory?: boolean`.
-- `MailTime#drain(): Promise<void>` and `MailTime#ping()` added to the public surface.
+- `MailTime#drain()` (`Promise<void>` in 4.x; resolves `{ failedWrites }` since 5.3.0) and `MailTime#ping()` added to the public surface.
 - `CustomQueue#iterate` signature widened to `(opts?: MailTimeIterateOptions) => Promise<void> | void`.
 - New `MailTimeRejectedRecipient` export. `MailTimeMailOptions` gains optional `accepted?: string[]` and `rejected?: MailTimeRejectedRecipient[]` fields documenting the in-flight delivery state.
 - New `mailTimePreset`, `presets`, and `presetNames` value exports plus `MailTimePresetConfig` and `MailTimePresetName` type exports (via the new `presets.js` module).
@@ -49,7 +49,7 @@
 
 ## Migration from 3.x
 
-1. Update Node to ≥ 20.9.0 (Bun ≥ 1.1.0 supported).
+1. Update Node to ≥ 14.19.3 (Bun ≥ 1.1.0 supported; 4.0.0 through 5.2.x declared ≥ 20.9.0).
 2. Replace any adapter import / construction with `MongoQueue`, `RedisQueue`, or `PostgresQueue`.
 3. Pass `josk` — required for `type: 'server'`.
 4. If you depended on the old `josk.zombieTime` default (`32786`), set it explicitly.

@@ -35,7 +35,7 @@ Many clients + one or more servers coexist behind the same `prefix` in the same 
 - 📮 **Email concatenation** — fold same-`to` emails arriving inside a window into one letter.
 - 🎛️ **One-line setup** — built-in [presets](#settings-presets) for `transactional`, `otp`, `newsletter`, `marketing`, `notifications`, `alerts`.
 - 🛢️ **Three first-party storages** — MongoDB, Redis, PostgreSQL. Plus a [custom-adapter contract](https://github.com/veliovgroup/mail-time/blob/master/docs/queue-api.md).
-- 📦 **Bun ≥ 1.1.0 & Node ≥ 20.9.0** — same code, both runtimes.
+- 📦 **Bun ≥ 1.1.0 & Node ≥ 14.19.3** — same code, both runtimes. See [supported runtimes](#supported-runtimes).
 - 🤖 **Ships with AI agent skills** — see [AI agent skills](#ai-agent-skills) below.
 - 📐 **Hand-tuned ESM + CJS + TypeScript declarations**.
 - 🧪 **99%+ Jest line coverage** (85% threshold enforced) + Mocha integration tests for every adapter.
@@ -519,13 +519,14 @@ await mailQueue.sendMail({
 | `shouldFailOver`              | `(error, info, email) => boolean`                   | —                          | Veto rotating to the next transport for this failure. Default: rotate unless the error carries `mayFailOver === false`. See [Transport fail-over](#transport-fail-over).                     |
 | `strictPayload`               | `boolean`                                           | `false`                    | Narrow every queued letter to `allowedMailFields` and force nodemailer's `disableFileAccess` / `disableUrlAccess`. See [Queue payload trust](#queue-payload-trust).                          |
 | `allowedMailFields`           | `string[]`                                          | —                          | Extra field names permitted under `strictPayload` (added to the built-in allowlist).                                                                                                        |
-| `verifyTransports`            | `boolean`                                           | `true`                     | Probe each transport via `transport.verify()` once at `ready()`. Failing transports are marked unusable, surfaced through `onError(error, null, { transportIndex, phase: 'verify' })`, and skipped during rotation/fallback. Throws from `ready()` if **every** transport fails. Transports without a `verify()` method are treated as healthy. |
+| `verifyTransports`            | `boolean`                                           | `true`                     | Probe each transport via `transport.verify()` once at `ready()`. Failing transports are quarantined (skipped during rotation/fallback) and surfaced through `onError(error, null, { transportIndex, phase: 'verify' })`. Throws from `ready()` if **every** transport fails. Transports without a `verify()` method are treated as healthy. MailTime always calls `verify(callback)` with a `(error, success) => void` callback. The first of the callback, a returned thenable, a synchronous throw, or a synchronous `true`/`false` return decides. A `false` from Nodemailer (transport without `verify`) means healthy, and a callback `success` of `false` is ignored. Any other synchronous return value is ignored. A quarantined transport is re-probed in the background once its backoff elapses (60 s, doubling to 15 min, no option). A successful probe returns it to rotation. Sends never wait for a probe. No probes with `verifyTransports: false`, on `type: 'client'`, or after `destroy()`. |
+| `verifyTimeout`               | `number`                                            | `30000`                    | Milliseconds `ready()` waits for each `transport.verify()`. Positive numbers, including `Infinity`, are clamped to `2147483647`. Anything else (non-number, `0`, negative, `NaN`) uses `30000`. On timeout `ready()` stops waiting, logs one warning, and the transport keeps its health (usable if it was usable, quarantined if it was quarantined). No `onError`. A verdict that arrives later still applies: success clears a quarantine, failure quarantines the transport and calls `onError` once. A `verify()` that neither calls back nor returns a Promise delays `ready()` by this value and stays usable. |
 | `template`                    | `string`                                            | `'{{{html}}}'`             | Default envelope.                                                                                                                                                                           |
 | `prefix`                      | `string`                                            | `''`                       | Queue namespace. **Same** on every `client` and `server` for one logical queue; **different** per email class. Inherited by the queue adapter; JoSk scheduler uses `mailTimeQueue<prefix>`. |
 | `from`                        | `string \| (transport, details) => string`          | —                          | Strongly recommended for spam-passing `From:` formatting. `details` is `{ index, from }` — see [Resolving the sender](#resolving-the-sender).                                                |
 | `debug`                       | `boolean`                                           | `false`                    | Verbose logs.                                                                                                                                                                               |
 | `onSent(email, info)`         | `function`                                          | —                          | Without policies, called once the task is fully delivered. Policy mode adds grouped `recipients, summary` arguments. `email.mailOptions[i].accepted` lists every address that got through (across all attempts).                                                        |
-| `onError(error, email, info)` | `function`                                          | —                          | Without policies, called once the retry budget is exhausted with at least one un-accepted recipient. Policy mode adds grouped `recipients, summary` arguments. `email.mailOptions[i].rejected` lists each un-delivered address with its last error. Also fires once per transport that fails `verify()` at startup with `email === null` and `info = { transportIndex, phase: 'verify' }`. |
+| `onError(error, email, info)` | `function`                                          | —                          | Without policies, called once the retry budget is exhausted with at least one un-accepted recipient. Policy mode adds grouped `recipients, summary` arguments. `email.mailOptions[i].rejected` lists each un-delivered address with its last error. Also fires once per transport that fails `verify()` at startup with `email === null` and `info = { transportIndex, phase: 'verify' }`. Also fires once when a storage write that records a send outcome throws, with `details.phase` of `'complete'` (final or retry-release write) or `'checkpoint'` (policy mode, recipient results after SMTP). |
 | `recipientPolicies` | `MailTimeRecipientPolicy[]` | — | Optional nonempty provider list. See [Recipient policies](#recipient-policies). |
 | `onSuppressed(task, recipients, summary)` | `function` | — | Terminal suppressed group in policy mode. |
 | `onRejected(task, recipients, summary)` | `function` | — | Terminal permanently rejected group in policy mode. |
@@ -557,9 +558,9 @@ For deeper JoSk semantics, install the JoSk skill: **`npx skills add veliovgroup
 - `cancelMail(uuidOrPromise)` → `Promise<boolean>`. Accepts the `uuid` or the `Promise<string>` from `sendMail`.
 - `cancel(uuid)` — alias of `cancelMail`.
 - `ping()` → `Promise<{status, code, statusCode, paused?, error?}>`. Pings scheduler then queue; `paused` reflects `isPaused`.
-- `ready()` → `Promise<MailTime>`. Awaits all startup work; rejects with `.cause` on storage failure.
+- `ready()` → `Promise<MailTime>`. Awaits all startup work; rejects on storage failure with the original error in `.cause` (`Error` `cause` is ignored below Node 16.9).
 - `destroy(opts?)` → `boolean` or `Promise<boolean>` when `{ drain: true }`. Graceful shutdown waits for JoSk's scan and the SMTP pool; sends not yet started are dropped and stay queued; `schedulerTimeout` defaults to 10000 ms; a timed-out scan or failed JoSk shutdown resolves `false` (never rejects). Plain `destroy()` aborts completion writes.
-- `drain()` → `Promise<void>`. Resolves once every in-flight SMTP attempt finishes. Useful in tests and graceful-shutdown paths.
+- `drain()` → `Promise<{ failedWrites }>`. Resolves once every in-flight SMTP attempt finishes. `failedWrites` counts, since instance creation, storage writes that threw while recording an outcome, plus outcome writes lost after a claim-renewal error (one retry with the renewal's stamp first (no retry when the claim was already stale at renewal time); message `outcome write lost (renewal outcome uncertain or lease taken over)`). Each is also reported through `onError` with `details.phase` (`'complete'` or `'checkpoint'`). Such a row can stay `sending` and be re-sent after `sendingTimeout`. Read it after `destroy({ drain: true })` with `await mailQueue.drain()` to learn whether shutdown was clean. Useful in tests and graceful-shutdown paths.
 - `pause()` / `resume()` → `boolean`. Server-only reversible backpressure; no-ops on `client` or after `destroy()`. See [Shutdown](#6-shutdown).
 - `isPaused` → `boolean`. Read-only; always `false` on `client`.
 
@@ -622,9 +623,18 @@ bun test ./test/jest
 
 `npm test` runs Jest unit tests, then Mocha integration tests, then TypeScript declaration tests. Jest coverage threshold is **85%** across statements, branches, functions, and lines. GitHub Actions runs the matrix against `redis@^4` and `redis@^5`.
 
+## Supported runtimes
+
+`engines.node` is `>=14.19.3`. The published package (ESM `index.js` and CJS `index.cjs`) is tested from a packed tarball with `test/runtime-matrix/run.sh` on Node 14.19.3, 14.21.3, 16.20.2, 18.19.1, 20.11.1, 22.21.1, 24.16.0 and Bun. Each run sends through a stub transport with `MongoQueue`, and checks load, shutdown, `pause()`/`resume()` and drain behavior (12 checks, all passing).
+
+- Node 12 fails to parse the package (optional chaining). Node 14.0 to 14.16 lack `crypto.randomUUID`; 14.17 to 14.18 are untested.
+- The dependency `josk@6.5.0` declares `engines.node >=14.21.3`. Package managers that enforce `engines` (`npm --engine-strict`, Yarn 1) reject the install on Node 14.19.3 to 14.21.2.
+- Store drivers set their own floor. `mongodb` 7 needs Node 20.19+, `mongodb` 6 needs 16.20.1+, `mongodb` 5 needs 14.20.1+; `redis` 5 needs 18.19+; `pg` 8 needs 16+. The Node 14 and 16 runs used `mongodb@3.7.4`. Only `MongoQueue` is tested below Node 18. `RedisQueue` and `PostgresQueue` load on those versions but are untested there.
+- The repository's own test suite (Jest 30, Mocha 11, TypeScript 6) needs Node 20 or later (dev toolchain). CI runs it on Node 20.9, 22 and LTS, and runs the packed-artifact matrix on Node 14.19.3, 16.20.2 and 18.19.1.
+
 ## Bun
 
-MailTime ships pure ESM with a generated CJS bundle. Both runtimes (Bun ≥ 1.1.0, Node ≥ 20.9.0) load it directly:
+MailTime ships pure ESM with a generated CJS bundle. Both runtimes (Bun ≥ 1.1.0, Node ≥ 14.19.3) load it directly:
 
 ```js
 import { MailTime } from 'mail-time'; // works in both

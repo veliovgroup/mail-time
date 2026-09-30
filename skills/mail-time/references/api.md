@@ -5,7 +5,7 @@ Every public surface of the `mail-time` NPM package. Pair with `adapters.md` for
 ## Imports
 
 ```js
-// ESM (Node ≥ 20.9.0 / Bun ≥ 1.1.0)
+// ESM (Node ≥ 14.19.3 / Bun ≥ 1.1.0)
 import {
   MailTime,
   MongoQueue,
@@ -37,7 +37,7 @@ import type {
   CustomQueue,
 } from 'mail-time';
 
-// ESM subpath imports (Node ≥ 20.9.0 / Bun ≥ 1.1.0)
+// ESM subpath imports (Node ≥ 14.19.3 / Bun ≥ 1.1.0)
 import { mailTimePreset } from 'mail-time/presets';
 import { MongoQueue } from 'mail-time/adapters/mongo';
 import { RedisQueue } from 'mail-time/adapters/redis';
@@ -90,11 +90,12 @@ Constructor. The scheduler starts immediately when `opts.type === 'server'`.
 | `shouldFailOver` | `(error, info, email) => boolean` | — | Veto rotating to next transport. `info` is `object \| undefined`. Default: rotate unless `error.mayFailOver === false`. A throwing hook keeps the current transport. |
 | `strictPayload` | `boolean` | `false` | Narrow every queued letter to `allowedMailFields` and force `disableFileAccess` / `disableUrlAccess`. `raw` is refused regardless of this option. |
 | `allowedMailFields` | `string[]` | — | Extra field names permitted under `strictPayload`. |
-| `verifyTransports` | `boolean` | `true` | Probe each transport via `transport.verify()` once at `ready()`. Failing transports are marked unusable (skipped during rotation/fallback) and surfaced through `onError(err, null, { transportIndex, phase: 'verify' })`. `ready()` rejects if every transport fails. Transports without a `verify()` method are treated as healthy. Set to `false` to disable. |
+| `verifyTransports` | `boolean` | `true` | Probe each transport via `transport.verify()` once at `ready()`. Failing transports are quarantined (skipped during rotation/fallback) and surfaced through `onError(err, null, { transportIndex, phase: 'verify' })`. `ready()` rejects if every transport fails. Transports without a `verify()` method are treated as healthy. MailTime always passes a callback; the first of callback, returned thenable, sync throw, or sync `true`/`false` decides. A quarantined transport is re-probed lazily in the background (60 s backoff, doubling, 15 min cap, no option) and returns to rotation on success. No probes for `type: 'client'`, `verifyTransports: false`, or after `destroy()`. Set to `false` to disable. |
+| `verifyTimeout` | `number` | `30000` | Milliseconds `ready()` waits per `transport.verify()`. Positive numbers, including `Infinity`, clamped to `2147483647`; anything else uses `30000`. On timeout `ready()` stops waiting with one warning and the transport's health is unchanged (no `onError`). A later verdict still applies: success clears quarantine, failure quarantines and calls `onError` once. A `verify()` that never calls back nor returns a Promise delays `ready()` by this value but stays usable. |
 | `template` | `string` | `'{{{html}}}'` | Mustache-like default template wrapping every letter. |
 | `debug` | `boolean` | `false` | Verbose logs. |
 | `onSent` | `(task, info?) => void` | — | Without policies: called **once** after every recipient is accepted (full delivery). Policy mode uses terminal groups below. Not called per attempt or per partially-accepted recipient — see "Per-recipient delivery state" below. |
-| `onError` | `(error, email, details?) => void` | — | Without policies: called after the final retry attempt fails. Policy mode uses terminal groups below. Also fires once per transport that fails `verify()` at startup, with `email === null` and `details = { transportIndex, phase: 'verify' }`. |
+| `onError` | `(error, email, details?) => void` | — | Without policies: called after the final retry attempt fails. Policy mode uses terminal groups below. Also fires once per transport that fails `verify()` at startup, with `email === null` and `details = { transportIndex, phase: 'verify' }`. Also fires once when a storage write that records a send outcome throws, with `details.phase` of `'complete'` (final or retry-release write) or `'checkpoint'` (policy mode, recipient results after SMTP). |
 | `recipientPolicies` | `MailTimeRecipientPolicy[]` | — | Optional providers; full contract: [recipient policies](https://github.com/veliovgroup/mail-time/blob/master/docs/recipient-policies.md). |
 | `onSuppressed` / `onRejected` | `(task, recipients, summary) => void` | — | Terminal recipient groups with policies. |
 
@@ -210,9 +211,13 @@ make sure it is available and properly configured
 
 Stops new dispatches. Plain `destroy()` returns `true` on first call (`false` thereafter) and aborts in-flight completion writes. `await destroy({ drain: true, schedulerTimeout?: number })` awaits JoSk `shutdown()` and then the SMTP pool; sends still waiting for a `concurrency` slot are dropped at once (rows stay unclaimed), so in-flight SMTP does not count against the timeout; returns `false` if a scheduler handler times out or JoSk shutdown throws (logged); never rejects. Default `schedulerTimeout` is 10000 ms; it does not bound JoSk's own storage scan, SMTP, or policy hooks. Invalid timeouts throw before shutdown. See [JoSk 6.4 recovery](https://github.com/veliovgroup/mail-time/blob/master/docs/tuning.md#josk-64-restarts-and-shutdown).
 
-### `mailTime.drain()` → `Promise<void>`
+### `mailTime.drain()` → `Promise<{ failedWrites: number }>`
 
-Resolves once every in-flight SMTP send started by the internal pool has settled. The pool is bounded by `concurrency`. Use cases:
+Resolves once every in-flight SMTP send started by the internal pool has settled. The pool is bounded by `concurrency`.
+
+The result's `failedWrites` is the cumulative count (since instance creation) of storage writes that threw while recording a send outcome, plus outcome writes lost after a claim-renewal error (retried once with the renewal's stamp (no retry when the claim was already stale at renewal time); message `outcome write lost (renewal outcome uncertain or lease taken over)`); each was also reported once through `onError` with `details.phase` `'complete'` or `'checkpoint'`, and its row may stay `sending` until `sendingTimeout` and then be re-sent (at-least-once). After `destroy({ drain: true })`, call `await mailTime.drain()` and compare `failedWrites` with an earlier reading to detect a dirty shutdown.
+
+Use cases:
 
 - **Graceful shutdown.** `await mailTime.destroy({ drain: true })`. Plain `destroy()` aborts completion writes and leaves claims for stale recovery.
 - **Tests that drive iterate.** Calling `await mailTime.___iterate()` or `await mailTime.queue.iterate()` only awaits the scan + claim phase. SMTP work happens in the pool; `await mailTime.drain()` waits for it.
@@ -352,7 +357,7 @@ When a `to` / `cc` / `bcc` recipient list contains multiple addresses and the SM
 
 ## Recipient policies (5.2+)
 
-`recipientPolicies` runs `beforeSend`, `classifyRejections`, and `observeAttempt` hooks; `beforeSend` can suppress an address, while a permanent rejection needs an attributable transport record. Default provider failure mode is `'retry'`; `'continue'` discards a failed provider's result. Accepted/suppressed/rejected recipients never retry. Custom adapters need `supportsRecipientPolicies = true` plus the guards in `adapters.md`. Each `to`/`cc`/`bcc`/`from`/`envelope` entry must be one mailbox (quoted display names like `"Doe, John" <a@x.com>` and `{ name, address }` are fine; use arrays, not comma lists). Unparseable addresses fail the task on that attempt without SMTP, with `error.code === 'MAIL_TIME_INVALID_ADDRESS'` and `error.field` (for example `from` or `to[1]`).
+`recipientPolicies` runs `beforeSend`, `classifyRejections`, and `observeAttempt` hooks; `beforeSend` can suppress an address, while a permanent rejection needs an attributable transport record. Default provider failure mode is `'retry'`; `'continue'` discards a failed provider's result. Accepted/suppressed/rejected recipients never retry. Custom adapters need `supportsRecipientPolicies = true` plus the guards in `adapters.md`. Each `to`/`cc`/`bcc`/`from`/`envelope` entry must be one mailbox (quoted display names like `"Doe, John" <a@x.com>` and `{ name, address }` are fine; a name with unquoted `@ [ ] \ ( )` is sent quoted; use arrays, not comma lists). Unparseable addresses fail the task on that attempt without SMTP, with `error.code === 'MAIL_TIME_INVALID_ADDRESS'` and `error.field` (for example `from` or `to[1]`).
 
 Policies filter the SMTP envelope, **not message headers**. A stream transport can retain a suppressed BCC in generated MIME. Remove sensitive addresses from headers before enqueueing. Stale claims with only durable terminal results settle without another send or attempt. Provider I/O needs application timeouts; callbacks remain best-effort.
 

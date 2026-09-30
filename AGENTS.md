@@ -124,7 +124,7 @@ const sayName = (name) => {
 
 ## Standards
 - Terse. No obvious comments. Exact adapter API compliance.
-- ESM primary; JSDoc on public API; CJS generated. Node ≥ 20.9.0, Bun ≥ 1.1.0.
+- ESM primary; JSDoc on public API; CJS generated. Node ≥ 14.19.3 (runtime; dev toolchain needs Node 20+), Bun ≥ 1.1.0.
 - JSDoc on source drives `.d.ts`. Mark internal methods with the `___`/`__` prefix; they get stripped.
 - Strict validation in constructors. Throw with `[mail-time] [<scope>]` prefix.
 - One runtime dep: `josk`. **Don't add deps** without strong reason — the package's selling points are "tiny, no fluff".
@@ -157,8 +157,17 @@ REDIS_URL=redis://127.0.0.1:6379 MONGO_URL=mongodb://127.0.0.1:27017/test PG_URL
 
 - Jest threshold: 85% statements/branches/functions/lines. Don't drop it.
 - Add tests for any change. Cover both happy path and at least one failure path.
-- Bun: `bun test ./test/jest` runs the Jest suite under Bun's runner.
+- Bun: `bun test ./test/jest` runs the same `*.test.js` files and test count as `npm run test:jest` under Bun's runner.
 - Live-SMTP recipient for integration tests: use `{random}@md5hashing.net` (the domain accepts every inbound recipient). For a guaranteed reject use `${randomUUID()}@${randomUUID()}.invalid`.
+
+### Testing traps
+
+Each of these looks like a code bug but comes from the test setup.
+
+- `createQueue()` in `test/jest/helpers.js` stores a shallow copy on `push()`, and tests pass `{ ...queue.records.get(uuid) }` to `___send`, so the task and the stored row share one `mailOptions` array that `___trackAcceptedRecipients` changes (`mailOptions[i].accepted`) before any storage write; strip `mailOptions` before asserting a stored row is untouched.
+- Every queued row starts with `isSettled: false` (set by `___addToQueue`), and the policy claim writes `recipientResults: []` before the `beforeSend` checkpoint fills it before SMTP, so never assert `undefined` on either field.
+- In agent shells Jest 30 switches to its agent reporter, which prints only failing files and the summary with no per-test check marks, so list failing test names with `--json --outputFile <file>`.
+- For ad-hoc lease or outcome-write scenarios, copy the harness shape from `run()` in `test/jest/claim-renew-uncertain.test.js`, run it in a `/tmp` copy of the repo with `node_modules` symlinked, and delete the copy afterwards.
 
 ## Guidelines
 - Read `docs/queue-api.md` + existing adapters + tests before touching `adapters/`.
