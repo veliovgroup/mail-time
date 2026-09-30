@@ -16,11 +16,12 @@
 
 ## Recipient policies: display names
 
-With `recipientPolicies`, a display name that contains an unquoted `@`, `[`, `]`, `\`, `(` or `)` is now rejected. 5.2.1 accepted it. Quote the name:
+With `recipientPolicies`, every address 5.2.1 accepted still works, and quoted display names such as `"Doe, John" <user@example.com>` now work too. No code change is needed.
+
+A display name with an unquoted `@`, `[`, `]`, `\`, `(` or `)` is sent quoted, so the header text changes:
 
 ```js
-// rejected in 5.3: to: 'a@b.com <c@d.com>'
-to: '"a@b.com" <c@d.com>'
-// rejected in 5.3: to: 'John (Sales) <x@y.com>'
-to: '"John (Sales)" <x@y.com>'
+to: 'John (Sales) <x@y.com>'
+// 5.2: To: John <x@y.com>
+// 5.3: To: "John (Sales)" <x@y.com>
 ```

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import nodemailer from 'nodemailer';
-import { normalizePolicyAddress, preparePolicyEnvelope } from '../../recipient-policy.js';
+import { normalizePolicyAddress, preparePolicyEnvelope, rewritePolicyHeaders } from '../../recipient-policy.js';
 import { createPolicyMailTime } from './recipient-policy-helpers.js';
 
 const instances = [];
@@ -34,6 +34,13 @@ describe('display-name mailboxes', () => {
     ['O\'Brien <a@example.com>', 'a@example.com'],
     ['Имя Фамилия <a@example.com>', 'a@example.com'],
     ['""<a@example.com>', 'a@example.com'],
+    ['a@example.com <b@example.com>', 'b@example.com'],
+    ['Back\\slash <a@example.com>', 'a@example.com'],
+    ['[bracket] <a@example.com>', 'a@example.com'],
+    ['John (Sales) <a@example.com>', 'a@example.com'],
+    ['a( <a@example.com>', 'a@example.com'],
+    ['a (b <a@example.com>', 'a@example.com'],
+    ['@lead <a@example.com>', 'a@example.com'],
     ['  <a@example.com>  ', 'a@example.com'],
     ['a@example.com', 'a@example.com'],
     [{ name: 'Doe, "John"', address: 'a@example.com' }, 'a@example.com'],
@@ -51,10 +58,13 @@ describe('display-name mailboxes', () => {
     ['"trailing escape\\', 'quote'],
     ['A <a@example.com> B', 'trailing'],
     ['A <a@example.com> B <b@example.com>', 'two angles'],
-    ['a@example.com <b@example.com>', 'unquoted @'],
     ['Doe, John <a@example.com>', 'unquoted comma'],
-    ['Back\\slash <a@example.com>', 'unquoted backslash'],
-    ['[bracket] <a@example.com>', 'unquoted bracket'],
+    ['A > B <a@example.com>', 'unquoted >'],
+    ['a (b <c@example.com>) <a@example.com>', 'comment containing <'],
+    ['a (b, c) <a@example.com>', 'comment containing ,'],
+    ['John <a@example.com> (Sales)', 'trailing comment'],
+    ['(c) a@example.com', 'comment on a bare address'],
+    ['a <<a@example.com>>', 'nested angle'],
     ['<a@example.com', 'unclosed angle'],
     ['<>', 'empty angle'],
     ['"a b"@example.com', 'quoted local part'],
@@ -236,8 +246,58 @@ describe('address parse failures', () => {
   });
 });
 
+describe('auto-quoted display names', () => {
+  it.each([
+    ['a@example.com <B@Example.com>', { name: 'a@example.com', address: 'B@Example.com' }],
+    ['John (Sales) <a@example.com>', { name: 'John (Sales)', address: 'a@example.com' }],
+    ['a( <a@example.com>', { name: 'a(', address: 'a@example.com' }],
+    ['Back\\slash  [x] <a@example.com>', { name: 'Back\\slash [x]', address: 'a@example.com' }],
+    ['"Doe" @home <a@example.com>', { name: 'Doe @home', address: 'a@example.com' }],
+  ])('rewrites %j to a { name, address } header entry', (input, entry) => {
+    expect(rewritePolicyHeaders({ to: input }).to).toEqual(entry);
+  });
+
+  it.each([
+    '"Doe, John" <a@example.com>',
+    'Plain Name <a@example.com>',
+    '<a@example.com>',
+    'a@example.com',
+    'Doe, John <a@example.com>',
+  ])('leaves %j unchanged', (input) => {
+    expect(rewritePolicyHeaders({ to: input }).to).toBe(input);
+  });
+
+  it('rewrites every header address field and array entry without mutating the input', () => {
+    const input = {
+      from: 'ostr.io@web <no-reply@ostr.io>',
+      sender: 'plain@example.com',
+      replyTo: '[support] <help@example.com>',
+      to: ['John (Sales) <john@example.com>', { name: 'Obj', address: 'obj@example.com' }, 'plain@example.com'],
+      cc: 'a( <x@example.com>',
+      bcc: ['@b <b@example.com>'],
+      envelope: { to: ['a@b <e@example.com>'] },
+      subject: 'hi',
+    };
+    const copy = structuredClone(input);
+    expect(rewritePolicyHeaders(input)).toEqual({
+      ...copy,
+      from: { name: 'ostr.io@web', address: 'no-reply@ostr.io' },
+      replyTo: { name: '[support]', address: 'help@example.com' },
+      to: [{ name: 'John (Sales)', address: 'john@example.com' }, { name: 'Obj', address: 'obj@example.com' }, 'plain@example.com'],
+      cc: { name: 'a(', address: 'x@example.com' },
+      bcc: [{ name: '@b', address: 'b@example.com' }],
+    });
+    expect(input).toEqual(copy);
+  });
+
+  it('returns the same object when nothing needs quoting', () => {
+    const input = { from: 'Sender <s@example.com>', to: ['"Doe, John" <a@example.com>'] };
+    expect(rewritePolicyHeaders(input)).toBe(input);
+  });
+});
+
 describe('parity with Nodemailer address parsing', () => {
-  it('never accepts a mailbox whose address differs from the one Nodemailer puts in the header', async () => {
+  it('never accepts a mailbox whose sent header differs from the envelope address', async () => {
     const { default: addressparser } = await import('nodemailer/lib/addressparser/index.js');
     const tokens = ['"', '\\', '<', '>', ',', ';', ':', '(', ')', '@', ' ', 'a', 'x@y.com', '"Q"', '\t', '[', ']', '=?utf-8?B?YQ==?='];
     let seed = 20260929;
@@ -250,8 +310,13 @@ describe('parity with Nodemailer address parsing', () => {
       let address;
       try { address = normalizePolicyAddress(input, 'to'); } catch { continue; }
       accepted++;
-      const parsed = addressparser(input, { flatten: true });
-      expect({ input, count: parsed.length, address: parsed[0]?.address?.toLowerCase() }).toEqual({ input, count: 1, address });
+      const sent = rewritePolicyHeaders({ to: input }).to;
+      if (typeof sent === 'string') {
+        const parsed = addressparser(sent, { flatten: true });
+        expect({ input, count: parsed.length, address: parsed[0]?.address?.toLowerCase() }).toEqual({ input, count: 1, address });
+      } else {
+        expect({ input, address: sent.address.toLowerCase() }).toEqual({ input, address });
+      }
     }
     expect(accepted).toBeGreaterThan(500);
   });
@@ -266,5 +331,37 @@ describe('parity with Nodemailer address parsing', () => {
     const caught = (() => { try { preparePolicyEnvelope(mail); } catch (error) { return error; } })();
     expect(caught).toMatchObject({ code: 'MAIL_TIME_INVALID_ADDRESS', field: `${field}[1]` });
     expect(caught.message).not.toContain('evil@example.com');
+  });
+});
+
+describe('Nodemailer delivery with auto-quoted display names', () => {
+  it('sends headers that parse back to exactly the envelope addresses and keeps stored mailOptions raw', async () => {
+    const { default: addressparser } = await import('nodemailer/lib/addressparser/index.js');
+    const transport = nodemailer.createTransport({ streamTransport: true, buffer: true });
+    let sent;
+    const m = make({ transports: [{ sendMail(mail, done) {
+      transport.sendMail(mail, (error, info) => { sent = info; done(error, info ? { ...info, accepted: info.envelope.to } : info); });
+    } }] });
+    const mail = {
+      from: 'ostr.io@web <no-reply@ostr.io>',
+      replyTo: 'Back\\slash <reply@example.com>',
+      to: ['John (Sales) <john@example.com>', 'a (b <x@example.com>'],
+      cc: [{ name: 'Obj', address: 'obj@example.com' }, '[bracket] <c@example.com>'],
+      text: 'hello',
+    };
+    try {
+      const uuid = await m.sendMail(mail);
+      await attempt(m, uuid);
+      expect(sent.envelope).toEqual({ from: 'no-reply@ostr.io', to: ['john@example.com', 'x@example.com', 'obj@example.com', 'c@example.com'] });
+      const message = sent.message.toString();
+      const header = (name) => addressparser(message.match(new RegExp(`^${name}: (.*)$`, 'm'))[1], { flatten: true });
+      expect(header('From')).toEqual([{ name: 'ostr.io@web', address: 'no-reply@ostr.io' }]);
+      expect(header('Reply-To')).toEqual([{ name: 'Back\\slash', address: 'reply@example.com' }]);
+      expect(header('To')).toEqual([{ name: 'John (Sales)', address: 'john@example.com' }, { name: 'a (b', address: 'x@example.com' }]);
+      expect(header('Cc')).toEqual([{ name: 'Obj', address: 'obj@example.com' }, { name: '[bracket]', address: 'c@example.com' }]);
+      const [stored] = m.queue.records.get(uuid).mailOptions;
+      expect({ from: stored.from, replyTo: stored.replyTo, to: stored.to, cc: stored.cc }).toEqual({ from: mail.from, replyTo: mail.replyTo, to: mail.to, cc: mail.cc });
+      expect(m.queue.records.get(uuid)).toMatchObject({ isSettled: true, isSent: true, isFailed: false });
+    } finally { transport.close(); }
   });
 });

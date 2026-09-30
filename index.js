@@ -7,7 +7,7 @@ import { PostgresQueue } from './adapters/postgres.js';
 import { mailTimePreset, presets, presetNames } from './presets.js';
 import { debug, escapeHtml, logError, hasOwnProp, deepMerge, equals, isPlainObject, extractEmail, toAddressList, filterAddressField } from './helpers.js';
 
-import { validateRecipientPolicies, policyError, isAddressError, normalizePolicyAddress, preparePolicyEnvelope, evaluatePolicyPhase, mergePolicyResults, summarizePolicyTask } from './recipient-policy.js';
+import { validateRecipientPolicies, policyError, isAddressError, normalizePolicyAddress, rewritePolicyHeaders, preparePolicyEnvelope, evaluatePolicyPhase, mergePolicyResults, summarizePolicyTask } from './recipient-policy.js';
 import { normalizeRejections } from './recipient-rejections.js';
 import { RecipientPolicyLease } from './recipient-policy-lease.js';
 
@@ -1437,7 +1437,7 @@ class MailTime {
   /** @internal Persist SMTP acceptance before awaiting rejection classification or observation. */
   async ___attemptPolicyTransport(task, lease, compiled, context) {
     const transport = this.transports[context.transport.index];
-    const outgoing = { ...compiled, envelope: context.envelope };
+    const outgoing = { ...rewritePolicyHeaders(compiled), envelope: context.envelope };
     const { error, info } = await new Promise((resolve) => {
       let called = false;
       const done = (error, info) => {

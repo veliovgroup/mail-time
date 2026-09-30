@@ -2,8 +2,8 @@ import { hasOwnProp, isPlainObject } from './helpers.js';
 
 const policyError = (message) => new Error(`[mail-time] [recipientPolicies] ${message}`);
 const SIMPLE_MAILBOX = /^[^\s<>,;:"()\\\[\]@]+@[^\s<>,;:"()\\\[\]@]+$/u;
-// RFC 5322 specials that are unambiguous only inside a quoted display name.
-const PHRASE_SPECIALS = '<>()[]:;@\\,';
+// Unquoted display-name characters that are auto-quoted in the sent header; `,` `;` `:` `<` `>` stay rejected.
+const QUOTABLE_SPECIALS = /[()[\]@\\]/u;
 const UNSAFE_CHARS = /[\r\n\u0000]/u;
 
 /**
@@ -27,11 +27,14 @@ const toMailbox = (address, field) => {
 
 /**
  * Parse one Nodemailer mailbox string: `addr`, `<addr>`, or `display name <addr>`, where the
- * display name is any mix of atoms and quoted strings with backslash escapes. Groups,
- * comments, and comma-separated lists are rejected rather than guessed at.
+ * display name is any mix of atoms and quoted strings with backslash escapes. Unquoted
+ * `( ) [ ] @ \\` in a display name set `quote`, so the sent header carries the name quoted.
+ * Groups, comma-separated lists, and text after `>` are rejected rather than guessed at.
+ * @returns {{ name: string, address: string, quote: boolean }} `address` keeps its case.
  */
 const parseMailboxString = (input, field) => {
   let display = '';
+  let name = '';
   let angle = null;
   let quoted = false;
   for (let i = 0; i < input.length; i++) {
@@ -39,8 +42,11 @@ const parseMailboxString = (input, field) => {
     if (quoted) {
       if (char === '\\') {
         if (++i >= input.length) break;
+        name += input[i];
       } else if (char === '"') {
         quoted = false;
+      } else {
+        name += char;
       }
       continue;
     }
@@ -56,21 +62,21 @@ const parseMailboxString = (input, field) => {
       throw addressError(field, 'must contain one mailbox; use an array for multiple recipients or quote a display name that contains a comma');
     } else if (char === ';' || char === ':') {
       throw addressError(field, 'must not use group syntax');
-    } else if (char === '(' || char === ')') {
-      throw addressError(field, 'must not contain comments; quote a display name that contains parentheses');
+    } else if (char === '>') {
+      throw addressError(field, 'has an unquoted `>` in its display name; wrap the name in double quotes');
     } else {
       display += char;
+      name += char;
     }
   }
   if (quoted) throw addressError(field, 'has an unterminated quoted display name');
   if (angle === null) {
     if (display !== input) throw addressError(field, 'must contain one address such as user@example.com; quoted local parts are not supported');
-    return toMailbox(input, field);
+    toMailbox(input, field);
+    return { name: '', address: input, quote: false };
   }
-  for (const char of display) {
-    if (PHRASE_SPECIALS.includes(char)) throw addressError(field, 'has an unquoted special character in its display name; wrap the name in double quotes');
-  }
-  return toMailbox(angle, field);
+  toMailbox(angle, field);
+  return { name: name.replace(/\s+/gu, ' ').trim(), address: angle.trim(), quote: QUOTABLE_SPECIALS.test(display) };
 };
 
 /**
@@ -83,7 +89,7 @@ const normalizePolicyAddress = (value, field = 'address') => {
   if (typeof value === 'string') {
     if (UNSAFE_CHARS.test(value)) throw addressError(field, 'must not contain line breaks or NUL characters');
     if (!value.trim()) throw addressError(field, 'must not be empty');
-    return parseMailboxString(value.trim(), field);
+    return parseMailboxString(value.trim(), field).address.toLowerCase();
   }
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw addressError(field, 'must be an address string or a { name, address } object');
   if (typeof value.address !== 'string') throw addressError(field, 'object requires a string `address`');
@@ -129,6 +135,32 @@ const preparePolicyEnvelope = (compiled, previousResults = []) => {
     if (field) envelope.from = normalizePolicyAddress(compiled[field], field);
   }
   return { envelope, recipients: [...recipients.values()] };
+};
+
+/**
+ * Return `compiled` with every header mailbox string whose display name needs quoting replaced by
+ * `{ name, address }`, so Nodemailer renders the same mailbox the policy checked. Other entries,
+ * including ones that do not parse, are left as they are. The input is never mutated.
+ */
+const rewritePolicyHeaders = (compiled) => {
+  let result = compiled;
+  const rewrite = (value) => {
+    if (typeof value !== 'string' || UNSAFE_CHARS.test(value)) return value;
+    try {
+      const { name, address, quote } = parseMailboxString(value.trim(), 'header');
+      return quote ? { name, address } : value;
+    } catch { return value; }
+  };
+  for (const key of ['from', 'sender', 'replyTo', 'to', 'cc', 'bcc']) {
+    if (!hasOwnProp(compiled, key)) continue;
+    const value = compiled[key];
+    const next = Array.isArray(value) ? value.map(rewrite) : rewrite(value);
+    if (Array.isArray(value) ? next.some((entry, i) => entry !== value[i]) : next !== value) {
+      if (result === compiled) result = { ...compiled };
+      result[key] = next;
+    }
+  }
+  return result;
 };
 
 const validateRecipientPolicies = (value, queue) => {
@@ -242,4 +274,4 @@ const summarizePolicyTask = (task, isSettled) => {
   return { uuid: task.uuid, tries: task.tries, isSettled, recipients };
 };
 
-export { policyError, isAddressError, normalizePolicyAddress, preparePolicyEnvelope, validateRecipientPolicies, evaluatePolicyPhase, mergePolicyResults, summarizePolicyTask };
+export { policyError, isAddressError, normalizePolicyAddress, rewritePolicyHeaders, preparePolicyEnvelope, validateRecipientPolicies, evaluatePolicyPhase, mergePolicyResults, summarizePolicyTask };
