@@ -149,7 +149,7 @@
     }
   },
   "dependencies": {
-    "josk": "^6.4.0"
+    "josk": "^6.5.0"
   },
   "devDependencies": {
     "@jest/globals": "^30.4.1",

@@ -30,7 +30,7 @@ The only difference between the two is the module specifier. Everything else —
 
 ### Node 14 and JoSk 6
 
-`josk` declares `engines.node >=20.9`, but its source runs on Node 14 (verified on 14.19.3 and 14.21.3 with josk 6.4.0), so Meteor 2.14-2.16 install it through `Npm.depends` without changes. CI runs the Meteor 2.x package tests on every change.
+`josk` 6.5.0 declares `engines.node >=14.21.3`, and Meteor 2.14-2.16 install it through `Npm.depends` without changes. MailTime's Node 14 runs were verified on 14.19.3 and 14.21.3 with josk 6.4.0. CI runs the Meteor 2.x package tests on every change.
 
 ### TypeScript with Atmosphere
 

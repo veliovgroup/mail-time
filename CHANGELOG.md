@@ -20,7 +20,8 @@ Completion writes and drain
 
 Runtimes
 
-- `engines.node` is `>=14.19.3` (was `>=20.9.0`). The package loads and passes 12 send, shutdown and drain checks from a packed tarball on Node 14.19.3, 14.21.3, 16.20.2, 18.19.1, 20.11.1, 22.21.1, 24.16.0 and Bun. Node 12 cannot parse it. `josk` still declares `>=20.9.0`, so engine-strict installs need Node 20.9+. See "Supported runtimes" in the README.
+- `engines.node` is `>=14.19.3` (was `>=20.9.0`). The package loads and passes 12 send, shutdown and drain checks from a packed tarball on Node 14.19.3, 14.21.3, 16.20.2, 18.19.1, 20.11.1, 22.21.1, 24.16.0 and Bun. Node 12 cannot parse it. `josk` 6.5.0 declares `>=14.21.3`, so engine-strict installs need Node 14.21.3+. See "Supported runtimes" in the README.
+- `josk` dependency raised to `^6.5.0` (was `^6.4.0`).
 
 Recipient policies (from 5.2.2, never published separately)
 

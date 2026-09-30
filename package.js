@@ -13,7 +13,7 @@ Package.describe({
  * syntax, so Meteor 2.14-2.16 (Node 14) install and run it; the Meteor 2.x
  * CI jobs verify this on every change.
  */
-const JOSK_VERSION = '6.4.0';
+const JOSK_VERSION = '6.5.0';
 
 /**
  * Meteor test-packages runs package.js under each release's bundled Node.

@@ -6,7 +6,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"; REPO="$HERE/../.."
 MONGO="${1:-127.0.0.1:27042}"
 WORK="$(mktemp -d /tmp/mt-matrix.XXXXXX)"
 NVM="$HOME/.nvm/versions/node"
-JOSK_VERSION="${JOSK_VERSION:-6.4.0}"
+JOSK_VERSION="${JOSK_VERSION:-6.5.0}"
 # label|node|mongodb driver
 MATRIX=(
   "node14.19.3|v14.19.3|3.7.4"
