@@ -257,22 +257,26 @@ jobs:
         run: npm run test:mocha:redis-cluster
 
   node-floor:
-    name: node ${{ matrix.node }} · packed artifact · mongodb ${{ matrix.mongodb }}
+    name: node ${{ matrix.node }} · packed artifact · mongodb ${{ matrix.mongodb }} · mongo ${{ matrix.mongo }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Driver 3.7 is supported up to MongoDB 5.0; the local matrix ran it against a 6.x-or-older server.
           - node: '14.19.3'
             mongodb: '3.7.4'
+            mongo: '5'
           - node: '16.20.2'
             mongodb: '3.7.4'
+            mongo: '5'
           - node: '18.19.1'
             mongodb: '6.21.0'
+            mongo: '7'
     services:
       mongo:
-        image: mongo:7
+        image: mongo:${{ matrix.mongo }}
         ports:
           - 27017:27017
     steps:
