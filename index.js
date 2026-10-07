@@ -428,6 +428,11 @@ class MailTime {
       this.transports.forEach((transport, i) => {
         const from = MailTime.transportFrom(transport);
         if (from !== void 0) normalizePolicyAddress(from, `transports[${i}].from`);
+        // `___compileMailOpts` merges these ahead of `this.from`, so they are sent as-is.
+        for (const key of ['_options', 'options']) {
+          const mailFrom = transport?.[key]?.mailOptions?.from;
+          if (mailFrom !== void 0) normalizePolicyAddress(mailFrom, `transports[${i}].${key}.mailOptions.from`);
+        }
       });
     }
 

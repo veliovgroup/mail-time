@@ -176,7 +176,11 @@ const validatePolicyMailOptions = (mailOptions) => {
     if (Array.isArray(value)) value.forEach((entry, i) => normalizePolicyAddress(entry, `${label}[${i}]`));
     else normalizePolicyAddress(value, label);
   };
-  for (const key of ['from', 'sender', 'replyTo', 'to', 'cc', 'bcc']) check(mailOptions[key], key);
+  const explicit = isPlainObject(mailOptions.envelope) && hasOwnProp(mailOptions.envelope, 'to');
+  // With an explicit `envelope.to`, `preparePolicyEnvelope` treats header recipients as
+  // non-authoritative (group syntax stays legal), so do not reject them here either.
+  const keys = explicit ? ['from', 'sender', 'replyTo'] : ['from', 'sender', 'replyTo', 'to', 'cc', 'bcc'];
+  for (const key of keys) check(mailOptions[key], key);
   if (isPlainObject(mailOptions.envelope)) {
     check(mailOptions.envelope.to, 'envelope.to');
     if (mailOptions.envelope.from !== '') check(mailOptions.envelope.from, 'envelope.from');

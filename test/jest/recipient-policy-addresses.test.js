@@ -216,9 +216,33 @@ describe('Nodemailer delivery with display names', () => {
   });
 });
 
+describe('sendMail() validation with an explicit envelope', () => {
+  it('tolerates group-syntax headers when envelope.to is authoritative, like the send path', async () => {
+    const m = make();
+    const uuid = await m.sendMail({ to: 'Team: a@example.com, b@example.com;', envelope: { to: ['a@example.com'] }, text: 'x' });
+    expect(typeof uuid).toBe('string');
+    await attempt(m, uuid);
+    const row = m.queue.records.get(uuid);
+    expect(row.isSent).toBe(true);
+    expect(row.mailOptions[0].to).toBe('Team: a@example.com, b@example.com;');
+  });
+
+  it('still rejects the same header without an explicit envelope, and a bad envelope entry', async () => {
+    const m = make();
+    await expect(m.sendMail({ to: 'Team: a@example.com, b@example.com;', text: 'x' })).rejects.toMatchObject({ code: 'MAIL_TIME_INVALID_ADDRESS', field: 'to' });
+    await expect(m.sendMail({ to: 'a@example.com', envelope: { to: ['x <y'] }, text: 'x' })).rejects.toMatchObject({ code: 'MAIL_TIME_INVALID_ADDRESS', field: 'envelope.to[0]' });
+    await expect(m.sendMail({ from: 'x <y', to: 'a@example.com', envelope: { to: ['a@example.com'] }, text: 'x' })).rejects.toMatchObject({ code: 'MAIL_TIME_INVALID_ADDRESS', field: 'from' });
+  });
+});
+
 describe('configuration validation', () => {
   it('rejects an unparseable transport from at construction', () => {
     expectAddressError(() => make({ transports: [{ options: { from: 'Sales, Inc <sales@example.com>' }, sendMail() {} }] }), 'transports[0].from', ['sales@example.com']);
+  });
+
+  it('rejects an unparseable transport mailOptions.from at construction', () => {
+    expectAddressError(() => make({ transports: [{ options: { from: 'ok@example.com', mailOptions: { from: 'Sales, Inc <sales@example.com>' } }, sendMail() {} }] }), 'transports[0].options.mailOptions.from', ['sales@example.com']);
+    expectAddressError(() => make({ transports: [{ _options: { mailOptions: { from: 'a@b.com <c@d.com' } }, sendMail() {} }] }), 'transports[0]._options.mailOptions.from', ['c@d.com']);
   });
 
   it('rejects an unparseable string from at construction', () => {
