@@ -1,24 +1,25 @@
 export type MongoCollection = {
     collectionName?: string | undefined;
-    createIndex: (keys: object, opts?: object) => Promise<unknown>;
+    createIndex: (keys: any, opts?: any) => Promise<unknown>;
     indexes: () => Promise<{
-        name: string;
+        name?: string;
         key: Record<string, unknown>;
     }[]>;
     dropIndex: (name: string) => Promise<unknown>;
-    find: (query: object, opts?: object) => unknown;
-    findOne: (query: object, opts?: object) => Promise<object | null>;
-    insertOne: (doc: object) => Promise<unknown>;
-    deleteOne: (query: object) => Promise<{
+    find: (query: any, opts?: any) => unknown;
+    findOne: (query: any, opts?: any) => Promise<object | null>;
+    insertOne: (doc: any) => Promise<unknown>;
+    deleteOne: (query: any) => Promise<{
         deletedCount?: number;
     }>;
-    updateOne: (query: object, update: object) => Promise<{
+    updateOne: (query: any, update: any) => Promise<{
         modifiedCount?: number;
+        matchedCount?: number;
     }>;
 };
 export type Db = {
     collection: (name: string) => MongoCollection;
-    command: (cmd: object) => Promise<{
+    command: (cmd: any) => Promise<{
         ok?: number;
     }>;
 };

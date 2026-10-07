@@ -4,6 +4,11 @@ export type PostgresQueryResult = {
 };
 export type PostgresClient = {
     query: (queryText: string, values?: unknown[]) => Promise<PostgresQueryResult>;
+    /**
+     * - a client whose constructor name ends in `Pool` or that has a numeric `totalCount` (`pg.Pool`) is treated as a pool; setup checks out one connection
+     */
+    connect?: ((...args: any[]) => any) | undefined;
+    totalCount?: number | undefined;
 };
 export type PostgresQueueOption = {
     client: PostgresClient;

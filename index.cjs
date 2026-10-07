@@ -304,20 +304,20 @@ const DEFAULT_PREFIX$2 = '';
 /**
  * @typedef {object} MongoCollection
  * @property {string} [collectionName]
- * @property {(keys: object, opts?: object) => Promise<unknown>} createIndex
- * @property {() => Promise<{ name: string, key: Record<string, unknown> }[]>} indexes
+ * @property {(keys: any, opts?: any) => Promise<unknown>} createIndex
+ * @property {() => Promise<{ name?: string, key: Record<string, unknown> }[]>} indexes
  * @property {(name: string) => Promise<unknown>} dropIndex
- * @property {(query: object, opts?: object) => unknown} find
- * @property {(query: object, opts?: object) => Promise<object|null>} findOne
- * @property {(doc: object) => Promise<unknown>} insertOne
- * @property {(query: object) => Promise<{ deletedCount?: number }>} deleteOne
- * @property {(query: object, update: object) => Promise<{ modifiedCount?: number }>} updateOne
+ * @property {(query: any, opts?: any) => unknown} find
+ * @property {(query: any, opts?: any) => Promise<object|null>} findOne
+ * @property {(doc: any) => Promise<unknown>} insertOne
+ * @property {(query: any) => Promise<{ deletedCount?: number }>} deleteOne
+ * @property {(query: any, update: any) => Promise<{ modifiedCount?: number, matchedCount?: number }>} updateOne
  */
 
 /**
  * @typedef {object} Db
  * @property {(name: string) => MongoCollection} collection
- * @property {(cmd: object) => Promise<{ ok?: number }>} command
+ * @property {(cmd: any) => Promise<{ ok?: number }>} command
  */
 
 /**
@@ -748,7 +748,7 @@ class MongoQueue {
  * @property {() => Promise<string>} [ping]
  * @property {() => unknown} [getRandomNode]
  * @property {(...args: any[]) => any} [nodeClient]
- * @property {(firstKey: string, isReadonly: boolean, args: string[]) => Promise<unknown>} [sendCommand]
+ * @property {(...args: any[]) => Promise<unknown>} [sendCommand]
  * @property {(options: object) => AsyncIterable<string|string[]>} [scanIterator]
  * @property {(key: string, field: string) => Promise<string|null|undefined>} [hGet]
  * @property {(script: string, options: { keys: string[], arguments: string[] }) => Promise<unknown>} [eval]
@@ -945,6 +945,12 @@ const sha1Hex = (string) => crypto.createHash('sha1').update(string).digest('hex
 
 const isNoScriptError = (error) => {
   return !!error && (error.code === 'NOSCRIPT' || (typeof error.message === 'string' && error.message.includes('NOSCRIPT')));
+};
+
+// node-redis 4/5 throw `WatchError` from `exec()` when a watched key changed; that is the
+// expected outcome of a lost CAS race, not a storage failure.
+const isWatchError = (error) => {
+  return !!error && (error.name === 'WatchError' || error.constructor?.name === 'WatchError');
 };
 
 const canReleaseLease = (currentTask, updateObj) => {
@@ -1340,15 +1346,19 @@ class RedisQueue {
     const taskJSON = JSON.stringify(task);
 
     if (typeof this.client.multi === 'function') {
-      const multi = this.client.multi();
-      multi.set(letterKey, taskJSON);
-      multi.set(sendatKey, `${task.sendAt}`);
-      if (task.to) {
-        multi.set(this.__getKey(task.to, 'concatletter'), task.uuid, {
-          PXAT: task.sendAt - 128,
-        });
-      }
-      await multi.exec();
+      // EXEC discards every WATCH on the connection, so an unserialized push would turn a
+      // concurrent claim's guarded MULTI into an unconditional write (duplicate send).
+      await this.__serialize(async () => {
+        const multi = this.client.multi();
+        multi.set(letterKey, taskJSON);
+        multi.set(sendatKey, `${task.sendAt}`);
+        if (task.to) {
+          multi.set(this.__getKey(task.to, 'concatletter'), task.uuid, {
+            PXAT: task.sendAt - 128,
+          });
+        }
+        await multi.exec();
+      });
       return;
     }
 
@@ -1385,7 +1395,7 @@ class RedisQueue {
   }
 
   /** @internal */
-  async __cancel(uuid) {
+  async __cancel(uuid, attempt = 0) {
     this.__debug('[cancel]', uuid);
     if (typeof uuid !== 'string') {
       return false;
@@ -1406,7 +1416,10 @@ class RedisQueue {
         const args = keep
           ? [uuid, JSON.stringify({ isCancelled: true }), 'cancel', `${Date.now()}`, `${this.mailTimeInstance.sendingTimeout || 300000}`, '0', '0', payload, JSON.stringify({ ...task, isCancelled: true })]
           : [uuid, 'cancel', '0', '0'];
-        return Number(await this.__runScript(keep ? 'update' : 'remove', { keys, arguments: args })) >= 1;
+        const result = Number(await this.__runScript(keep ? 'update' : 'remove', { keys, arguments: args }));
+        // -1: the payload changed between hGet and the script (a claim renewal, for example); retry on a fresh snapshot
+        if (result === -1 && attempt < 2) return await this.__cancel(uuid, attempt + 1);
+        return result >= 1;
       }
       if (!atomic) {
         if (task.recipientResults != null) return false;
@@ -1418,7 +1431,7 @@ class RedisQueue {
       multi.del(this.__getKey(uuid, 'sendat'));
       return (await multi.exec()) !== null;
     } catch (error) {
-      logError('[cancel] storage error', error);
+      if (!isWatchError(error)) logError('[cancel] storage error', error);
       return false;
     } finally {
       if (!this.useHashTags && atomic) await this.client.unwatch?.();
@@ -1475,7 +1488,9 @@ class RedisQueue {
         return false;
       }
       try {
+        const concatKey = task.to ? this.__getKey(task.to, 'concatletter') : null;
         await this.client.watch(letterKey);
+        if (concatKey) await this.client.watch(concatKey);
         const taskJSON = await this.client.get(letterKey);
         if (!taskJSON) {
           await this.client.unwatch?.();
@@ -1493,8 +1508,9 @@ class RedisQueue {
           return false;
         }
         const keysToDelete = [letterKey, this.__getKey(task.uuid, 'sendat')];
-        if (task.to) {
-          keysToDelete.push(this.__getKey(task.to, 'concatletter'));
+        // The pointer may already name a newer letter folded for the same recipient.
+        if (concatKey && (await this.client.get(concatKey)) === task.uuid) {
+          keysToDelete.push(concatKey);
         }
         const multi = this.client.multi();
         for (const key of keysToDelete) {
@@ -1503,7 +1519,7 @@ class RedisQueue {
         const result = await multi.exec();
         return result !== null;
       } catch (opError) {
-        logError('[remove] [lease] [opError]', opError);
+        if (!isWatchError(opError)) logError('[remove] [lease] [opError]', opError);
         return false;
       }
     }
@@ -1515,7 +1531,10 @@ class RedisQueue {
 
     const keysToDelete = [letterKey, this.__getKey(task.uuid, 'sendat')];
     if (task.to) {
-      keysToDelete.push(this.__getKey(task.to, 'concatletter'));
+      const concatKey = this.__getKey(task.to, 'concatletter');
+      if ((await this.client.get(concatKey)) === task.uuid) {
+        keysToDelete.push(concatKey);
+      }
     }
     await this.client.del(keysToDelete);
     return true;
@@ -1675,7 +1694,7 @@ class RedisQueue {
       }
       return true;
     } catch (opError) {
-      logError('[update] [try/catch] [opError]', opError);
+      if (!isWatchError(opError)) logError('[update] [try/catch] [opError]', opError);
       return false;
     }
   }
@@ -1716,6 +1735,8 @@ class RedisQueue {
 /**
  * @typedef {object} PostgresClient
  * @property {(queryText: string, values?: unknown[]) => Promise<PostgresQueryResult>} query
+ * @property {(...args: any[]) => any} [connect] - a client whose constructor name ends in `Pool` or that has a numeric `totalCount` (`pg.Pool`) is treated as a pool; setup checks out one connection
+ * @property {number} [totalCount]
  */
 
 /**
@@ -1816,8 +1837,18 @@ class PostgresQueue {
   /** @internal */
   __applyPrefix(prefix) {
     this.prefix = prefix;
-    this.__readyPromise = this.__setup();
-    this.__readyPromise.catch(() => void 0);
+    this.__startSetup();
+  }
+
+  /** @internal */
+  __startSetup() {
+    const setup = this.__setup();
+    this.__readyPromise = setup;
+    // A failed setup (database still booting) must not poison every later call; the next
+    // ready() retries it. The awaiting caller still sees this attempt's rejection.
+    setup.catch(() => {
+      if (this.__readyPromise === setup) this.__readyPromise = null;
+    });
   }
 
   /** @internal */
@@ -1842,16 +1873,25 @@ class PostgresQueue {
   async ready() {
     this.__ensurePrefix();
     this.__debug('[ready]');
+    if (!this.__readyPromise) this.__startSetup();
     await this.__readyPromise;
   }
 
   /** @internal */
   async __setup() {
     const advisoryLockKey = advisoryLockKeyFor(this.prefix);
-    await this.client.query('SELECT pg_advisory_lock($1, $2)', [ADVISORY_LOCK_NAMESPACE, advisoryLockKey]);
+    // `pg_advisory_lock` is session-scoped. Through a `pg.Pool` each `query()` may use a
+    // different connection, so lock, DDL and unlock must share one checked-out client;
+    // otherwise the lock stays on an idle pooled connection and blocks peer startups.
+    const pooled = typeof this.client.connect === 'function'
+      && (typeof this.client.totalCount === 'number' || /Pool$/.test(this.client.constructor?.name || ''));
+    const conn = pooled ? await this.client.connect() : this.client;
+    let locked = false;
 
     try {
-      await this.client.query(`CREATE TABLE IF NOT EXISTS mail_time_queue (
+      await conn.query('SELECT pg_advisory_lock($1, $2)', [ADVISORY_LOCK_NAMESPACE, advisoryLockKey]);
+      locked = true;
+      await conn.query(`CREATE TABLE IF NOT EXISTS mail_time_queue (
           id BIGSERIAL PRIMARY KEY,
           prefix TEXT NOT NULL DEFAULT 'default',
           uuid TEXT NOT NULL,
@@ -1872,18 +1912,22 @@ class PostgresQueue {
           created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )`);
-      await this.client.query('ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS is_settled BOOLEAN NOT NULL DEFAULT false');
-      await this.client.query('ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS recipient_results JSONB');
-      await this.client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_time_queue_prefix_uuid
+      await conn.query('ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS is_settled BOOLEAN NOT NULL DEFAULT false');
+      await conn.query('ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS recipient_results JSONB');
+      await conn.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_time_queue_prefix_uuid
         ON mail_time_queue (prefix, uuid)`);
 
-      await this.client.query(`CREATE INDEX IF NOT EXISTS idx_mail_time_queue_policy_due_v1
+      await conn.query(`CREATE INDEX IF NOT EXISTS idx_mail_time_queue_policy_due_v1
         ON mail_time_queue (prefix, is_settled, is_sent, is_failed, is_cancelled, is_sending, sending_at, send_at, tries)`);
 
-      await this.client.query(`CREATE INDEX IF NOT EXISTS idx_mail_time_queue_policy_pending_to_v1
+      await conn.query(`CREATE INDEX IF NOT EXISTS idx_mail_time_queue_policy_pending_to_v1
         ON mail_time_queue (prefix, to_address, is_settled, is_sent, is_failed, is_cancelled, send_at)`);
     } finally {
-      await this.client.query('SELECT pg_advisory_unlock($1, $2)', [ADVISORY_LOCK_NAMESPACE, advisoryLockKey]);
+      try {
+        if (locked) await conn.query('SELECT pg_advisory_unlock($1, $2)', [ADVISORY_LOCK_NAMESPACE, advisoryLockKey]);
+      } finally {
+        if (pooled) conn.release();
+      }
     }
   }
 
@@ -2620,7 +2664,11 @@ const validatePolicyMailOptions = (mailOptions) => {
     if (Array.isArray(value)) value.forEach((entry, i) => normalizePolicyAddress(entry, `${label}[${i}]`));
     else normalizePolicyAddress(value, label);
   };
-  for (const key of ['from', 'sender', 'replyTo', 'to', 'cc', 'bcc']) check(mailOptions[key], key);
+  const explicit = isPlainObject(mailOptions.envelope) && hasOwnProp(mailOptions.envelope, 'to');
+  // With an explicit `envelope.to`, `preparePolicyEnvelope` treats header recipients as
+  // non-authoritative (group syntax stays legal), so do not reject them here either.
+  const keys = explicit ? ['from', 'sender', 'replyTo'] : ['from', 'sender', 'replyTo', 'to', 'cc', 'bcc'];
+  for (const key of keys) check(mailOptions[key], key);
   if (isPlainObject(mailOptions.envelope)) {
     check(mailOptions.envelope.to, 'envelope.to');
     if (mailOptions.envelope.from !== '') check(mailOptions.envelope.from, 'envelope.from');
@@ -3334,6 +3382,11 @@ class MailTime {
       this.transports.forEach((transport, i) => {
         const from = MailTime.transportFrom(transport);
         if (from !== void 0) normalizePolicyAddress(from, `transports[${i}].from`);
+        // `___compileMailOpts` merges these ahead of `this.from`, so they are sent as-is.
+        for (const key of ['_options', 'options']) {
+          const mailFrom = transport?.[key]?.mailOptions?.from;
+          if (mailFrom !== void 0) normalizePolicyAddress(mailFrom, `transports[${i}].${key}.mailOptions.from`);
+        }
       });
     }
 
@@ -3644,7 +3697,7 @@ class MailTime {
    * @description add email to the queue or append to existing letter if {concatEmails: true}
    * @param {MailTimeMailOptions} opts - email options
    * @returns {Promise<string>} uuid of the email
-   * @throws {Error}
+   * @throws {Error} missing `html`/`text`, a `raw` field, or an invalid `to`; with `recipientPolicies`, an unparseable address rejects with `error.code === 'MAIL_TIME_INVALID_ADDRESS'` and `error.field` naming the field (header recipients are skipped when `envelope.to` is explicit)
    */
   async sendMail(opts) {
     opts = (opts && typeof opts === 'object') ? opts : {};
@@ -4730,6 +4783,9 @@ class MailTime {
     if (this.__isDestroyed || this.__isPaused) {
       return;
     }
+    // Under `strategy: 'backup'` a quarantined primary is never selected for a send, so the
+    // send path alone would never re-probe it. Sweep here so recovery does not depend on row flow.
+    for (const index of this.__unhealthyTransports) this.___maybeReprobe(index);
     const limit = this.mode === 'one' ? 1 : Infinity;
     this.__schedulerScans++;
     try {
@@ -4878,12 +4934,8 @@ class MailTime {
     }
     if (quarantined) {
       const st = this.__reprobe.get(index);
-      if (st) {
-        st.inFlight = false;
-        st.count++;
-        st.nextProbeAt = Date.now() + Math.min(REPROBE_BASE_MS * Math.pow(2, st.count), REPROBE_MAX_MS);
-        this.__debug(`[private reprobe] transport #${index} failed, next probe at ${new Date(st.nextProbeAt)}`);
-      }
+      // A slot already released by the timeout path keeps its backoff; do not double it twice.
+      if (st && st.inFlight) this.___backoffReprobe(index, st, 'failed');
       return;
     }
     this.__unhealthyTransports.add(index);
@@ -4899,7 +4951,7 @@ class MailTime {
    * @internal
    * @memberOf MailTime
    * @name ___maybeReprobe
-   * @description Start one background `verify()` probe for a quarantined transport when its backoff has elapsed and no probe is in flight. Never awaited by the send path. Backoff starts at 60 s, doubles per failed probe and caps at 15 min. A probe that times out stays in flight until its verdict arrives, so at most one `verify()` is outstanding per transport. Failures only reach `__debug`. No probes for `type: 'client'`, `verifyTransports: false`, or after `destroy()`.
+   * @description Start one background `verify()` probe for a quarantined transport when its backoff has elapsed and no probe is in flight. Never awaited by the send path. Backoff starts at 60 s, doubles per failed or timed-out probe and caps at 15 min. A probe that reaches `verifyTimeout` without a verdict releases the slot (one `verify()` may then overlap with the hung one); its late verdict still applies unless a newer probe has started. Failures only reach `__debug`. No probes for `type: 'client'`, `verifyTransports: false`, or after `destroy()`.
    * @param {number} index
    * @returns {void}
    */
@@ -4914,9 +4966,33 @@ class MailTime {
     }
     st.inFlight = true;
     this.__debug(`[private reprobe] transport #${index}, attempt after ${st.count} failure(s)`);
-    // The verdict, not the timeout, releases `inFlight` (see ___applyVerdict), so a hung
-    // verify() never overlaps with a new probe on the same transport.
-    this.___verifyOne(transport, index);
+    // A verdict releases `inFlight` (see ___applyVerdict). A probe that reaches `verifyTimeout`
+    // without one counts as a failed attempt so a verify() that never settles cannot pin the
+    // transport in quarantine; its late verdict still applies unless a newer probe has started.
+    this.___verifyOne(transport, index).then((outcome) => {
+      // A live verdict always clears `inFlight` in ___applyVerdict. If it is still set, the probe
+      // timed out or its verdict was ignored (superseded generation); either way free the slot.
+      if (st.inFlight && this.__reprobe.get(index) === st) {
+        this.___backoffReprobe(index, st, outcome === 'timeout' ? 'timed out' : 'superseded');
+      }
+    });
+  }
+
+  /**
+   * @internal
+   * @memberOf MailTime
+   * @name ___backoffReprobe
+   * @description Release a re-probe slot after a failed or timed-out probe and double its backoff (cap 15 min).
+   * @param {number} index
+   * @param {{ count: number, nextProbeAt: number, inFlight: boolean }} st
+   * @param {string} why
+   * @returns {void}
+   */
+  ___backoffReprobe(index, st, why) {
+    st.inFlight = false;
+    st.count++;
+    st.nextProbeAt = Date.now() + Math.min(REPROBE_BASE_MS * Math.pow(2, st.count), REPROBE_MAX_MS);
+    this.__debug(`[private reprobe] transport #${index} ${why}, next probe at ${new Date(st.nextProbeAt)}`);
   }
 
   /**

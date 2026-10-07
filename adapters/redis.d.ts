@@ -6,7 +6,7 @@ export type RedisClient = {
     ping?: (() => Promise<string>) | undefined;
     getRandomNode?: (() => unknown) | undefined;
     nodeClient?: ((...args: any[]) => any) | undefined;
-    sendCommand?: ((firstKey: string, isReadonly: boolean, args: string[]) => Promise<unknown>) | undefined;
+    sendCommand?: ((...args: any[]) => Promise<unknown>) | undefined;
     scanIterator?: ((options: object) => AsyncIterable<string | string[]>) | undefined;
     hGet?: ((key: string, field: string) => Promise<string | null | undefined>) | undefined;
     eval?: ((script: string, options: {

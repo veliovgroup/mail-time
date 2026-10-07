@@ -400,7 +400,7 @@ export class MailTime {
      * @description add email to the queue or append to existing letter if {concatEmails: true}
      * @param {MailTimeMailOptions} opts - email options
      * @returns {Promise<string>} uuid of the email
-     * @throws {Error}
+     * @throws {Error} missing `html`/`text`, a `raw` field, or an invalid `to`; with `recipientPolicies`, an unparseable address rejects with `error.code === 'MAIL_TIME_INVALID_ADDRESS'` and `error.field` naming the field (header recipients are skipped when `envelope.to` is explicit)
      */
     sendMail(opts: MailTimeMailOptions): Promise<string>;
     /**
