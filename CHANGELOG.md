@@ -1,5 +1,33 @@
 # Changelog
 
+## 5.3.1
+
+Fixes
+
+- `RedisQueue` (standalone, non-`useHashTags`): `push()` now runs behind the same per-client serialization as `update()`, `cancel()` and `remove()`. Redis `EXEC` discards every `WATCH` on the connection, so a `sendMail()` that landed on a `server` instance while a claim was between `WATCH` and `EXEC` on the same client turned that claim into an unconditional write. Two servers could then both claim one row and send it twice.
+- `RedisQueue` (standalone): `remove()` deletes the `concatletter` pointer only while it still names the removed row. Before, finishing an in-flight letter dropped the pointer to a newer letter for the same recipient, and later `concatEmails` folds created new rows instead of appending.
+- `RedisQueue` (standalone): a `WatchError` from `exec()` (a lost CAS race under node-redis 4/5) returns `false` without an `[ERROR]` log line. Every expected multi-worker race used to log as a storage error.
+- `PostgresQueue`: given a `pg.Pool`, setup checks out one connection for `pg_advisory_lock`, the DDL and `pg_advisory_unlock`. Before, the lock could be taken on one pooled connection and the unlock sent on another, leaving the lock on an idle connection and blocking peer instances with the same `prefix` at startup until that connection was reaped.
+- `PostgresQueue`: a failed setup (database not accepting connections yet) no longer rejects every later call for the process lifetime. The next `ready()` retries it.
+- Transport verification under `strategy: 'backup'`: a quarantined primary that no row selects (all rows enqueued by the server carry the backup index) was never re-probed, so sends stayed on the backup after the primary recovered. The scheduler scan now starts the background probe once the backoff elapses, independent of row flow.
+- Transport verification: a background re-probe that reaches `verifyTimeout` without a verdict now releases its slot and counts as a failed attempt (backoff doubles). 5.3.0 kept the slot until the verdict arrived, so a `verify()` that never settled kept the transport quarantined for the process lifetime. A late verdict still applies unless a newer probe has started; a verdict ignored by the generation guard also releases the slot.
+- `RedisQueue` (`useHashTags: true`): `cancel()` retries up to three times when the row changed between the read and the Lua script (for example a claim renewal). Before, the conflict returned `false` as if the letter could not be cancelled.
+- `PostgresQueue`: pool detection also accepts a client whose constructor name ends in `Pool` (pg exports `BoundPool`), not only one with a numeric `totalCount`.
+- `adapters/blank-example.js`: removed a call to an undefined `__ensurePrefix` helper in the `ready()` scaffold.
+- `recipientPolicies`: `sendMail()` no longer rejects group-syntax `to` / `cc` / `bcc` headers when `envelope.to` is explicit; the send path already treated them as non-authoritative in that case, so 5.3.0 rejected letters that 5.2.1 enqueued and sent.
+- `recipientPolicies`: a `server` constructor also validates `transport.options.mailOptions.from` and `transport._options.mailOptions.from` (`error.field` is `transports[i].options.mailOptions.from`). These win over `from` at compile time and used to fail every letter at send time instead.
+
+Packaging and types
+
+- `mail-time/presets` and `mail-time/adapters/{mongo,redis,postgres}` gained a `require` condition (served from `index.cjs` / `index.d.cts`), so CJS consumers and TypeScript projects without `"type": "module"` can resolve the subpaths.
+- `RedisQueueOption.client` accepts a standalone `createClient()` instance (the `sendCommand` typing only matched the Cluster signature). `MongoQueueOption.db` accepts the `mongodb` driver's `Db` without a cast. `PostgresClient` declares the optional `connect` / `totalCount` members read during setup.
+
+Docs
+
+- Shutdown recipe in the skill used plain `destroy()` followed by `drain()`, which aborts completion writes and re-sends in-flight rows after `sendingTimeout`. It now uses `destroy({ drain: true })`.
+- Index names and shapes for Mongo and Postgres, `sendMail()` rejection list, and `onError` argument naming corrected.
+- New `docs/transport-verification.md` (verdict rules, timeout, quarantine, recovery) and a "Completion writes and drain" section in `docs/tuning.md`; the README cells now link there. `docs/queue-api.md` names `Infinity` as the batch-mode `opts.limit`, the non-string `getPendingTo` input, and `isSettled` in the lease predicates. `HISTORY.md` removed (duplicate of the CHANGELOG footer).
+
 ## 5.3.0
 
 Transport verification
@@ -31,11 +59,12 @@ Recipient policies (prepared as 5.2.2, folded into 5.3.0)
 - An unparseable address fails the task on its current attempt with a logged diagnostic and `onError`, instead of silently retrying until `maxTries`.
 - Behavior change: on an instance configured with `recipientPolicies`, `sendMail()` validates `from`, `sender`, `replyTo`, `to`, `cc`, `bcc`, `envelope.from` and `envelope.to` and rejects with `MAIL_TIME_INVALID_ADDRESS` before enqueue. A `server` constructor throws for an unparseable string `from` or transport `from` (`error.field` is `transports[i].from`). Letters that reach the queue from an instance without `recipientPolicies` still fail at send time as above.
 
+- Line breaks and NUL characters in `{ name }` objects are rejected like those in address strings.
+- Behavior change: `{ name, address }` objects must carry a bare address in `address`, matching Nodemailer's contract. 5.2.1 also accepted `{ address: 'Name <user@example.com>' }` and sent a malformed header; 5.3.0 rejects it with `MAIL_TIME_INVALID_ADDRESS`. Move the display name to `name`.
+
 Types
 
 - New `MailTimeErrorDetails` type for `onError`'s third argument: `{ phase?: 'verify' | 'complete' | 'checkpoint', transportIndex?: number, attempt?: number }` plus the SMTP `info` keys of a failed attempt (was `object`).
-- Line breaks and NUL characters in `{ name }` objects are rejected like those in address strings.
-- `{ name, address }` objects must carry a bare address in `address`, matching Nodemailer's contract. 5.2.1 also accepted `{ address: 'Name <user@example.com>' }` and sent a malformed header; 5.3.0 rejects it with `MAIL_TIME_INVALID_ADDRESS`. Move the display name to `name`.
 
 ## 5.2.1
 
