@@ -1,1 +1,0 @@
-For full history see [releases](https://github.com/veliovgroup/mail-time/releases) in GitHub

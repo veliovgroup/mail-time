@@ -7,12 +7,12 @@
 - `ready()` waits at most `verifyTimeout` (default 30000 ms) per transport. A `verify()` that neither calls back nor returns a Promise now delays `ready()` by that time and stays usable, with one warning. Fix such a transport so it calls the callback or returns a Promise, or set `verifyTimeout` lower.
 - A sole SMTP host that accepts connections but never answers used to reject `ready()` after about 30 s (Nodemailer's default `greetingTimeout`). The 120 s figure applies only to a host that never completes the TCP connection. Now `ready()` resolves at `verifyTimeout` and the failure reaches `onError(error, null, { phase: 'verify' })` when Nodemailer reports it.
 - `onError(error, null, { transportIndex, phase: 'verify' })` still means the transport is quarantined. A timeout alone does not fire it.
-- A quarantined transport is re-probed in the background (60 s, doubling to 15 min, one probe in flight per transport) and returns to rotation after a successful `verify()`. Before, it stayed out until restart. Code that relied on restart-only recovery needs no change.
+- A quarantined transport is re-probed in the background (60 s, doubling to 15 min, one probe in flight per transport; from 5.3.1 a probe that times out releases its slot) and returns to rotation after a successful `verify()`. Before, it stayed out until restart. Code that relied on restart-only recovery needs no change. Details: `docs/transport-verification.md`.
 - `verifyTimeout` accepts positive numbers; values above `2147483647`, including `Infinity`, are clamped to `2147483647`. Other values use `30000`.
 
 ## drain()
 
-`await mailTime.drain()` resolves `{ failedWrites }` (was `undefined`). Storage write failures while recording a send outcome also call `onError` with `details.phase` `'complete'` or `'checkpoint'`. An outcome write lost after a claim-renewal error is retried once (no retry when the claim was already stale at renewal time) and, if still lost, reported the same way.
+`await mailTime.drain()` resolves `{ failedWrites }` (was `undefined`). Storage write failures while recording a send outcome also call `onError` with `details.phase` `'complete'` or `'checkpoint'`. An outcome write lost after a claim-renewal error is retried once (no retry when the claim was already stale at renewal time) and, if still lost, reported the same way. In recipient-policy mode a claim-renewal write that throws now stops further renewals only; the outcome write still runs (5.2 closed the lease and left the row `sending`).
 
 ## Recipient policies: validation moves earlier
 

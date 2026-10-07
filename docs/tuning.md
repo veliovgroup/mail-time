@@ -58,13 +58,25 @@ For deeper JoSk semantics — adapter internals, lease lifecycle, recurring task
 
 ## JoSk 6.4 restarts and shutdown
 
-JoSk 6.4 preserves a claimed interval's schedule when a worker registers the same task during a rolling deploy. A new worker does not run the same scan while another worker's claim is active. If a worker dies during `queue.iterate()`, however, the scan may wait the full `josk.zombieTime` (MailTime defaults to 60 seconds) before recovery. If no scan was claimed at death, normal polling resumes. `sendingTimeout` is separate: it controls recovery of an in-flight email row after SMTP or policy work stalls.
+JoSk 6.4+ preserves a claimed interval's schedule when a worker registers the same task during a rolling deploy. A new worker does not run the same scan while another worker's claim is active. If a worker dies during `queue.iterate()`, however, the scan may wait the full `josk.zombieTime` (MailTime defaults to 60 seconds) before recovery. If no scan was claimed at death, normal polling resumes. `sendingTimeout` is separate: it controls recovery of an in-flight email row after SMTP or policy work stalls.
 
 `await mailTime.destroy({ drain: true, schedulerTimeout: 30_000 })` stops new dispatches, awaits JoSk `shutdown()` for the running scan, then drains the SMTP pool. Sends still waiting for a `concurrency` slot are dropped at once and their rows stay unclaimed, so a scan blocked behind a slow SMTP send returns right away and in-flight SMTP does not count against `schedulerTimeout`. `schedulerTimeout` defaults to 10 seconds for JoSk's running-handler wait; a timed-out handler, or a JoSk shutdown error (logged), makes destroy resolve `false` after the pool drains; the Promise never rejects. JoSk first awaits its own storage scan, which this timeout does not bound. It also does not limit SMTP or provider hooks. Check the return value before closing shared storage. Plain `destroy()` remains immediate and leaves in-flight email claims to `sendingTimeout` recovery.
 
 Upgrade every server sharing a scheduler prefix. A JoSk 6.3 peer can still reset a claimed interval on startup. A Redis Cluster scheduler must set `josk.adapter.useHashTags: true` alongside `RedisQueue({ useHashTags: true })`; JoSk 6.4 rejects a cluster adapter without it and fixes `redis@4` script routing. Details: [JoSk 6.4 migration](https://github.com/veliovgroup/josk/blob/master/docs/migration-v6.3-v6.4.md).
 
+## Completion writes and drain
+
+After SMTP accepts or finally rejects a letter, MailTime records the outcome with a lease-guarded storage write (`remove`, retry release, `isSent` / `isFailed`, or a recipient-policy checkpoint). If that write throws, or an outcome write is lost after a claim-renewal error, the row can stay `sending` and be re-sent after `sendingTimeout`. Delivery stays at-least-once.
+
+Every such failure increments `failedWrites` and calls `onError(error, task, details)` once with `details.phase` of `'complete'` (final or retry-release write) or `'checkpoint'` (recipient-policy results written after SMTP). A lost write after an uncertain renewal is retried once with the attempted renewal stamp (no retry when the claim was already stale at renewal time); if that fails too the message is `outcome write lost (renewal outcome uncertain or lease taken over)`.
+
+`await mailTime.drain()` waits for the in-process send pool and resolves `{ failedWrites }`, cumulative since the instance was created. After a plain `destroy()` the count still grows but `onError` and the log are suppressed. Compare the value before and after `destroy({ drain: true })` to tell a clean shutdown from one that left claimed rows behind.
+
 ## Pitfalls
+
+### Standalone Redis scans every scheduled row
+
+Without `useHashTags`, `RedisQueue.iterate()` SCANs every `sendat:*` key and reads each one per tick, so cost grows with the number of scheduled rows, not with the number due. Tagged mode (`useHashTags: true`, also valid on a single Redis node) keeps a sorted set and reads at most 100 due rows per tick. Prefer tagged mode for queues that hold more than a few thousand scheduled letters.
 
 ### Reliability boundary
 
@@ -72,7 +84,7 @@ MailTime atomically claims queue rows and lease-guards every completion write, p
 
 - **Many `server` pods on the same `prefix`, expecting N× send rate** — they compete for one drain lease per tick. Use `concurrency` (in-process) and/or distinct `prefix`es (cluster-wide) instead. Duplicate-prefix `server` is still useful as **failover/HA**; an unclean death during a claimed scan can defer its next run until `josk.zombieTime`.
 - **`zombieTime` too low** with slow storage scans — another node may start an overlapping drain. The atomic CAS on `isSending` still prevents double-send, but wasted work and SMTP pressure remain.
-- **`sendingTimeout` below the worst-case SMTP roundtrip** — a healthy still-sending worker can lose its lock to a recovery worker, causing a duplicate delivery. Always keep `sendingTimeout` comfortably above the slowest legitimate roundtrip; MailTime logs a warning below `120000`. Since v5 the claim is also **renewed while the send is in flight** (`renewClaim`, default `sendingTimeout / 3`), so `sendingTimeout` no longer has to cover the worst case on its own — but it is still the floor that decides how fast a *crashed* worker's row is recovered. `maxRenewals` caps renewal attempts; recovery begins `sendingTimeout` after the last successful stamp. Slow renewal writes can extend elapsed time beyond the nominal interval calculation.
+- **`sendingTimeout` below the worst-case SMTP roundtrip** — a healthy still-sending worker can lose its lock to a recovery worker, causing a duplicate delivery. Always keep `sendingTimeout` comfortably above the slowest legitimate roundtrip; MailTime logs a warning below `120000`. Since v5 the claim is also **renewed while the send is in flight** (`renewClaim`, default `sendingTimeout / 3`, floor 1000 ms), so `sendingTimeout` no longer has to cover the worst case on its own — but it is still the floor that decides how fast a *crashed* worker's row is recovered. `maxRenewals` caps renewal attempts; recovery begins `sendingTimeout` after the last successful stamp. Slow renewal writes can extend elapsed time beyond the nominal interval calculation.
 - **Replica reads** for queue or scheduler — use primary / writer endpoint only.
 - **`josk.adapter.resetOnInit: true`** in production — wipes scheduler state on every boot.
 - **`concatEmails: true` on OTP or password resets** — folds letters together. Use a separate instance (`prefix: 'otp'`) instead.

@@ -49,7 +49,7 @@ process.on('SIGTERM', async () => {
 export { mailQueue };
 ```
 
-**Why this shape:** every process is also a sender. JoSk's lease guarantees one sender per email despite N competing processes.
+**Why this shape:** every process is also a sender. JoSk's lease guarantees one sender per email despite N competing processes. In a cluster give each worker a distinct `lockOwnerId` (for example `${process.env.K8S_POD_NAME || os.hostname()}-${process.pid}`) so the storage lease is observable.
 
 ## Dedicated mail micro-service (client + server split)
 
@@ -100,18 +100,6 @@ await mailQueue.ready();
 
 **Why this shape:** app servers have zero SMTP credentials; the dedicated machine has fixed networking and credentials.
 
-## Cluster — every node is also a sender
-
-Same as "Single app, single store". Set a distinct `lockOwnerId` per worker so the storage lease is observable:
-
-```js
-const lockOwnerId = `${process.env.K8S_POD_NAME || os.hostname()}-${process.pid}`;
-const mailQueue = new MailTime({
-  /* ... */
-  josk: { adapter: { /* ... */ }, lockOwnerId },
-});
-```
-
 ## Multiple instances — OTP, transactional, marketing
 
 **Recommended:** one `MailTime` per email class. Distinct `prefix` on `MailTime` only (queue inherits). One Redis client OK. Apply tuning via `mailTimePreset(name, overrides)` instead of hand-coding knobs — see `tuning.md` §Presets.
@@ -158,9 +146,9 @@ const mailers = [otpMail, transactionalMail, marketingMail];
 await Promise.all(mailers.map((m) => m.ready()));
 
 process.on('SIGTERM', async () => {
-  mailers.forEach((m) => m.destroy());                  // 1. stop new ticks
-  await Promise.all(mailers.map((m) => m.drain()));     // 2. let in-flight SMTPs finish
-  // 3. close shared clients (redisClient.quit() / pgPool.end() / mongoClient.close()) here
+  // stop new ticks, let in-flight SMTPs finish and write their outcomes
+  await Promise.all(mailers.map((m) => m.destroy({ drain: true })));
+  // close shared clients (redisClient.quit() / pgPool.end() / mongoClient.close()) here
 });
 ```
 

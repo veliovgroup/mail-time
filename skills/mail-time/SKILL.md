@@ -56,4 +56,4 @@ Core rules:
 
 ## Runtime
 
-Node ≥14.19.3 (5.3.0+; older 4.x/5.x declared ≥20.9), Bun ≥1.1, Meteor 2.14/3.2. Node 14/16 hosts need a `mongodb` driver their Node supports (3.x-5.x for Node 14, ≤6 for Node 16); tested with MongoQueue only. ESM + CJS. Runtime dependency: JoSk. Install nodemailer plus chosen store driver.
+Node ≥14.19.3 (5.3.0+; older 4.x/5.x declared ≥20.9; `josk` declares ≥14.21.3, so engine-strict installs need 14.21.3+), Bun ≥1.1, Meteor 2.14/3.2. Node 14/16 hosts need a `mongodb` driver their Node supports (3.x-5.x for Node 14, ≤6 for Node 16); tested with MongoQueue only. ESM + CJS. Runtime dependency: JoSk. Install nodemailer plus chosen store driver.

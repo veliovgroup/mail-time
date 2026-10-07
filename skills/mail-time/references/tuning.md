@@ -1,25 +1,11 @@
 # MailTime tuning (agent reference)
 
-One JoSk `setInterval` per `prefix` (`mailTimeQueue<prefix>` → `queue.iterate()`). Cluster-wide: **one lease winner per tick per prefix**. Extra same-prefix servers buy failover, not N× throughput. JoSk 6.4 keeps an unfinished scan claim across restarts; after an unclean death, the next scan can wait until `josk.zombieTime`. Graceful `destroy({ drain: true })` uses JoSk `shutdown()`.
+One JoSk `setInterval` per `prefix` (`mailTimeQueue<prefix>` → `queue.iterate()`). Cluster-wide: **one lease winner per tick per prefix**. Extra same-prefix servers buy failover, not N× throughput. JoSk 6.4+ keeps an unfinished scan claim across restarts; after an unclean death, the next scan can wait until `josk.zombieTime`. Graceful `destroy({ drain: true })` uses JoSk `shutdown()`.
 
-## Multiple instances — default pattern
+## Instances and prefixes
 
-- **One `MailTime` per email class** when policies differ: own options; **distinct `prefix` only per class** (OTP vs marketing).
-- **`prefix` same** on every `client` + `server` for that class (shared queue).
-- **Never** reuse `prefix` across instances with different mail policy.
-- Apps: `type: 'client'`. Mail VM: `type: 'server'` (systemd: `mailtime@otp`, etc.).
-
-| Class | `concatEmails` | `retryDelay` | `revolvingInterval` | josk jitter |
-|---|---|---|---|---|
-| OTP / alerts | `false` | 2–5s | `1024` | 256 / 1024 |
-| Transactional | `false` | 5–15s | default | default |
-| Marketing | `true`, long `concatDelay` | 60s | default | default |
-
-## Mail host: 2–8 servers on one machine
-
-- **2–8 `server` instances** (~**1 per CPU core**) → parallel drains **across prefixes**, not duplicate drains of same `prefix`.
-- One hot queue → **shard prefixes** (`marketing-0`, …), not many instances same `prefix`.
-- Duplicate same-`prefix` `server` (different `lockOwnerId`) buys **failover/HA**, never extra throughput. Use graceful shutdown for prompt handoff; an unclean death during a claimed scan waits for `josk.zombieTime`.
+- One `MailTime` per email class with its own `prefix`; same `prefix` on every `client` and `server` of that class; never reuse a `prefix` with different policy. Code: `recipes.md` §Multiple instances.
+- Dedicated mail host: 2–8 `server` instances, one per prefix (≈1 per core). Same-prefix duplicates buy failover only; shard a hot queue by prefix (`marketing-0`, …). Code: `recipes.md` §Mail host.
 
 ## Throughput levers
 
@@ -39,7 +25,7 @@ One JoSk `setInterval` per `prefix` (`mailTimeQueue<prefix>` → `queue.iterate(
 | `mode` | `'batch'` | `'one'` claims a single row per tick (fairness). |
 | `concurrency` | `1` | Parallel SMTPs per instance. Increase for throughput; cap by SMTP rate limits. |
 | `sendingTimeout` | 300000 (5 min) | Window before a stuck `isSending=true` row becomes recoverable. Must exceed worst-case SMTP; warns below 120000. |
-| `renewClaim` | `sendingTimeout / 3` | Re-stamps `sendingAt` while the send is in flight so a slow-but-healthy send keeps its lock. `false` = v4 behaviour. |
+| `renewClaim` | `sendingTimeout / 3` (min 1000 ms) | Re-stamps `sendingAt` while the send is in flight so a slow-but-healthy send keeps its lock. `false` = v4 behaviour. |
 | `maxRenewals` | 10 | Renewal-attempt budget; recovery begins `sendingTimeout` after last successful stamp. Slow renewal writes can extend elapsed time. |
 | `shouldFailOver` | — | Veto transport rotation for a failure that may already have been delivered. |
 | `strictPayload` | false | Allowlist queued fields + force `disableFileAccess`/`disableUrlAccess`. |

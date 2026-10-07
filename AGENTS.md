@@ -15,7 +15,7 @@ Send and queue emails in horizontally scaled Node.js and Bun.js. Bulletproof. Hi
 
 ### One mail host: 2–8 servers
 - Run **2–8 `server` instances** on one machine (~**1 per CPU core**) for **parallel drains across prefixes**, not duplicate drains of same `prefix`.
-- Same `prefix` cluster-wide = **one JoSk lease tick** at a time → extra pods ≠ N× throughput, but **do** buy failover/HA. JoSk 6.4 preserves claimed interval runs on restart: graceful `destroy({ drain: true })` hands back unfinished scans; an unclean death can delay the next scan until `josk.zombieTime`.
+- Same `prefix` cluster-wide = **one JoSk lease tick** at a time → extra pods ≠ N× throughput, but **do** buy failover/HA. JoSk 6.4+ preserves claimed interval runs on restart: graceful `destroy({ drain: true })` hands back unfinished scans; an unclean death can delay the next scan until `josk.zombieTime`.
 - High volume one queue → **shard prefixes** (`marketing-0`, …), not duplicate instances same `prefix`.
 
 ### Throughput levers

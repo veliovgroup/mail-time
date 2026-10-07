@@ -37,14 +37,14 @@ import type {
   CustomQueue,
 } from 'mail-time';
 
-// ESM subpath imports (Node ≥ 14.19.3 / Bun ≥ 1.1.0)
+// Subpath imports
 import { mailTimePreset } from 'mail-time/presets';
 import { MongoQueue } from 'mail-time/adapters/mongo';
 import { RedisQueue } from 'mail-time/adapters/redis';
 import { PostgresQueue } from 'mail-time/adapters/postgres';
 ```
 
-Subpath exports are ESM-only. CJS consumers import everything from the main entry (`require('mail-time')`), which bundles presets and all adapters.
+Subpaths resolve for both `import` and `require` (5.3.1+; CJS `require()` of a subpath returns the main bundle, which contains presets and all adapters). Before 5.3.1 CJS consumers must use `require('mail-time')`.
 
 ## `new MailTime(opts)`
 
@@ -85,7 +85,7 @@ Constructor. The scheduler starts immediately when `opts.type === 'server'`.
 | `mode` | `'one' \| 'batch'` | `'batch'` | `'batch'`: drain every due-and-unclaimed row per tick. `'one'`: claim a single row per tick (fairness across cluster nodes). Mirrors JoSk's `execute`. |
 | `concurrency` | `number` | `1` | Parallel SMTPs per instance. The per-row CAS blocks concurrent claims when concurrency > 1. |
 | `sendingTimeout` | `number` (ms) | `300000` | How long an `isSending=true` row remains locked before it becomes eligible for recovery. Must exceed the worst-case SMTP roundtrip; values below `120000` log a warning. |
-| `renewClaim` | `boolean \| number` (ms) | `sendingTimeout / 3` | Re-stamp `sendingAt` on the claimed row while its SMTP roundtrip runs, via a lease-guarded update that succeeds only while this worker still owns the row. `false` restores v4's single stamp. |
+| `renewClaim` | `boolean \| number` (ms) | `sendingTimeout / 3` (min 1000 ms) | Re-stamp `sendingAt` on the claimed row while its SMTP roundtrip runs, via a lease-guarded update that succeeds only while this worker still owns the row. `false` restores v4's single stamp. |
 | `maxRenewals` | `number` | `10` | Renewal-attempt budget; recovery begins `sendingTimeout` after last successful stamp. Slow storage can extend elapsed time. |
 | `shouldFailOver` | `(error, info, email) => boolean` | — | Veto rotating to next transport. `info` is `object \| undefined`. Default: rotate unless `error.mayFailOver === false`. A throwing hook keeps the current transport. |
 | `strictPayload` | `boolean` | `false` | Narrow every queued letter to `allowedMailFields` and force `disableFileAccess` / `disableUrlAccess`. `raw` is refused regardless of this option. |
@@ -124,7 +124,7 @@ Pass-through to the underlying `JoSk` constructor. The most useful keys:
 | Trigger | Message |
 |---|---|
 | `opts` missing or not an object | `[mail-time] Configuration object must be passed into MailTime constructor` |
-| `opts.queue` missing or wrong shape | `[mail-time] {queue} option is required` |
+| `opts.queue` missing or wrong shape | `[mail-time] {queue} option is required: provide a MongoQueue, RedisQueue, PostgresQueue, or CustomQueue instance` |
 | Queue adapter missing required methods | `[mail-time] {queue} instance is missing {<method>} method that is required!` |
 | `type === 'server'` + empty `transports` | `[mail-time] {transports} is required for {type: "server"}` |
 | `type === 'server'` + missing `josk` | `[mail-time] {josk} option is required {object} for {type: "server"}` |
@@ -153,10 +153,12 @@ Enqueue a letter.
 | `template` | `string` | Overrides constructor `template` for this letter. |
 | `concatSubject` | `string` | Overrides constructor `concatSubject` for this letter. Supports `{{count}}` for the folded letter count. |
 
-Throws synchronously:
+`sendMail` is async; it rejects with:
 
 - `[mail-time] [sendMail] html nor text field is present` — when both are missing.
+- `[mail-time] [sendMail] raw is not supported` — `raw` bypasses composition; pass `html` / `text`.
 - `[mail-time] [sendMail] mailOptions.to is required and must be a string or non-empty Array` — when `to` is invalid.
+- `MAIL_TIME_INVALID_ADDRESS` (`error.code`, `error.field` names the offending field) — only on instances configured with `recipientPolicies`, for an unparseable `from`, `sender`, `replyTo`, `to`, `cc`, `bcc`, `envelope.from` or `envelope.to`.
 
 Returns the email's stable `uuid` string. Use it for cancellation.
 
@@ -331,18 +333,7 @@ type MailTimeIterateOptions = {
 
 `mailOptions` is always an array — single emails have one entry; concatenated batches have N entries that get folded together by `___compileMailOpts`.
 
-### Per-row lifecycle (`isSending` lock)
-
-The following describes normal attempts. Built-ins also exclude `isSettled=true` and admit stale, exhausted policy claims for completion-only recovery. Durable terminal results recover without another attempt even before exhaustion. Without providers, legacy delivery and callbacks remain unchanged.
-
-- A row is **eligible for claim** when: `isSent=false AND isFailed=false AND isCancelled=false AND sendAt<=now AND tries<maxTries AND (isSending=false OR sendingAt<=now-sendingTimeout)`.
-- A row is **claimed atomically** by `queue.update(task, { isSending: true, sendingAt: now, tries: task.tries+1 })`. The storage CAS must reject the update if the predicate above no longer holds — this is what stops two workers (same instance or different cluster nodes) from delivering the same email.
-- A row is **released** in one of three ways:
-  - **Success** — removed from storage (or `isSent=true, isSending=false, sendingAt=0` when `keepHistory: true`).
-  - **Will-retry** — updated to `{ isSending: false, sendingAt: 0, sendAt: now + retryDelay }`.
-  - **Final failure** — `isFailed=true, isSending=false, sendingAt=0` (or row deleted when `keepHistory: false`).
-- If a worker dies between claim and release, the row stays `isSending=true` until `sendingAt + sendingTimeout` is in the past. The next iterate tick then includes it in the eligibility predicate, and a recovery worker can re-claim it.
-- Post-claim completion updates (`remove`, retry release, `isSent`/`isFailed`) carry a **lease guard** (`leaseTries` + `leaseSendingAt`). A late SMTP callback from a superseded worker cannot complete or delete the row.
+Per-row lifecycle (`isSending` lock, lease guards, recovery): `tuning.md` §Per-row lifecycle.
 
 ### Per-recipient delivery state without policies
 
@@ -395,6 +386,12 @@ export type MailTimeRecipientResult;
 export type MailTimeRecipientSummary;
 export type MailTimePolicyTransport;
 export type MailTimePolicyEnvelope;
+export type MailTimeErrorDetails;      // onError third argument
+export type MailTimeDrainResult;       // { failedWrites: number }
+export type MailTimeFromDetails;       // second argument of the `from` callback
+export type MailTimeConcatEmailsOptions;
+export type MailTimePresetName;
+export type MailTimePresetConfig;
 ```
 
 Internal members prefixed with `__` or `___` are deliberately excluded from the public `.d.ts`. Treat them as private and never depend on them — they may change between minor releases.

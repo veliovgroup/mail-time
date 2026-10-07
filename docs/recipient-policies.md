@@ -45,7 +45,7 @@ The recipient set is fixed after first preparation. Changed transport-default re
 After terminal storage succeeds, MailTime calls nonempty groups in this order:
 
 1. `onSent(task, info, recipients, summary)` for SMTP acceptance.
-2. `onError(error, task, info, recipients, summary)` for exhausted pending errors.
+2. `onError(error, task, details, recipients, summary)` for exhausted pending errors.
 3. `onSuppressed(task, recipients, summary)` for suppression.
 4. `onRejected(task, recipients, summary)` for permanent rejection.
 

@@ -46,8 +46,9 @@ PostgresQueue auto-creates one table on first `ready()` (idempotent):
 
 - `mail_time_queue` — composite uniqueness `(prefix, uuid)`. Indexes:
   - `idx_mail_time_queue_prefix_uuid` — unique, for fast lookup / upsert.
-  - `idx_mail_time_queue_due` — covers the iterate path (`prefix, is_sent, is_failed, is_cancelled, send_at, tries`).
-  - `idx_mail_time_queue_pending_to` — covers `getPendingTo` (`prefix, to_address, is_sent, is_failed, is_cancelled, send_at`).
+  - `idx_mail_time_queue_policy_due_v1` — covers the iterate path (`prefix, is_settled, is_sent, is_failed, is_cancelled, is_sending, sending_at, send_at, tries`).
+  - `idx_mail_time_queue_policy_pending_to_v1` — covers `getPendingTo` (`prefix, to_address, is_settled, is_sent, is_failed, is_cancelled, send_at`).
+  - `is_settled BOOLEAN` and `recipient_results JSONB` columns are added with `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` on upgrade from pre-5.2 tables.
 
 The setup acquires a two-key, per-prefix advisory lock — `pg_advisory_lock(0x4D61696C, <int32 hash of prefix>)` — so concurrent processes don't race on `CREATE TABLE`, and co-tenant queues with distinct prefixes don't serialize each other's setup.
 
@@ -156,8 +157,8 @@ const mailQueue = new MailTime({
 On `ready()`, `MongoQueue` ensures three indexes (creates or drops+recreates if shape mismatches):
 
 - `{ uuid: 1 }` — fast lookup.
-- `{ isSent: 1, isFailed: 1, isCancelled: 1, to: 1, sendAt: 1 }` — `getPendingTo`.
-- `{ isSent: 1, isFailed: 1, isCancelled: 1, sendAt: 1, tries: 1 }` — `iterate`.
+- `mailtime_policy_pending_to_v1` on `{ isSettled, isSent, isFailed, isCancelled, to, sendAt }` — `getPendingTo`.
+- `mailtime_policy_due_v1` on `{ isSettled, isSent, isFailed, isCancelled, isSending, sendingAt, sendAt, tries }` — `iterate`.
 
 Index conflict (Mongo error code 85) is handled by dropping the legacy index and recreating with the new shape.
 
@@ -253,18 +254,7 @@ Start from `adapters/blank-example.js` in the source tree — it is the canonica
 
 ### Recipient policy storage (5.2+)
 
-Built-ins declare `supportsRecipientPolicies = true`; custom adapters need this marker before configuring providers. Canonical contract: `docs/queue-api.md` and `adapters/blank-example.js`.
-
-- Persist/project `isSettled`, `recipientResults`. Missing isSettled means false; absent results mean legacy state; `[]` marks policy ownership at claim.
-- Exclude settled rows from iterate, claim, lease updates/removal, cancellation, and concat. Concat lookup/atomic append exclude any policy-initialized row, even when the enqueue client has no providers.
-- Serialize renewal/checkpoints per attempt. Return true for unchanged but lease-matched checkpoints. Return false on stale/cancelled/failed/settled operations. Guard cancellation in the atomic storage operation; never replace a row from a stale cancellation snapshot.
-- Iterate also includes stale in-flight policy rows at `tries >= maxTries`. Reclaim with unchanged tries and newer sendingAt; core performs completion only, no SMTP or providers.
-- Recipient-state field updates require claim/lease metadata; reject unguarded `recipientResults`/`isSettled` changes.
-- Redis standalone WATCH sequences serialize per shared client. Tagged mutations read raw JSON and compare its exact payload in Lua before storing a JS-serialized replacement, preserving empty header arrays without treating invalid objects as arrays. At most three snapshot-conflict attempts; existing keys unchanged. Normalize historical cjson empty result/reason/source tables. Terminal settlement removes schedule and owned tagged concat pointers.
-- Mongo adds named `mailtime_policy_due_v1` / `mailtime_policy_pending_to_v1` indexes and uses `isSettled: { $ne: true }`.
-- PostgreSQL idempotently adds `is_settled BOOLEAN NOT NULL DEFAULT false`, nullable `recipient_results JSONB`; new indexes are `idx_mail_time_queue_policy_due_v1` / `idx_mail_time_queue_policy_pending_to_v1`. SQL NULL means absent policy state, never `[]`.
-
-Rollout per prefix: upgrade every server with policies off; verify versions; enable identical providers. Clients need no providers. Resolve active policy state before disabling/downgrading; archive/remove/isolate settled history before older readers return. Old indexes stay during rolling upgrades; remove only superseded due/pending indexes after old servers are gone, not UUID/new policy indexes.
+Built-ins declare `supportsRecipientPolicies = true`; a custom adapter must set it before `recipientPolicies` is accepted. The full contract (settled-row exclusion, `[]` as policy ownership, guarded `recipientResults`/`isSettled` writes, completion-only reclaim of exhausted rows, rollout order) is `docs/queue-api.md` §Recipient policy capability. Storage specifics: Redis tagged mode compares the exact JSON payload in Lua and retries up to three snapshot conflicts; Mongo adds `mailtime_policy_due_v1` / `mailtime_policy_pending_to_v1`; Postgres adds `is_settled`, `recipient_results` and the `idx_mail_time_queue_policy_*_v1` indexes idempotently.
 
 ### Required design rules
 

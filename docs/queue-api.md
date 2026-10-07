@@ -18,10 +18,10 @@ List of required methods and their arguments.
 - async `Queue#ping() — {Promise<object>}`
 - async `Queue#iterate(opts) — {Promise<void 0>}`
   - `{object} [opts]` — iteration options provided by MailTime
-  - `{number} [opts.limit]` — when set (e.g. by `mode: 'one'`), stop after dispatching that many tasks per tick
+  - `{number} [opts.limit]` — stop after dispatching that many tasks per tick. MailTime passes `1` for `mode: 'one'` and `Infinity` for `mode: 'batch'`; treat a non-finite value as "no limit" (do not pass it to a driver's `limit()`)
   - `{number} [opts.sendingTimeout]` — milliseconds after which an `isSending=true` row is considered a zombie and becomes eligible again
 - async `Queue#getPendingTo(to, sendAt) — {Promise<object|null>}`
-  - `{string} to` — email address from `to` field
+  - `{string} to` — the letter's `to` field as given to `sendMail()`. May be an array or a `{ name, address }` object; the shipped adapters return `null` for any non-string, which disables concatenation for that letter
   - `{number} sendAt` — timestamp
   - Must exclude rows with `isSending === true` (concat must not mutate in-flight letters)
   - Must exclude rows with `tries >= mailTimeInstance.maxTries` (concat must not append to exhausted rows awaiting finalization)
@@ -31,7 +31,7 @@ List of required methods and their arguments.
   - `{string} uuid` — email's uuid
 - async `Queue#remove(email, opts) — {Promise<boolean>}`
   - `{object} email` — email's object
-  - `{object} [opts]` — optional lease guard. When `{ leaseTries: Number, leaseSendingAt: Number }` is passed, the delete **must succeed only if** the stored row still satisfies `tries === leaseTries AND isSending === true AND sendingAt === leaseSendingAt AND isCancelled === false AND isFailed === false`.
+  - `{object} [opts]` — optional lease guard. When `{ leaseTries: Number, leaseSendingAt: Number }` is passed, the delete **must succeed only if** the stored row still satisfies `tries === leaseTries AND isSending === true AND sendingAt === leaseSendingAt AND isCancelled === false AND isFailed === false` (plus `isSettled !== true` when `supportsRecipientPolicies`).
 - async `Queue#update(email, updateObj) — {Promise<boolean>}`
   - `{object} email` — email's object (*see its structure below*)
   - `{object} updateObj` — fields with new values to update
@@ -41,6 +41,7 @@ List of required methods and their arguments.
     - `isCancelled === false`
     - `tries === email.tries` (caller's snapshot value, **before** the bump — this is the compare-and-set; do not predicate on `tries < maxTries`)
     - `isSending === false` **OR** `sendingAt <= now - sendingTimeout` (stale-lock recovery)
+    - `isSettled !== true` when `supportsRecipientPolicies` (see below)
   - Use `updateObj.sendingAt` (fall back to `Date.now()`) as the `now` reference for the stale-lock arm. When the predicate fails, return `false` so the racing worker (in this process or another node) drops the row and JoSk picks up something else on the next tick. Return `true` only when the storage layer atomically flipped `isSending` to `true`.
   - **Lease release guard.** When `updateObj` contains `{ leaseTries: Number, leaseSendingAt: Number, ... }` (MailTime-internal keys stripped before persist), the update **must succeed only if** the stored row still holds that worker's lease: `tries === leaseTries AND isSending === true AND sendingAt === leaseSendingAt AND isCancelled === false AND isFailed === false`. Same predicate applies to `remove(email, { leaseTries, leaseSendingAt })`. When the guard fails, return `false` so a late SMTP callback from a superseded worker cannot complete or delete a row that another worker finalized or a user has since cancelled.
   - **Atomic concat append.** When `updateObj` contains `{ appendMailOption: object }`, atomically append one element to `mailOptions` only if the row is not in-flight (`isSending === false`) and not terminal.
