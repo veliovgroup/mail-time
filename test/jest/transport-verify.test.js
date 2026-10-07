@@ -482,6 +482,25 @@ describe('lazy re-probe', () => {
     expect(mt.___isHealthyTransport(0)).toBe(true);
   });
 
+  it('backup strategy: the scheduler scan re-probes a quarantined primary nobody selects', async () => {
+    const { mt, calls, sentBy } = await setup({ strategy: 'backup' });
+    expect(mt.transport).toBe(1);
+    // Rows enqueued by this server all carry transport 1, so the send path never asks about 0.
+    const id = await mt.sendMail({ to: 'x@example.com', text: 'x' });
+    expect(mt.queue.records.get(id).transport).toBe(1);
+    DOWN.on = false;
+    await tick(60000);
+    expect(calls.length).toBe(1);
+    await mt.___iterate(); // also dispatches the due row above through the backup
+    await tick(0);
+    await mt.drain();
+    expect(calls.length).toBe(2);
+    expect(mt.transport).toBe(0);
+    const id2 = await mt.sendMail({ to: 'y@example.com', text: 'x' });
+    await mt.___send(mt.queue.records.get(id2));
+    expect(sentBy).toEqual(['backup', 'flaky']);
+  });
+
   it('backup strategy: recovery routes new sends back to the primary', async () => {
     const { mt, sentBy } = await setup({ strategy: 'backup' });
     expect(mt.transport).toBe(1);

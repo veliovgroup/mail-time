@@ -1824,6 +1824,9 @@ class MailTime {
     if (this.__isDestroyed || this.__isPaused) {
       return;
     }
+    // Under `strategy: 'backup'` a quarantined primary is never selected for a send, so the
+    // send path alone would never re-probe it. Sweep here so recovery does not depend on row flow.
+    for (const index of this.__unhealthyTransports) this.___maybeReprobe(index);
     const limit = this.mode === 'one' ? 1 : Infinity;
     this.__schedulerScans++;
     try {
