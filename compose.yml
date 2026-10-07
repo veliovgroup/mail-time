@@ -1,6 +1,7 @@
 # Local stores for the Mocha integration suites. Mirrors the images and ports CI uses.
-#   docker compose up -d && npm run test:mocha:local
-#   docker compose down -v
+# Works with Docker or Podman (podman-compose):
+#   docker compose up -d && npm run test:mocha:local      # or: podman compose up -d
+#   docker compose down -v                                # or: podman compose down -v
 services:
   redis:
     image: redis:7-alpine

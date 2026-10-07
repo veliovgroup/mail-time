@@ -43,7 +43,7 @@ npm run test:jest
 npm run test:types
 
 # Mocha integration suite (needs all three DBs); compose.yml starts the CI images locally
-docker compose up -d && npm run test:mocha:local
+docker compose up -d && npm run test:mocha:local   # Podman: podman compose up -d
 REDIS_URL=... MONGO_URL=... PG_URL=... npm run test:mocha   # against your own stores
 
 # Pack the tarball, install it into a scratch project, verify ESM/CJS entry points,
