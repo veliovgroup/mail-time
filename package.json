@@ -39,24 +39,40 @@
       "import": {
         "types": "./presets.d.ts",
         "default": "./presets.js"
+      },
+      "require": {
+        "types": "./index.d.cts",
+        "default": "./index.cjs"
       }
     },
     "./adapters/mongo": {
       "import": {
         "types": "./adapters/mongo.d.ts",
         "default": "./adapters/mongo.js"
+      },
+      "require": {
+        "types": "./index.d.cts",
+        "default": "./index.cjs"
       }
     },
     "./adapters/redis": {
       "import": {
         "types": "./adapters/redis.d.ts",
         "default": "./adapters/redis.js"
+      },
+      "require": {
+        "types": "./index.d.cts",
+        "default": "./index.cjs"
       }
     },
     "./adapters/postgres": {
       "import": {
         "types": "./adapters/postgres.d.ts",
         "default": "./adapters/postgres.js"
+      },
+      "require": {
+        "types": "./index.d.cts",
+        "default": "./index.cjs"
       }
     },
     "./package.json": "./package.json"

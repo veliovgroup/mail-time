@@ -1,4 +1,14 @@
 import mailTime = require('mail-time');
+import presetsSub = require('mail-time/presets');
+import redisSub = require('mail-time/adapters/redis');
+import mongoSub = require('mail-time/adapters/mongo');
+import postgresSub = require('mail-time/adapters/postgres');
+const presetViaSub: ReturnType<typeof mailTime.mailTimePreset> = presetsSub.mailTimePreset('otp');
+void presetViaSub;
+const sameRedis: typeof mailTime.RedisQueue = redisSub.RedisQueue;
+const sameMongo: typeof mailTime.MongoQueue = mongoSub.MongoQueue;
+const samePostgres: typeof mailTime.PostgresQueue = postgresSub.PostgresQueue;
+void sameRedis; void sameMongo; void samePostgres;
 import type { RedisClusterType } from 'redis';
 
 const pg = new mailTime.PostgresQueue({

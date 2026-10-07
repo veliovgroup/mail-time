@@ -1,6 +1,7 @@
 import { MailTime, MongoQueue, PostgresQueue, RedisQueue, mailTimePreset, presetNames, presets } from 'mail-time';
 import { RedisQueue as RedisQueueAdapter } from 'mail-time/adapters/redis';
-import type { RedisClusterType } from 'redis';
+import type { RedisClientType, RedisClusterType } from 'redis';
+import type { Db as MongoDb } from 'mongodb';
 import type {
   CustomQueue,
   MailTimeJoSkOptions,
@@ -220,6 +221,11 @@ const redisClusterQueue = new RedisQueue({
   useHashTags: true,
 });
 void redisClusterQueue;
+// Real driver instances must be assignable without casts.
+declare const nodeRedisClient: RedisClientType;
+declare const mongoDb: MongoDb;
+void new RedisQueue({ client: nodeRedisClient });
+void new MongoQueue({ db: mongoDb });
 declare const nodeRedisCluster: RedisClusterType;
 void new RedisQueue({ client: nodeRedisCluster, useHashTags: true });
 void new RedisQueueAdapter({ client: nodeRedisCluster, useHashTags: true });

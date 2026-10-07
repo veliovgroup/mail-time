@@ -14,20 +14,20 @@ const DEFAULT_PREFIX = '';
 /**
  * @typedef {object} MongoCollection
  * @property {string} [collectionName]
- * @property {(keys: object, opts?: object) => Promise<unknown>} createIndex
- * @property {() => Promise<{ name: string, key: Record<string, unknown> }[]>} indexes
+ * @property {(keys: any, opts?: any) => Promise<unknown>} createIndex
+ * @property {() => Promise<{ name?: string, key: Record<string, unknown> }[]>} indexes
  * @property {(name: string) => Promise<unknown>} dropIndex
- * @property {(query: object, opts?: object) => unknown} find
- * @property {(query: object, opts?: object) => Promise<object|null>} findOne
- * @property {(doc: object) => Promise<unknown>} insertOne
- * @property {(query: object) => Promise<{ deletedCount?: number }>} deleteOne
- * @property {(query: object, update: object) => Promise<{ modifiedCount?: number }>} updateOne
+ * @property {(query: any, opts?: any) => unknown} find
+ * @property {(query: any, opts?: any) => Promise<object|null>} findOne
+ * @property {(doc: any) => Promise<unknown>} insertOne
+ * @property {(query: any) => Promise<{ deletedCount?: number }>} deleteOne
+ * @property {(query: any, update: any) => Promise<{ modifiedCount?: number, matchedCount?: number }>} updateOne
  */
 
 /**
  * @typedef {object} Db
  * @property {(name: string) => MongoCollection} collection
- * @property {(cmd: object) => Promise<{ ok?: number }>} command
+ * @property {(cmd: any) => Promise<{ ok?: number }>} command
  */
 
 /**
