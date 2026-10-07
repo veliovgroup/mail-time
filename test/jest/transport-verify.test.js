@@ -428,7 +428,7 @@ describe('lazy re-probe', () => {
     expect(sentBy).toEqual(['backup', 'backup', 'backup', 'backup', 'backup']);
   });
 
-  it('a hung re-probe stays in flight: no second verify() until its verdict arrives', async () => {
+  it('a hung re-probe is retried after verifyTimeout; its late verdict is superseded by the newer probe', async () => {
     const lates = [];
     const { mt, calls, onError } = await setup({ verifyTimeout: 30 }, (cb) => { lates.push(cb); });
     DOWN.on = false;
@@ -438,20 +438,19 @@ describe('lazy re-probe', () => {
     expect(calls.length).toBe(2);
     await sleep(60);
     const st = mt.__reprobe.get(0);
-    expect(st.inFlight).toBe(true);
-    expect(st.count).toBe(0);
+    expect(st.inFlight).toBe(false);
+    expect(st.count).toBe(1);
     await tick(900000);
     expect(mt.___isHealthyTransport(0)).toBe(false);
     await tick(0);
-    expect(calls.length).toBe(2);
-    lates[0](new Error('late failure'));
-    expect(st.inFlight).toBe(false);
+    expect(calls.length).toBe(3);
+    expect(st.inFlight).toBe(true);
+    lates[0](new Error('late failure from the superseded probe'));
+    expect(st.inFlight).toBe(true);
     expect(st.count).toBe(1);
     expect(onError).toHaveBeenCalledTimes(1);
-    await tick(120000);
-    mt.___isHealthyTransport(0);
-    await tick(0);
-    expect(calls.length).toBe(3);
+    lates[1](null, true);
+    expect(mt.___isHealthyTransport(0)).toBe(true);
   });
 
   it('generation guard: a verdict from a superseded probe changes nothing', async () => {
@@ -460,7 +459,7 @@ describe('lazy re-probe', () => {
     DOWN.on = false;
     await tick(60000);
     mt.___isHealthyTransport(0);
-    await sleep(60);
+    await tick(0);
     expect(calls.length).toBe(2);
     mt.__verifyGen[0]++;
     const st = mt.__reprobe.get(0);
@@ -469,6 +468,35 @@ describe('lazy re-probe', () => {
     expect(st.count).toBe(0);
     expect(mt.___isHealthyTransport(0)).toBe(false);
     expect(onError).toHaveBeenCalledTimes(1);
+    // the timeout path still releases the slot for the stale probe
+    await sleep(60);
+    expect(st.inFlight).toBe(false);
+    expect(st.count).toBe(1);
+  });
+
+  it('a re-probe that never settles releases its slot after verifyTimeout and backs off', async () => {
+    const hung = [];
+    const { mt, calls } = await setup({ verifyTimeout: 30 }, (cb) => { hung.push(cb); });
+    DOWN.on = false;
+    await tick(60000);
+    mt.___isHealthyTransport(0);
+    expect(mt.__reprobe.get(0).inFlight).toBe(true);
+    await sleep(60);
+    const st = mt.__reprobe.get(0);
+    expect(st.inFlight).toBe(false);
+    expect(st.count).toBe(1);
+    expect(st.nextProbeAt).toBe(Date.now() + 120000);
+    // a late failure for the timed-out probe must not double the backoff again
+    hung[0](new Error('late'));
+    expect(mt.__reprobe.get(0).count).toBe(1);
+    await tick(119000);
+    mt.___isHealthyTransport(0);
+    expect(calls.length).toBe(2);
+    await tick(1000);
+    mt.___isHealthyTransport(0);
+    expect(calls.length).toBe(3);
+    hung[1](null, true);
+    expect(mt.___isHealthyTransport(0)).toBe(true);
   });
 
   it('late success of a timed-out re-probe clears quarantine', async () => {

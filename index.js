@@ -743,7 +743,7 @@ class MailTime {
    * @description add email to the queue or append to existing letter if {concatEmails: true}
    * @param {MailTimeMailOptions} opts - email options
    * @returns {Promise<string>} uuid of the email
-   * @throws {Error}
+   * @throws {Error} missing `html`/`text`, a `raw` field, or an invalid `to`; with `recipientPolicies`, an unparseable address rejects with `error.code === 'MAIL_TIME_INVALID_ADDRESS'` and `error.field` naming the field (header recipients are skipped when `envelope.to` is explicit)
    */
   async sendMail(opts) {
     opts = (opts && typeof opts === 'object') ? opts : {};
@@ -1980,12 +1980,8 @@ class MailTime {
     }
     if (quarantined) {
       const st = this.__reprobe.get(index);
-      if (st) {
-        st.inFlight = false;
-        st.count++;
-        st.nextProbeAt = Date.now() + Math.min(REPROBE_BASE_MS * Math.pow(2, st.count), REPROBE_MAX_MS);
-        this.__debug(`[private reprobe] transport #${index} failed, next probe at ${new Date(st.nextProbeAt)}`);
-      }
+      // A slot already released by the timeout path keeps its backoff; do not double it twice.
+      if (st && st.inFlight) this.___backoffReprobe(index, st, 'failed');
       return;
     }
     this.__unhealthyTransports.add(index);
@@ -2001,7 +1997,7 @@ class MailTime {
    * @internal
    * @memberOf MailTime
    * @name ___maybeReprobe
-   * @description Start one background `verify()` probe for a quarantined transport when its backoff has elapsed and no probe is in flight. Never awaited by the send path. Backoff starts at 60 s, doubles per failed probe and caps at 15 min. A probe that times out stays in flight until its verdict arrives, so at most one `verify()` is outstanding per transport. Failures only reach `__debug`. No probes for `type: 'client'`, `verifyTransports: false`, or after `destroy()`.
+   * @description Start one background `verify()` probe for a quarantined transport when its backoff has elapsed and no probe is in flight. Never awaited by the send path. Backoff starts at 60 s, doubles per failed or timed-out probe and caps at 15 min. A probe that reaches `verifyTimeout` without a verdict releases the slot (one `verify()` may then overlap with the hung one); its late verdict still applies unless a newer probe has started. Failures only reach `__debug`. No probes for `type: 'client'`, `verifyTransports: false`, or after `destroy()`.
    * @param {number} index
    * @returns {void}
    */
@@ -2016,9 +2012,33 @@ class MailTime {
     }
     st.inFlight = true;
     this.__debug(`[private reprobe] transport #${index}, attempt after ${st.count} failure(s)`);
-    // The verdict, not the timeout, releases `inFlight` (see ___applyVerdict), so a hung
-    // verify() never overlaps with a new probe on the same transport.
-    this.___verifyOne(transport, index);
+    // A verdict releases `inFlight` (see ___applyVerdict). A probe that reaches `verifyTimeout`
+    // without one counts as a failed attempt so a verify() that never settles cannot pin the
+    // transport in quarantine; its late verdict still applies unless a newer probe has started.
+    this.___verifyOne(transport, index).then((outcome) => {
+      // A live verdict always clears `inFlight` in ___applyVerdict. If it is still set, the probe
+      // timed out or its verdict was ignored (superseded generation); either way free the slot.
+      if (st.inFlight && this.__reprobe.get(index) === st) {
+        this.___backoffReprobe(index, st, outcome === 'timeout' ? 'timed out' : 'superseded');
+      }
+    });
+  }
+
+  /**
+   * @internal
+   * @memberOf MailTime
+   * @name ___backoffReprobe
+   * @description Release a re-probe slot after a failed or timed-out probe and double its backoff (cap 15 min).
+   * @param {number} index
+   * @param {{ count: number, nextProbeAt: number, inFlight: boolean }} st
+   * @param {string} why
+   * @returns {void}
+   */
+  ___backoffReprobe(index, st, why) {
+    st.inFlight = false;
+    st.count++;
+    st.nextProbeAt = Date.now() + Math.min(REPROBE_BASE_MS * Math.pow(2, st.count), REPROBE_MAX_MS);
+    this.__debug(`[private reprobe] transport #${index} ${why}, next probe at ${new Date(st.nextProbeAt)}`);
   }
 
   /**
