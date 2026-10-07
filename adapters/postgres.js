@@ -19,7 +19,7 @@ import {
 /**
  * @typedef {object} PostgresClient
  * @property {(queryText: string, values?: unknown[]) => Promise<PostgresQueryResult>} query
- * @property {(...args: any[]) => any} [connect] - present on `pg.Pool`; used with `totalCount` to check out one connection for setup
+ * @property {(...args: any[]) => any} [connect] - a client whose constructor name ends in `Pool` or that has a numeric `totalCount` (`pg.Pool`) is treated as a pool; setup checks out one connection
  * @property {number} [totalCount]
  */
 
@@ -167,7 +167,8 @@ class PostgresQueue {
     // `pg_advisory_lock` is session-scoped. Through a `pg.Pool` each `query()` may use a
     // different connection, so lock, DDL and unlock must share one checked-out client;
     // otherwise the lock stays on an idle pooled connection and blocks peer startups.
-    const pooled = typeof this.client.connect === 'function' && typeof this.client.totalCount === 'number';
+    const pooled = typeof this.client.connect === 'function'
+      && (typeof this.client.totalCount === 'number' || /Pool$/.test(this.client.constructor?.name || ''));
     const conn = pooled ? await this.client.connect() : this.client;
     let locked = false;
 

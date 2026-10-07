@@ -666,7 +666,7 @@ class RedisQueue {
   }
 
   /** @internal */
-  async __cancel(uuid) {
+  async __cancel(uuid, attempt = 0) {
     this.__debug('[cancel]', uuid);
     if (typeof uuid !== 'string') {
       return false;
@@ -687,7 +687,10 @@ class RedisQueue {
         const args = keep
           ? [uuid, JSON.stringify({ isCancelled: true }), 'cancel', `${Date.now()}`, `${this.mailTimeInstance.sendingTimeout || 300000}`, '0', '0', payload, JSON.stringify({ ...task, isCancelled: true })]
           : [uuid, 'cancel', '0', '0'];
-        return Number(await this.__runScript(keep ? 'update' : 'remove', { keys, arguments: args })) >= 1;
+        const result = Number(await this.__runScript(keep ? 'update' : 'remove', { keys, arguments: args }));
+        // -1: the payload changed between hGet and the script (a claim renewal, for example); retry on a fresh snapshot
+        if (result === -1 && attempt < 2) return await this.__cancel(uuid, attempt + 1);
+        return result >= 1;
       }
       if (!atomic) {
         if (task.recipientResults != null) return false;
@@ -757,7 +760,8 @@ class RedisQueue {
       }
       try {
         const concatKey = task.to ? this.__getKey(task.to, 'concatletter') : null;
-        await this.client.watch(concatKey ? [letterKey, concatKey] : letterKey);
+        await this.client.watch(letterKey);
+        if (concatKey) await this.client.watch(concatKey);
         const taskJSON = await this.client.get(letterKey);
         if (!taskJSON) {
           await this.client.unwatch?.();

@@ -161,7 +161,7 @@ describe('Redis recipient policy guards', () => {
     await queue.push({ uuid: 'b', tries: 0, isSending: false, sendAt: 2, to: 'x@example.com' });
     expect(await client.get(pointer)).toBe('b');
     expect(await queue.remove(a, { leaseTries: 1, leaseSendingAt: 10 })).toBe(true);
-    expect(client.watch).toHaveBeenLastCalledWith([queue.__getKey('a', 'letter'), pointer]);
+    expect(client.watch.mock.calls.slice(-2)).toEqual([[queue.__getKey('a', 'letter')], [pointer]]);
     expect(await client.get(pointer)).toBe('b');
     expect(await client.get(queue.__getKey('a', 'letter'))).toBeNull();
     await queue.push({ uuid: 'c', tries: 0, isSending: false, sendAt: 3, to: 'x@example.com' });
@@ -416,6 +416,21 @@ describe('RedisQueue unit behavior', () => {
     expect(client.eval.mock.calls.length - before).toBe(3);
     client.hGet.mockResolvedValue(null);
     expect(await queue.update(task, fields)).toBe(false);
+  });
+
+  it('retries a tagged cancel whose snapshot changed under it', async () => {
+    const client = createRedisClient();
+    const task = { uuid: 'u', tries: 1, isSending: true, sendingAt: 10, sendAt: 1, to: 'a@example.com', mailOptions: [] };
+    client.hGet = jest.fn(async () => JSON.stringify(task));
+    client.eval = jest.fn().mockResolvedValueOnce(-1).mockResolvedValueOnce(1);
+    const queue = new RedisQueue({ client, prefix: 'cas', useHashTags: true });
+    queue.mailTimeInstance = createMailTimeHarness(true);
+    expect(await queue.cancel('u')).toBe(true);
+    expect(client.eval).toHaveBeenCalledTimes(2);
+    client.eval.mockResolvedValue(-1);
+    const before = client.eval.mock.calls.length;
+    expect(await queue.cancel('u')).toBe(false);
+    expect(client.eval.mock.calls.length - before).toBe(3);
   });
 
   it('pings a redis@4 Cluster node when the cluster client has no ping method', async () => {
@@ -1008,6 +1023,17 @@ describe('PostgresQueue contract', () => {
     await expect(queue.ready()).resolves.toBeUndefined();
     await expect(queue.ready()).resolves.toBeUndefined();
     expect(attempts).toBeGreaterThan(1);
+  });
+
+  it('detects a pool by constructor name when totalCount is absent', async () => {
+    class BoundPool { constructor(conn) { this.conn = conn; } async connect() { return this.conn; } async query() { return { rows: [], rowCount: 1 }; } }
+    const conn = createPostgresClient();
+    conn.release = jest.fn();
+    const pool = new BoundPool(conn);
+    const queue = new PostgresQueue({ client: pool, prefix: 'named-pool' });
+    await queue.ready();
+    expect(conn.release).toHaveBeenCalledTimes(1);
+    expect(conn.queries[0].queryText).toContain('pg_advisory_lock');
   });
 
   it('holds the setup advisory lock on one checked-out connection when given a pool', async () => {

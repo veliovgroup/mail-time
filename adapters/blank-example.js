@@ -106,7 +106,6 @@ class BlankQueue {
   async ready() {
     // Optional. Implement if your storage needs async setup (e.g. ensure table/index).
     // MailTime does: if (typeof queue.ready === 'function') await queue.ready();
-    this.__ensurePrefix?.();
     return void 0;
   }
 
