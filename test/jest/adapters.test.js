@@ -104,6 +104,72 @@ describe('Redis recipient policy guards', () => {
     } finally { release(); await claim; await cancel; }
     expect(JSON.parse(await client.get(first.__getKey('u'))).isCancelled).toBe(true);
   });
+  it('push() waits behind an in-flight WATCH transaction on the same client', async () => {
+    const client = createRedisClient();
+    const queue = new RedisQueue({ client, prefix: 'serial' });
+    queue.mailTimeInstance = createMailTimeHarness(true);
+    const task = { uuid: 'u', tries: 0, isSending: false, sendAt: 1 };
+    await queue.push(task);
+    client.multi.mockClear();
+    let release;
+    let entered;
+    const started = new Promise((resolve) => { entered = resolve; });
+    client.watch.mockImplementationOnce(async () => { entered(); await new Promise((resolve) => { release = resolve; }); });
+    const claim = queue.update(task, { isSending: true, sendingAt: Date.now(), tries: 1 });
+    await started;
+    const push = queue.push({ uuid: 'v', tries: 0, isSending: false, sendAt: 2, to: 'x@example.com' });
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      // push's MULTI/EXEC would UNWATCH the claim's key; it must not run yet
+      expect(client.multi).not.toHaveBeenCalled();
+    } finally { release(); await claim; await push; }
+    expect(client.multi).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(await client.get(queue.__getKey('u'))).isSending).toBe(true);
+    expect(await client.get(queue.__getKey('v'))).not.toBeNull();
+  });
+  it('treats a WatchError from exec() as a lost race, not a storage error', async () => {
+    class WatchError extends Error {}
+    const client = createRedisClient();
+    const queue = new RedisQueue({ client, prefix: 'race' });
+    queue.mailTimeInstance = createMailTimeHarness(true);
+    const task = { uuid: 'u', tries: 1, isSending: true, sendingAt: 10, sendAt: 1, to: 'x@example.com' };
+    await queue.push(task);
+    const multi = { set: jest.fn(() => multi), del: jest.fn(() => multi), exec: jest.fn(async () => { throw new WatchError('One (or more) of the watched keys has been changed'); }) };
+    client.multi = jest.fn(() => multi);
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(await queue.update({ ...task, tries: 0, isSending: false }, { isSending: true, sendingAt: 11, tries: 1 })).toBe(false);
+      expect(await queue.update(task, { isSent: true, isSending: false, leaseTries: 1, leaseSendingAt: 10 })).toBe(false);
+      expect(await queue.remove(task, { leaseTries: 1, leaseSendingAt: 10 })).toBe(false);
+      expect(await queue.cancel('u')).toBe(false);
+      // other tests' detached work may log concurrently; only this test's errors matter
+      const logged = (predicate) => errorSpy.mock.calls.filter((call) => call.some(predicate));
+      expect(logged((arg) => arg instanceof WatchError)).toHaveLength(0);
+      multi.exec.mockImplementationOnce(async () => { throw new Error('ECONNRESET'); });
+      expect(await queue.cancel('u')).toBe(false);
+      expect(logged((arg) => arg instanceof Error && arg.message === 'ECONNRESET')).toHaveLength(1);
+    } finally { errorSpy.mockRestore(); }
+  });
+  it('remove() keeps a concat pointer that already names a newer letter', async () => {
+    const client = createRedisClient();
+    const queue = new RedisQueue({ client, prefix: 'concat' });
+    queue.mailTimeInstance = createMailTimeHarness(false);
+    const pointer = queue.__getKey('x@example.com', 'concatletter');
+    const a = { uuid: 'a', tries: 1, isSending: true, sendingAt: 10, sendAt: 1, to: 'x@example.com' };
+    await queue.push(a);
+    expect(await client.get(pointer)).toBe('a');
+    await queue.push({ uuid: 'b', tries: 0, isSending: false, sendAt: 2, to: 'x@example.com' });
+    expect(await client.get(pointer)).toBe('b');
+    expect(await queue.remove(a, { leaseTries: 1, leaseSendingAt: 10 })).toBe(true);
+    expect(client.watch).toHaveBeenLastCalledWith([queue.__getKey('a', 'letter'), pointer]);
+    expect(await client.get(pointer)).toBe('b');
+    expect(await client.get(queue.__getKey('a', 'letter'))).toBeNull();
+    await queue.push({ uuid: 'c', tries: 0, isSending: false, sendAt: 3, to: 'x@example.com' });
+    expect(await queue.remove({ uuid: 'b', to: 'x@example.com' })).toBe(true);
+    expect(await client.get(pointer)).toBe('c');
+    expect(await queue.remove({ uuid: 'c', to: 'x@example.com' })).toBe(true);
+    expect(await client.get(pointer)).toBeNull();
+  });
   it('excludes settled claims and policy concat appends without deleting history', async () => {
     const client = createRedisClient();
     const queue = new RedisQueue({ client, prefix: 'policy' });
@@ -925,6 +991,59 @@ describe('PostgresQueue contract', () => {
     });
     failing.mailTimeInstance = createMailTimeHarness();
     await expect(failing.ping()).resolves.toMatchObject({ code: 500 });
+  });
+
+  it('retries setup on the next ready() after a failed attempt', async () => {
+    let attempts = 0;
+    const queue = new PostgresQueue({
+      prefix: 'retry',
+      client: {
+        query: jest.fn(async () => {
+          if (++attempts === 1) throw new Error('pg still booting');
+          return { rows: [], rowCount: 1 };
+        })
+      }
+    });
+    await expect(queue.ready()).rejects.toThrow('pg still booting');
+    await expect(queue.ready()).resolves.toBeUndefined();
+    await expect(queue.ready()).resolves.toBeUndefined();
+    expect(attempts).toBeGreaterThan(1);
+  });
+
+  it('holds the setup advisory lock on one checked-out connection when given a pool', async () => {
+    const conn = createPostgresClient();
+    conn.release = jest.fn();
+    const pool = { totalCount: 0, connect: jest.fn(async () => conn), query: jest.fn(async () => ({ rows: [], rowCount: 1 })) };
+    const queue = new PostgresQueue({ client: pool, prefix: 'pool' });
+    queue.mailTimeInstance = createMailTimeHarness();
+    await queue.ready();
+    expect(pool.connect).toHaveBeenCalledTimes(1);
+    expect(pool.query).not.toHaveBeenCalled();
+    const texts = conn.queries.map(({ queryText }) => queryText);
+    expect(texts[0]).toContain('pg_advisory_lock');
+    expect(texts[texts.length - 1]).toContain('pg_advisory_unlock');
+    expect(texts.some((t) => t.includes('CREATE TABLE IF NOT EXISTS mail_time_queue'))).toBe(true);
+    expect(conn.release).toHaveBeenCalledTimes(1);
+    await queue.ping();
+    expect(pool.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases the pooled connection when the advisory lock itself fails', async () => {
+    const conn = { release: jest.fn(), query: jest.fn(async () => { throw new Error('lock timeout'); }) };
+    const pool = { totalCount: 0, connect: jest.fn(async () => conn), query: jest.fn() };
+    const queue = new PostgresQueue({ client: pool, prefix: 'pool-lock' });
+    await expect(queue.ready()).rejects.toThrow('lock timeout');
+    expect(conn.query).toHaveBeenCalledTimes(1); // no unlock for a lock never taken
+    expect(conn.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases the pooled connection when setup fails', async () => {
+    const conn = { release: jest.fn(), query: jest.fn(async (text) => { if (String(text).includes('CREATE TABLE')) throw new Error('ddl denied'); return { rows: [], rowCount: 1 }; }) };
+    const pool = { totalCount: 0, connect: jest.fn(async () => conn), query: jest.fn() };
+    const queue = new PostgresQueue({ client: pool, prefix: 'pool-fail' });
+    await expect(queue.ready()).rejects.toThrow('ddl denied');
+    expect(conn.query).toHaveBeenLastCalledWith('SELECT pg_advisory_unlock($1, $2)', expect.any(Array));
+    expect(conn.release).toHaveBeenCalledTimes(1);
   });
 
   it('keeps setup failures on ready without unhandled rejection', async () => {

@@ -19,6 +19,8 @@ import {
 /**
  * @typedef {object} PostgresClient
  * @property {(queryText: string, values?: unknown[]) => Promise<PostgresQueryResult>} query
+ * @property {(...args: any[]) => any} [connect] - present on `pg.Pool`; used with `totalCount` to check out one connection for setup
+ * @property {number} [totalCount]
  */
 
 /**
@@ -119,8 +121,18 @@ class PostgresQueue {
   /** @internal */
   __applyPrefix(prefix) {
     this.prefix = prefix;
-    this.__readyPromise = this.__setup();
-    this.__readyPromise.catch(() => void 0);
+    this.__startSetup();
+  }
+
+  /** @internal */
+  __startSetup() {
+    const setup = this.__setup();
+    this.__readyPromise = setup;
+    // A failed setup (database still booting) must not poison every later call; the next
+    // ready() retries it. The awaiting caller still sees this attempt's rejection.
+    setup.catch(() => {
+      if (this.__readyPromise === setup) this.__readyPromise = null;
+    });
   }
 
   /** @internal */
@@ -145,16 +157,24 @@ class PostgresQueue {
   async ready() {
     this.__ensurePrefix();
     this.__debug('[ready]');
+    if (!this.__readyPromise) this.__startSetup();
     await this.__readyPromise;
   }
 
   /** @internal */
   async __setup() {
     const advisoryLockKey = advisoryLockKeyFor(this.prefix);
-    await this.client.query('SELECT pg_advisory_lock($1, $2)', [ADVISORY_LOCK_NAMESPACE, advisoryLockKey]);
+    // `pg_advisory_lock` is session-scoped. Through a `pg.Pool` each `query()` may use a
+    // different connection, so lock, DDL and unlock must share one checked-out client;
+    // otherwise the lock stays on an idle pooled connection and blocks peer startups.
+    const pooled = typeof this.client.connect === 'function' && typeof this.client.totalCount === 'number';
+    const conn = pooled ? await this.client.connect() : this.client;
+    let locked = false;
 
     try {
-      await this.client.query(`CREATE TABLE IF NOT EXISTS mail_time_queue (
+      await conn.query('SELECT pg_advisory_lock($1, $2)', [ADVISORY_LOCK_NAMESPACE, advisoryLockKey]);
+      locked = true;
+      await conn.query(`CREATE TABLE IF NOT EXISTS mail_time_queue (
           id BIGSERIAL PRIMARY KEY,
           prefix TEXT NOT NULL DEFAULT 'default',
           uuid TEXT NOT NULL,
@@ -175,18 +195,22 @@ class PostgresQueue {
           created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )`);
-      await this.client.query('ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS is_settled BOOLEAN NOT NULL DEFAULT false');
-      await this.client.query('ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS recipient_results JSONB');
-      await this.client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_time_queue_prefix_uuid
+      await conn.query('ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS is_settled BOOLEAN NOT NULL DEFAULT false');
+      await conn.query('ALTER TABLE mail_time_queue ADD COLUMN IF NOT EXISTS recipient_results JSONB');
+      await conn.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_time_queue_prefix_uuid
         ON mail_time_queue (prefix, uuid)`);
 
-      await this.client.query(`CREATE INDEX IF NOT EXISTS idx_mail_time_queue_policy_due_v1
+      await conn.query(`CREATE INDEX IF NOT EXISTS idx_mail_time_queue_policy_due_v1
         ON mail_time_queue (prefix, is_settled, is_sent, is_failed, is_cancelled, is_sending, sending_at, send_at, tries)`);
 
-      await this.client.query(`CREATE INDEX IF NOT EXISTS idx_mail_time_queue_policy_pending_to_v1
+      await conn.query(`CREATE INDEX IF NOT EXISTS idx_mail_time_queue_policy_pending_to_v1
         ON mail_time_queue (prefix, to_address, is_settled, is_sent, is_failed, is_cancelled, send_at)`);
     } finally {
-      await this.client.query('SELECT pg_advisory_unlock($1, $2)', [ADVISORY_LOCK_NAMESPACE, advisoryLockKey]);
+      try {
+        if (locked) await conn.query('SELECT pg_advisory_unlock($1, $2)', [ADVISORY_LOCK_NAMESPACE, advisoryLockKey]);
+      } finally {
+        if (pooled) conn.release();
+      }
     }
   }
 

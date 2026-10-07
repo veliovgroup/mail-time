@@ -19,7 +19,7 @@ import { createHash } from 'crypto';
  * @property {() => Promise<string>} [ping]
  * @property {() => unknown} [getRandomNode]
  * @property {(...args: any[]) => any} [nodeClient]
- * @property {(firstKey: string, isReadonly: boolean, args: string[]) => Promise<unknown>} [sendCommand]
+ * @property {(...args: any[]) => Promise<unknown>} [sendCommand]
  * @property {(options: object) => AsyncIterable<string|string[]>} [scanIterator]
  * @property {(key: string, field: string) => Promise<string|null|undefined>} [hGet]
  * @property {(script: string, options: { keys: string[], arguments: string[] }) => Promise<unknown>} [eval]
@@ -216,6 +216,12 @@ const sha1Hex = (string) => createHash('sha1').update(string).digest('hex');
 
 const isNoScriptError = (error) => {
   return !!error && (error.code === 'NOSCRIPT' || (typeof error.message === 'string' && error.message.includes('NOSCRIPT')));
+};
+
+// node-redis 4/5 throw `WatchError` from `exec()` when a watched key changed; that is the
+// expected outcome of a lost CAS race, not a storage failure.
+const isWatchError = (error) => {
+  return !!error && (error.name === 'WatchError' || error.constructor?.name === 'WatchError');
 };
 
 const canReleaseLease = (currentTask, updateObj) => {
@@ -611,15 +617,19 @@ class RedisQueue {
     const taskJSON = JSON.stringify(task);
 
     if (typeof this.client.multi === 'function') {
-      const multi = this.client.multi();
-      multi.set(letterKey, taskJSON);
-      multi.set(sendatKey, `${task.sendAt}`);
-      if (task.to) {
-        multi.set(this.__getKey(task.to, 'concatletter'), task.uuid, {
-          PXAT: task.sendAt - 128,
-        });
-      }
-      await multi.exec();
+      // EXEC discards every WATCH on the connection, so an unserialized push would turn a
+      // concurrent claim's guarded MULTI into an unconditional write (duplicate send).
+      await this.__serialize(async () => {
+        const multi = this.client.multi();
+        multi.set(letterKey, taskJSON);
+        multi.set(sendatKey, `${task.sendAt}`);
+        if (task.to) {
+          multi.set(this.__getKey(task.to, 'concatletter'), task.uuid, {
+            PXAT: task.sendAt - 128,
+          });
+        }
+        await multi.exec();
+      });
       return;
     }
 
@@ -689,7 +699,7 @@ class RedisQueue {
       multi.del(this.__getKey(uuid, 'sendat'));
       return (await multi.exec()) !== null;
     } catch (error) {
-      logError('[cancel] storage error', error);
+      if (!isWatchError(error)) logError('[cancel] storage error', error);
       return false;
     } finally {
       if (!this.useHashTags && atomic) await this.client.unwatch?.();
@@ -746,7 +756,8 @@ class RedisQueue {
         return false;
       }
       try {
-        await this.client.watch(letterKey);
+        const concatKey = task.to ? this.__getKey(task.to, 'concatletter') : null;
+        await this.client.watch(concatKey ? [letterKey, concatKey] : letterKey);
         const taskJSON = await this.client.get(letterKey);
         if (!taskJSON) {
           await this.client.unwatch?.();
@@ -764,8 +775,9 @@ class RedisQueue {
           return false;
         }
         const keysToDelete = [letterKey, this.__getKey(task.uuid, 'sendat')];
-        if (task.to) {
-          keysToDelete.push(this.__getKey(task.to, 'concatletter'));
+        // The pointer may already name a newer letter folded for the same recipient.
+        if (concatKey && (await this.client.get(concatKey)) === task.uuid) {
+          keysToDelete.push(concatKey);
         }
         const multi = this.client.multi();
         for (const key of keysToDelete) {
@@ -774,7 +786,7 @@ class RedisQueue {
         const result = await multi.exec();
         return result !== null;
       } catch (opError) {
-        logError('[remove] [lease] [opError]', opError);
+        if (!isWatchError(opError)) logError('[remove] [lease] [opError]', opError);
         return false;
       }
     }
@@ -786,7 +798,10 @@ class RedisQueue {
 
     const keysToDelete = [letterKey, this.__getKey(task.uuid, 'sendat')];
     if (task.to) {
-      keysToDelete.push(this.__getKey(task.to, 'concatletter'));
+      const concatKey = this.__getKey(task.to, 'concatletter');
+      if ((await this.client.get(concatKey)) === task.uuid) {
+        keysToDelete.push(concatKey);
+      }
     }
     await this.client.del(keysToDelete);
     return true;
@@ -946,7 +961,7 @@ class RedisQueue {
       }
       return true;
     } catch (opError) {
-      logError('[update] [try/catch] [opError]', opError);
+      if (!isWatchError(opError)) logError('[update] [try/catch] [opError]', opError);
       return false;
     }
   }
