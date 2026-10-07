@@ -8,6 +8,13 @@
    - Version of `Node.js` and `NPM` you're experiencing this issue
    - If you're getting an error (exception), please provide full error log (output in console) as file or screenshot
 
+### Running the tests locally:
+
+1. `npm install`, then `npm run test:jest` (unit, no databases) and `npm run test:types`
+2. `docker compose up -d` starts Redis, MongoDB and PostgreSQL with the images CI uses; `npm run test:mocha:local` runs the integration suites against them (`docker compose down -v` to clean up)
+3. `npm run test:pack` verifies the published package shape from a scratch consumer project (ESM, CJS, subpaths, TypeScript)
+4. Before a release: `npm run prepublishOnly` regenerates `index.cjs` and the declaration files; commit them
+
 ### I have a suggestion:
 
 1. PRs are always welcome - [send a PR](https://github.com/veliovgroup/mail-time/compare)

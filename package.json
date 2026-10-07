@@ -1,7 +1,7 @@
 {
   "name": "mail-time",
   "version": "5.3.1",
-  "description": "📮 Email queue extending nodemailer with multi-SMTP transports and horizontally scaled apps support",
+  "description": "\ud83d\udcee Email queue extending nodemailer with multi-SMTP transports and horizontally scaled apps support",
   "main": "index.js",
   "types": "./index.d.ts",
   "type": "module",
@@ -91,7 +91,9 @@
     "test:redis": "mocha ./test/npm-redis-redis.js",
     "test:mongo": "mocha ./test/npm-mongo-mongo.js",
     "test:postgres": "mocha ./test/npm-postgres.js",
-    "test:bun": "bun test ./test/jest"
+    "test:bun": "bun test ./test/jest",
+    "test:pack": "node ./scripts/check-package.mjs",
+    "test:mocha:local": "REDIS_URL=redis://127.0.0.1:6379 MONGO_URL=mongodb://127.0.0.1:27017/npm-mail-time-test PG_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres npm run test:mocha"
   },
   "keywords": [
     "backup",
@@ -170,6 +172,7 @@
   "devDependencies": {
     "@jest/globals": "^30.4.1",
     "@types/node": "^25.9.0",
+    "@types/pg": "^8.23.1",
     "acorn": "^8.18.0",
     "chai": "^6.2.2",
     "jest": "^30.4.2",

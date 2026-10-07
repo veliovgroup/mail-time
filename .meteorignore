@@ -49,3 +49,4 @@ template.html
 test
 tsconfig.json
 tsconfig.types.json
+compose.yml

@@ -42,8 +42,13 @@ npm run test:jest
 # Type-checks the .d.ts against fixture .ts/.cts files
 npm run test:types
 
-# Mocha integration suite (needs all three DBs)
-REDIS_URL=... MONGO_URL=... PG_URL=... npm run test:mocha
+# Mocha integration suite (needs all three DBs); compose.yml starts the CI images locally
+docker compose up -d && npm run test:mocha:local
+REDIS_URL=... MONGO_URL=... PG_URL=... npm run test:mocha   # against your own stores
+
+# Pack the tarball, install it into a scratch project, verify ESM/CJS entry points,
+# every subpath under both conditions, and TypeScript resolution from a CJS-typed consumer
+npm run test:pack
 
 # Bun runner (Jest-shape tests only)
 bun test ./test/jest

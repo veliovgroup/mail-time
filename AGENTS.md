@@ -140,7 +140,9 @@ This package ships with tests tailored to Node.js, Bun.js, and Meteor.js.
 ### NPM tests
 ```sh
 npm install
+docker compose up -d && npm run test:mocha:local   # CI images for Redis, Mongo, Postgres
 REDIS_URL=redis://127.0.0.1:6379 MONGO_URL=mongodb://127.0.0.1:27017/test PG_URL=postgres://127.0.0.1:5432/postgres npm test
+npm run test:pack   # packed tarball in a scratch consumer: ESM, CJS, subpaths, TypeScript
 ```
 
 ### Bun tests

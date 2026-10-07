@@ -1,0 +1,15 @@
+# Local stores for the Mocha integration suites. Mirrors the images and ports CI uses.
+#   docker compose up -d && npm run test:mocha:local
+#   docker compose down -v
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+  mongo:
+    image: mongo:8
+    ports: ["27017:27017"]
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+    ports: ["5432:5432"]
