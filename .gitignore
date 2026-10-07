@@ -19,3 +19,4 @@ local-testing.mjs
 /.claude
 /.cursor
 /docs/superpowers
+/.worktrees
