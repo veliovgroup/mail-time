@@ -201,6 +201,10 @@ jobs:
         if: matrix.runtime == 'node' && env.IS_CANONICAL_ROW == 'true'
         run: npm run test:types
 
+      - name: Packed tarball consumer check (canonical row only)
+        if: matrix.runtime == 'node' && env.IS_CANONICAL_ROW == 'true'
+        run: npm run test:pack
+
       - name: Bun-runner jest suite
         if: matrix.runtime == 'bun'
         run: bun test ./test/jest
