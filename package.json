@@ -1,7 +1,7 @@
 {
   "name": "mail-time",
   "version": "5.3.1",
-  "description": "\ud83d\udcee Email queue extending nodemailer with multi-SMTP transports and horizontally scaled apps support",
+  "description": "📮 Email queue extending nodemailer with multi-SMTP transports and horizontally scaled apps support",
   "main": "index.js",
   "types": "./index.d.ts",
   "type": "module",
